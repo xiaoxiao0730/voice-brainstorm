@@ -42,37 +42,37 @@ function Onboarding() {
   const removeFile = (idx: number) => setFiles((p) => p.filter((_, i) => i !== idx));
 
   return (
-    <main className="min-h-screen w-full flex flex-col items-center justify-center px-6 py-16 bg-background">
-      <div className="w-full max-w-3xl flex flex-col items-center">
+    <main className="min-h-screen w-full flex flex-col items-center justify-center px-6 py-10 bg-background">
+      <div className="w-full max-w-2xl flex flex-col items-center">
         <h1
-          className="text-center text-foreground font-normal tracking-tight text-4xl sm:text-5xl md:text-6xl leading-tight"
+          className="text-center text-foreground font-normal tracking-tight text-3xl sm:text-4xl md:text-5xl leading-tight"
           style={{ fontFamily: "'Instrument Serif', serif" }}
         >
           What do you have on your mind today?
         </h1>
-        <p className="mt-4 text-secondary text-base text-center max-w-xl">
+        <p className="mt-3 text-secondary text-sm text-center max-w-lg">
           Drop in a thought or some context and we'll think it through together.
         </p>
 
         {/* Prompt box */}
-        <div className="mt-10 w-full rounded-2xl border border-auralis bg-surface shadow-sm focus-within:border-foreground/40 transition-colors">
-          <div className="flex items-end gap-3 p-4">
+        <div className="mt-8 w-full rounded-2xl border border-auralis bg-surface shadow-sm focus-within:border-foreground/40 transition-colors">
+          <div className="flex items-end gap-3 p-3">
             <textarea
               value={prompt}
               onChange={(e) => setPrompt(e.target.value)}
               onKeyDown={(e) => {
                 if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) start();
               }}
-              rows={3}
+              rows={2}
               placeholder="Type what you want to brainstorm…"
-              className="flex-1 resize-none bg-transparent outline-none text-foreground placeholder:text-secondary text-[15px] leading-6 min-h-[72px]"
+              className="flex-1 resize-none bg-transparent outline-none text-foreground placeholder:text-secondary text-[14px] leading-5 min-h-[48px]"
             />
             <button
               onClick={start}
-              className="shrink-0 inline-flex items-center gap-2 rounded-full bg-primary text-on-primary px-5 py-2.5 text-sm font-medium hover:opacity-90 transition-opacity"
+              className="shrink-0 inline-flex items-center gap-2 rounded-full bg-primary text-on-primary px-4 py-2 text-xs font-medium hover:opacity-90 transition-opacity"
             >
               Start brainstorming
-              <span className="material-symbols-outlined text-[18px]">arrow_forward</span>
+              <span className="material-symbols-outlined text-[16px]">arrow_forward</span>
             </button>
           </div>
         </div>
@@ -83,7 +83,7 @@ function Onboarding() {
           onDragLeave={() => setDragging(false)}
           onDrop={onDrop}
           onClick={() => inputRef.current?.click()}
-          className={`mt-4 w-full rounded-2xl border border-dashed p-6 text-center cursor-pointer transition-colors ${
+          className={`mt-3 w-full rounded-2xl border border-dashed p-4 text-center cursor-pointer transition-colors ${
             dragging ? "border-foreground/60 bg-surface-variant" : "border-auralis bg-panel hover:bg-surface-variant"
           }`}
         >
@@ -94,8 +94,8 @@ function Onboarding() {
             className="hidden"
             onChange={(e) => addFiles(e.target.files)}
           />
-          <div className="flex flex-col items-center gap-2">
-            <span className="material-symbols-outlined text-secondary text-[28px]">upload_file</span>
+          <div className="flex flex-col items-center gap-1.5">
+            <span className="material-symbols-outlined text-secondary text-[24px]">upload_file</span>
             <div className="text-sm text-foreground">
               <span className="font-medium">Click to upload</span>
               <span className="text-secondary"> or drag and drop files here as context</span>
