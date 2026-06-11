@@ -1,11 +1,19 @@
-import { createFileRoute, useNavigate } from "@tanstack/react-router";
+import { createFileRoute, redirect, useNavigate } from "@tanstack/react-router";
 import { useCallback, useRef, useState } from "react";
+import { supabase } from "@/integrations/supabase/client";
 
 export const Route = createFileRoute("/")({
+  ssr: false,
+  beforeLoad: async () => {
+    const { data, error } = await supabase.auth.getUser();
+    if (error || !data.user) {
+      throw redirect({ to: "/auth" });
+    }
+  },
   head: () => ({
     meta: [
-      { title: "Brainstorm AI — What's on your mind?" },
-      { name: "description", content: "Start a new brainstorming session with AI co-thinking." },
+      { title: "Murmur — What's on your mind?" },
+      { name: "description", content: "Start a new Murmur session with AI co-thinking." },
     ],
     links: [
       { rel: "preconnect", href: "https://fonts.googleapis.com" },

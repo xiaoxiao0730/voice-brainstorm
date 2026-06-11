@@ -29,7 +29,7 @@ import { orchestrateSegment } from "@/lib/orchestrate.functions";
 export const Route = createFileRoute("/_authenticated/workbench")({
   head: () => ({
     meta: [
-      { title: "Melody — Co-thinking Workbench" },
+      { title: "Murmur — Co-thinking Workbench" },
       { name: "description", content: "Voice-driven AI co-thinking workbench with a live brief canvas." },
     ],
     links: [
@@ -558,7 +558,7 @@ function Workbench() {
             <div className="border-t border-auralis p-3 flex items-center justify-between">
               <div className="flex items-center gap-2">
                 <div className="w-7 h-7 rounded-full bg-gradient-to-tr from-rose-400 via-indigo-300 to-emerald-300" />
-                <span className="text-xs text-primary font-medium">Melody</span>
+                <span className="text-xs text-primary font-medium">Murmur</span>
               </div>
               <button
                 onClick={signOut}
@@ -689,7 +689,7 @@ function Workbench() {
           </div>
           <footer className="h-10 px-6 flex items-center justify-between border-t border-auralis text-xs text-secondary shrink-0">
             <span>{liveText.length} chars · {finals.length} segments · {nodeCount} brief nodes</span>
-            <span>Loom · <Link to="/" className="hover:text-primary">Home</Link></span>
+            <span>Murmur · <Link to="/" className="hover:text-primary">Home</Link></span>
           </footer>
         </section>
       </main>
