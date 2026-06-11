@@ -376,7 +376,8 @@ function Canvas({
               A canvas for thinking aloud.
             </h3>
             <p className="text-sm text-secondary">
-              Everything you say will be captured, then AI will organize it into clear, structured thought blocks.
+              Everything you say will be captured, then AI will organize{"\n"}
+              it into clear, structured thought blocks.
             </p>
           </div>
         </div>
