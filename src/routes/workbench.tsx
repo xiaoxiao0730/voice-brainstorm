@@ -188,12 +188,26 @@ function Workbench() {
 
           {/* Waveform */}
           <div className="flex-1 flex items-center justify-center p-6 min-h-0 relative">
-            <div className="flex items-center justify-center gap-3">
-              <Orb className={`bg-gradient-to-tr from-rose-400 to-orange-300 blur-2xl ${listening ? "blob-a" : "rounded-full"}`} size={84} level={level} />
-              <div style={{ transform: `scale(${1 + level * 0.3})` }} className="transition-transform duration-100">
-                <div className={`w-[140px] h-[140px] bg-gradient-to-tr from-indigo-300 via-violet-400 to-purple-400 blur-2xl ${listening ? "blob-b" : "rounded-full"}`} />
-              </div>
-              <Orb className={`bg-gradient-to-tr from-emerald-300 to-teal-200 blur-2xl ${listening ? "blob-c" : "rounded-full"}`} size={84} level={level} />
+            <div className="relative w-[260px] h-[260px] flex items-center justify-center">
+              <div className={`absolute inset-0 rounded-full border border-auralis/60 ${listening ? "animate-[ring-pulse_3.2s_ease-out_infinite]" : ""}`} />
+              <div className={`absolute inset-6 rounded-full border border-auralis/40 ${listening ? "animate-[ring-pulse_4.1s_ease-out_infinite_0.6s]" : ""}`} />
+
+              <div
+                className={`absolute left-6 w-[110px] h-[110px] rounded-full bg-gradient-to-tr from-rose-400 to-orange-300 opacity-80 mix-blend-multiply blur-[6px] ${listening ? "animate-[orb-a_3s_ease-in-out_infinite]" : ""}`}
+                style={{ transform: `scale(${1 + level * 0.3})` }}
+              />
+              <div
+                className={`absolute right-6 w-[110px] h-[110px] rounded-full bg-gradient-to-tr from-emerald-300 to-teal-300 opacity-80 mix-blend-multiply blur-[6px] ${listening ? "animate-[orb-c_4.2s_ease-in-out_infinite]" : ""}`}
+                style={{ transform: `scale(${1 + level * 0.28})` }}
+              />
+              <div
+                className={`relative w-[150px] h-[150px] rounded-full bg-gradient-to-tr from-indigo-400 via-violet-400 to-purple-500 opacity-90 blur-[4px] ${listening ? "animate-[orb-b_3.6s_ease-in-out_infinite]" : ""}`}
+                style={{ transform: `scale(${1 + level * 0.35})` }}
+              />
+              <div
+                className="absolute w-3 h-3 rounded-full bg-primary/90 shadow-[0_0_24px_rgba(0,0,0,0.25)]"
+                style={{ transform: `scale(${1 + level * 0.8})` }}
+              />
             </div>
           </div>
 
