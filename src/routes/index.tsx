@@ -149,8 +149,7 @@ function Workbench() {
                   className="relative flex items-center justify-center transition-transform duration-100 ease-out"
                   style={{ transform: `scale(${1 + level * 0.25})` }}
                 >
-                  <div className="w-[140px] h-[140px] rounded-full bg-gradient-to-tr from-indigo-300 to-purple-400 blur-xl" />
-                  <div className="absolute inset-0 rounded-full bg-white/20 backdrop-blur-sm border border-white/40" />
+                  <div className="w-[160px] h-[160px] rounded-full bg-gradient-to-tr from-indigo-300 via-violet-400 to-purple-400 blur-2xl" />
                 </div>
                 <Orb
                   className="bg-gradient-to-tr from-emerald-300 to-teal-200 blur-2xl"
