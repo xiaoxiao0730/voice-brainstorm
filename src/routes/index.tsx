@@ -51,7 +51,7 @@ function Onboarding() {
           What do you have on your mind today?
         </h1>
         <p className="mt-4 text-secondary text-base text-center max-w-xl">
-          Drop in a thought, a question, or some context — we'll think it through together.
+          Drop in a thought or some context and we'll think it through together.
         </p>
 
         {/* Prompt box */}
