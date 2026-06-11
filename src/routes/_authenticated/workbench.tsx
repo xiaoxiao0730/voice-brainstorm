@@ -587,7 +587,7 @@ function Workbench() {
           {/* Waveform */}
           <div className="flex-1 flex items-center justify-center p-6 min-h-0 relative">
             <div className="relative w-[260px] h-[260px] flex items-center justify-center">
-              <div className={`absolute inset-0 rounded-full border border-auralis/60 ${listening ? "animate-[ring-pulse_3.2s_ease-out_infinite]" : ""}`} />
+              <div className={`absolute inset-0 rounded-full border border-auralis/25 blur-[2px] ${listening ? "animate-[ring-pulse_3.2s_ease-out_infinite]" : ""}`} />
               <div className={`absolute inset-6 rounded-full border border-auralis/40 ${listening ? "animate-[ring-pulse_4.1s_ease-out_infinite_0.6s]" : ""}`} />
               <div
                 className={`absolute left-6 w-[110px] h-[110px] rounded-full bg-gradient-to-tr from-rose-400 to-orange-300 opacity-80 mix-blend-multiply blur-[6px] ${listening ? "animate-[orb-a_3s_ease-in-out_infinite]" : ""}`}
