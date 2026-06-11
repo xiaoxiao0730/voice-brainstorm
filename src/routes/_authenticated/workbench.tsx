@@ -253,7 +253,7 @@ function Workbench() {
     if (listening || !activeSessionId) return;
     setError(null);
     try {
-      const { token, region } = await getToken({ data: undefined as any });
+      const { token, region } = await getToken();
 
       // Mic level meter
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
