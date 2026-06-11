@@ -14,16 +14,256 @@ export type Database = {
   }
   public: {
     Tables: {
-      [_ in never]: never
+      brief_nodes: {
+        Row: {
+          confidence: number | null
+          created_at: string
+          id: string
+          last_edited_by: Database["public"]["Enums"]["brief_editor"]
+          level: Database["public"]["Enums"]["brief_node_level"]
+          order_key: string
+          parent_id: string | null
+          session_id: string
+          source_chunk_ids: string[]
+          status: Database["public"]["Enums"]["brief_node_status"]
+          tag: string | null
+          text: string
+          updated_at: string
+        }
+        Insert: {
+          confidence?: number | null
+          created_at?: string
+          id?: string
+          last_edited_by?: Database["public"]["Enums"]["brief_editor"]
+          level?: Database["public"]["Enums"]["brief_node_level"]
+          order_key: string
+          parent_id?: string | null
+          session_id: string
+          source_chunk_ids?: string[]
+          status?: Database["public"]["Enums"]["brief_node_status"]
+          tag?: string | null
+          text?: string
+          updated_at?: string
+        }
+        Update: {
+          confidence?: number | null
+          created_at?: string
+          id?: string
+          last_edited_by?: Database["public"]["Enums"]["brief_editor"]
+          level?: Database["public"]["Enums"]["brief_node_level"]
+          order_key?: string
+          parent_id?: string | null
+          session_id?: string
+          source_chunk_ids?: string[]
+          status?: Database["public"]["Enums"]["brief_node_status"]
+          tag?: string | null
+          text?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "brief_nodes_parent_id_fkey"
+            columns: ["parent_id"]
+            isOneToOne: false
+            referencedRelation: "brief_nodes"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "brief_nodes_session_id_fkey"
+            columns: ["session_id"]
+            isOneToOne: false
+            referencedRelation: "sessions"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      brief_operations: {
+        Row: {
+          applied: boolean
+          created_at: string
+          id: string
+          op_type: Database["public"]["Enums"]["brief_op_type"]
+          payload: Json
+          rejection_reason: string | null
+          segment_id: string | null
+          session_id: string
+        }
+        Insert: {
+          applied?: boolean
+          created_at?: string
+          id?: string
+          op_type: Database["public"]["Enums"]["brief_op_type"]
+          payload: Json
+          rejection_reason?: string | null
+          segment_id?: string | null
+          session_id: string
+        }
+        Update: {
+          applied?: boolean
+          created_at?: string
+          id?: string
+          op_type?: Database["public"]["Enums"]["brief_op_type"]
+          payload?: Json
+          rejection_reason?: string | null
+          segment_id?: string | null
+          session_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "brief_operations_segment_id_fkey"
+            columns: ["segment_id"]
+            isOneToOne: false
+            referencedRelation: "transcript_segments"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "brief_operations_session_id_fkey"
+            columns: ["session_id"]
+            isOneToOne: false
+            referencedRelation: "sessions"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      sessions: {
+        Row: {
+          created_at: string
+          ended_at: string | null
+          id: string
+          started_at: string
+          status: Database["public"]["Enums"]["session_status"]
+          title: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          ended_at?: string | null
+          id?: string
+          started_at?: string
+          status?: Database["public"]["Enums"]["session_status"]
+          title?: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          ended_at?: string | null
+          id?: string
+          started_at?: string
+          status?: Database["public"]["Enums"]["session_status"]
+          title?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
+      transcript_chunks: {
+        Row: {
+          created_at: string
+          end_ms: number
+          id: string
+          is_final: boolean
+          lang: string | null
+          session_id: string
+          start_ms: number
+          text: string
+        }
+        Insert: {
+          created_at?: string
+          end_ms?: number
+          id?: string
+          is_final?: boolean
+          lang?: string | null
+          session_id: string
+          start_ms?: number
+          text: string
+        }
+        Update: {
+          created_at?: string
+          end_ms?: number
+          id?: string
+          is_final?: boolean
+          lang?: string | null
+          session_id?: string
+          start_ms?: number
+          text?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "transcript_chunks_session_id_fkey"
+            columns: ["session_id"]
+            isOneToOne: false
+            referencedRelation: "sessions"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      transcript_segments: {
+        Row: {
+          boundary_reason: Database["public"]["Enums"]["boundary_reason"]
+          chunk_ids: string[]
+          created_at: string
+          end_ms: number
+          id: string
+          raw_text: string
+          session_id: string
+          start_ms: number
+        }
+        Insert: {
+          boundary_reason: Database["public"]["Enums"]["boundary_reason"]
+          chunk_ids?: string[]
+          created_at?: string
+          end_ms?: number
+          id?: string
+          raw_text: string
+          session_id: string
+          start_ms?: number
+        }
+        Update: {
+          boundary_reason?: Database["public"]["Enums"]["boundary_reason"]
+          chunk_ids?: string[]
+          created_at?: string
+          end_ms?: number
+          id?: string
+          raw_text?: string
+          session_id?: string
+          start_ms?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "transcript_segments_session_id_fkey"
+            columns: ["session_id"]
+            isOneToOne: false
+            referencedRelation: "sessions"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
     }
     Views: {
       [_ in never]: never
     }
     Functions: {
-      [_ in never]: never
+      owns_session: { Args: { _session_id: string }; Returns: boolean }
     }
     Enums: {
-      [_ in never]: never
+      boundary_reason:
+        | "word_count"
+        | "char_count"
+        | "time"
+        | "silence"
+        | "manual_stop"
+      brief_editor: "ai" | "user"
+      brief_node_level: "h1" | "h2" | "bullet"
+      brief_node_status: "ai_draft" | "user_confirmed"
+      brief_op_type:
+        | "add_node"
+        | "update_node"
+        | "delete_node"
+        | "move_node"
+        | "annotate"
+      session_status: "active" | "ended" | "archived"
     }
     CompositeTypes: {
       [_ in never]: never
@@ -150,6 +390,25 @@ export type CompositeTypes<
 
 export const Constants = {
   public: {
-    Enums: {},
+    Enums: {
+      boundary_reason: [
+        "word_count",
+        "char_count",
+        "time",
+        "silence",
+        "manual_stop",
+      ],
+      brief_editor: ["ai", "user"],
+      brief_node_level: ["h1", "h2", "bullet"],
+      brief_node_status: ["ai_draft", "user_confirmed"],
+      brief_op_type: [
+        "add_node",
+        "update_node",
+        "delete_node",
+        "move_node",
+        "annotate",
+      ],
+      session_status: ["active", "ended", "archived"],
+    },
   },
 } as const
