@@ -117,6 +117,21 @@ function Onboarding() {
               className="flex-1 resize-none bg-transparent outline-none text-foreground placeholder:text-secondary text-[15px] leading-6 min-h-[72px]"
             />
             <button
+              type="button"
+              onClick={toggleVoice}
+              aria-label={listening ? "Stop voice input" : "Start voice input"}
+              title={voiceSupported ? (listening ? "Stop voice input" : "Use voice input") : "Voice input not supported in this browser"}
+              className={`shrink-0 inline-flex items-center justify-center w-10 h-10 rounded-full border transition-colors ${
+                listening
+                  ? "bg-rose-500 text-white border-rose-500 animate-pulse"
+                  : "bg-surface text-foreground border-auralis hover:bg-surface-variant"
+              }`}
+            >
+              <span className="material-symbols-outlined text-[20px]">
+                {listening ? "stop" : "mic"}
+              </span>
+            </button>
+            <button
               onClick={start}
               className="shrink-0 inline-flex items-center gap-2 rounded-full bg-primary text-on-primary px-5 py-2.5 text-sm font-medium hover:opacity-90 transition-opacity"
             >
@@ -124,6 +139,12 @@ function Onboarding() {
               <span className="material-symbols-outlined text-[18px]">arrow_forward</span>
             </button>
           </div>
+          {!voiceSupported && (
+            <div className="px-4 pb-3 text-xs text-rose-500">
+              Voice input isn't supported in this browser. Try Chrome or Edge.
+            </div>
+          )}
+
         </div>
 
         {/* Dropzone */}
