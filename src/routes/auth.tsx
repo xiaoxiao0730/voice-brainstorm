@@ -7,8 +7,8 @@ export const Route = createFileRoute("/auth")({
   ssr: false,
   head: () => ({
     meta: [
-      { title: "Sign in — Melody" },
-      { name: "description", content: "Sign in to your Melody co-thinking workbench." },
+      { title: "Sign in — Murmur" },
+      { name: "description", content: "Sign in to your Murmur co-thinking workbench." },
     ],
     links: [
       { rel: "preconnect", href: "https://fonts.googleapis.com" },
@@ -85,7 +85,7 @@ function AuthPage() {
           className="text-center text-foreground text-4xl mb-2"
           style={{ fontFamily: "Instrument Serif, serif" }}
         >
-          Melody
+          Murmur
         </h1>
         <p className="text-center text-secondary text-sm mb-8">
           Your live brainstorming brief, co-written with AI.
@@ -141,7 +141,7 @@ function AuthPage() {
         </form>
 
         <p className="text-center text-xs text-secondary mt-6">
-          {mode === "signin" ? "New to Melody?" : "Already have an account?"}{" "}
+          {mode === "signin" ? "New to Murmur?" : "Already have an account?"}{" "}
           <button
             type="button"
             onClick={() => {
