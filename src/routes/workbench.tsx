@@ -1,7 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useCallback, useEffect, useRef, useState } from "react";
 
-export const Route = createFileRoute("/")({
+export const Route = createFileRoute("/workbench")({
   head: () => ({
     meta: [
       { title: "Brainstorm AI — Co-thinking Workbench" },
