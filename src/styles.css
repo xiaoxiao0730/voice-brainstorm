@@ -45,3 +45,22 @@
   html, body { background: var(--background); color: var(--foreground); font-family: var(--font-body); }
   body { @apply antialiased; }
 }
+
+@keyframes blob-morph-a {
+  0%, 100% { border-radius: 60% 40% 55% 45% / 50% 60% 40% 50%; transform: translate(0, 0) rotate(0deg); }
+  33%      { border-radius: 40% 60% 45% 55% / 60% 45% 55% 40%; transform: translate(4%, -3%) rotate(120deg); }
+  66%      { border-radius: 55% 45% 60% 40% / 45% 55% 50% 60%; transform: translate(-3%, 4%) rotate(240deg); }
+}
+@keyframes blob-morph-b {
+  0%, 100% { border-radius: 45% 55% 50% 50% / 55% 45% 60% 40%; transform: translate(0, 0) rotate(0deg) scale(1); }
+  50%      { border-radius: 55% 45% 60% 40% / 40% 60% 45% 55%; transform: translate(-2%, 3%) rotate(180deg) scale(1.05); }
+}
+@keyframes blob-morph-c {
+  0%, 100% { border-radius: 50% 50% 45% 55% / 45% 55% 50% 50%; transform: translate(0, 0) rotate(0deg); }
+  33%      { border-radius: 60% 40% 50% 50% / 55% 50% 60% 40%; transform: translate(-4%, -2%) rotate(-120deg); }
+  66%      { border-radius: 45% 55% 60% 40% / 50% 45% 55% 50%; transform: translate(3%, 4%) rotate(-240deg); }
+}
+.blob-a { animation: blob-morph-a 7s ease-in-out infinite; }
+.blob-b { animation: blob-morph-b 5s ease-in-out infinite; }
+.blob-c { animation: blob-morph-c 8s ease-in-out infinite; }
+
