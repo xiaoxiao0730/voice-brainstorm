@@ -32,7 +32,7 @@ function AuthPage() {
 
   useEffect(() => {
     supabase.auth.getUser().then(({ data }) => {
-      if (data.user) navigate({ to: "/workbench" });
+      if (data.user) navigate({ to: "/" });
     });
   }, [navigate]);
 
@@ -40,7 +40,7 @@ function AuthPage() {
     setError(null);
     setBusy(true);
     const result = await lovable.auth.signInWithOAuth("google", {
-      redirect_uri: window.location.origin + "/workbench",
+      redirect_uri: window.location.origin + "/",
     });
     if (result.error) {
       setError(result.error instanceof Error ? result.error.message : String(result.error));
@@ -48,7 +48,7 @@ function AuthPage() {
       return;
     }
     if (result.redirected) return;
-    navigate({ to: "/workbench" });
+    navigate({ to: "/" });
   };
 
   const onEmail = async (e: React.FormEvent) => {
@@ -60,16 +60,16 @@ function AuthPage() {
         const { error: err } = await supabase.auth.signUp({
           email,
           password,
-          options: { emailRedirectTo: window.location.origin + "/workbench" },
+          options: { emailRedirectTo: window.location.origin + "/" },
         });
         if (err) throw err;
         const { data: sess } = await supabase.auth.getSession();
-        if (sess.session) navigate({ to: "/workbench" });
+        if (sess.session) navigate({ to: "/" });
         else setError("Check your email to confirm your account, then sign in.");
       } else {
         const { error: err } = await supabase.auth.signInWithPassword({ email, password });
         if (err) throw err;
-        navigate({ to: "/workbench" });
+        navigate({ to: "/" });
       }
     } catch (e: any) {
       setError(e?.message || "Sign-in failed");
