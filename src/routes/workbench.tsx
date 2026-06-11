@@ -222,7 +222,7 @@ function Workbench() {
             </nav>
             <div className="border-t border-auralis p-3 flex items-center gap-2">
               <div className="w-7 h-7 rounded-full bg-gradient-to-tr from-rose-400 via-indigo-300 to-emerald-300" />
-              <span className="text-xs text-primary font-medium">Brainstorm</span>
+              <span className="text-xs text-primary font-medium">Melody</span>
             </div>
           </>
         )}
@@ -333,7 +333,7 @@ function Workbench() {
           </div>
           <footer className="h-10 px-6 flex items-center justify-between border-t border-auralis text-xs text-secondary shrink-0">
             <span>{liveText.length} chars · {finals.length} segments · {thoughts.length} thoughts</span>
-            <span>Auralis Workbench</span>
+            <span>Loom</span>
           </footer>
         </section>
       </main>
