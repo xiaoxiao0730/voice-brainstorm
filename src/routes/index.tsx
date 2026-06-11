@@ -171,7 +171,7 @@ function Workbench() {
                   className="px-6 py-3 rounded-full bg-primary text-on-primary text-sm font-medium disabled:opacity-40 transition-all hover:opacity-90 flex items-center gap-2"
                 >
                   <span className="material-symbols-outlined text-base">mic</span>
-                  开始说话
+                  Start Speaking
                 </button>
                 <button
                   onClick={stop}
@@ -179,7 +179,7 @@ function Workbench() {
                   className="px-6 py-3 rounded-full border border-auralis bg-surface text-primary text-sm font-medium disabled:opacity-40 transition-all hover:bg-surface-variant flex items-center gap-2"
                 >
                   <span className="material-symbols-outlined text-base">stop</span>
-                  停止说话
+                  Stop Speaking
                 </button>
               </div>
 
@@ -201,7 +201,7 @@ function Workbench() {
                   <div className="overflow-hidden">
                     <div className="px-4 pb-4 max-h-40 overflow-y-auto text-sm leading-relaxed text-primary">
                       {finals.length === 0 && !partial && (
-                        <p className="text-secondary italic">点击「开始说话」后，实时转写会显示在这里…</p>
+                        <p className="text-secondary italic">Start speaking to see live transcription here…</p>
                       )}
                       {finals.map((t, i) => (
                         <p key={i} className="mb-1">{t}</p>
@@ -279,7 +279,7 @@ function Canvas({ finals, partial }: { finals: string[]; partial: string }) {
                 A canvas for thinking aloud.
               </h3>
               <p className="text-sm text-secondary">
-                你说的每一句话都会平滑地落在这里，自动整理成可阅读的思路片段。
+                Everything you say will smoothly land here, automatically organized into readable thought snippets.
               </p>
             </div>
           </div>
