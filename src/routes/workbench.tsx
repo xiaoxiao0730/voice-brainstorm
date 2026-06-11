@@ -258,10 +258,6 @@ function Workbench() {
                 className={`relative w-[150px] h-[150px] rounded-full bg-gradient-to-tr from-indigo-400 via-violet-400 to-purple-500 opacity-90 blur-[4px] ${listening ? "animate-[orb-b_3.6s_ease-in-out_infinite]" : ""}`}
                 style={{ transform: `scale(${1 + level * 0.35})` }}
               />
-              <div
-                className="absolute w-3 h-3 rounded-full bg-primary/90 shadow-[0_0_24px_rgba(0,0,0,0.25)]"
-                style={{ transform: `scale(${1 + level * 0.8})` }}
-              />
             </div>
           </div>
 
