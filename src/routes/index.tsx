@@ -138,10 +138,10 @@ function Workbench() {
               </div>
 
               {/* Orbs */}
-              <div className="flex-1 flex items-center justify-center gap-6 my-8 relative">
+              <div className="flex-1 flex items-center justify-center gap-4 my-8 relative">
                 <Orb
                   className="bg-gradient-to-tr from-rose-400 to-orange-300 blur-2xl"
-                  size={110}
+                  size={100}
                   level={level}
                   phase={0}
                 />
@@ -149,15 +149,12 @@ function Workbench() {
                   className="relative flex items-center justify-center transition-transform duration-100 ease-out"
                   style={{ transform: `scale(${1 + level * 0.25})` }}
                 >
-                  <div className="w-[160px] h-[160px] rounded-full bg-gradient-to-tr from-indigo-300 to-purple-400 blur-xl" />
-                  <div
-                    className="absolute inset-0 rounded-full bg-white/30 backdrop-blur-md border border-white/50"
-                    style={{ boxShadow: `0 0 ${20 + level * 60}px rgba(160,140,255,${0.25 + level * 0.5})` }}
-                  />
+                  <div className="w-[140px] h-[140px] rounded-full bg-gradient-to-tr from-indigo-300 to-purple-400 blur-xl" />
+                  <div className="absolute inset-0 rounded-full bg-white/20 backdrop-blur-sm border border-white/40" />
                 </div>
                 <Orb
                   className="bg-gradient-to-tr from-emerald-300 to-teal-200 blur-2xl"
-                  size={110}
+                  size={100}
                   level={level}
                   phase={Math.PI}
                 />
