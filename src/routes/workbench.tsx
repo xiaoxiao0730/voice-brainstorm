@@ -1,5 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useServerFn } from "@tanstack/react-start";
+import { processTranscript, type ThoughtBlock } from "@/lib/ai.functions";
 
 export const Route = createFileRoute("/workbench")({
   head: () => ({
@@ -37,12 +39,44 @@ function Workbench() {
   const [expanded, setExpanded] = useState(true);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [activeSession, setActiveSession] = useState("s1");
+  const [thoughts, setThoughts] = useState<ThoughtBlock[]>([]);
+  const [aiLoading, setAiLoading] = useState(false);
+  const [aiError, setAiError] = useState<string | null>(null);
 
   const audioCtxRef = useRef<AudioContext | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const rafRef = useRef<number | null>(null);
   const recogRef = useRef<SR>(null);
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastProcessedRef = useRef<number>(0);
+
+  const processAi = useServerFn(processTranscript);
+
+  const runAi = useCallback(
+    async (transcript: string) => {
+      if (!transcript.trim()) return;
+      setAiLoading(true);
+      setAiError(null);
+      try {
+        const result = await processAi({ data: { transcript } });
+        setThoughts(result.thoughts);
+      } catch (e: any) {
+        setAiError(e.message || "AI processing failed");
+      } finally {
+        setAiLoading(false);
+      }
+    },
+    [processAi]
+  );
+
+  const debouncedRunAi = useCallback(
+    (transcript: string) => {
+      if (debounceRef.current) clearTimeout(debounceRef.current);
+      debounceRef.current = setTimeout(() => runAi(transcript), 1200);
+    },
+    [runAi]
+  );
 
   const stop = useCallback(() => {
     setListening(false);
@@ -57,7 +91,19 @@ function Workbench() {
     analyserRef.current = null;
     try { recogRef.current?.stop(); } catch {}
     setLevel(0);
-  }, []);
+
+    // Process full transcript on stop
+    const fullText = finalsRef.current.join(" ") + " " + partialRef.current;
+    if (fullText.trim().length > 10) {
+      runAi(fullText.trim());
+    }
+  }, [runAi]);
+
+  // Keep refs for latest values accessible in callbacks
+  const finalsRef = useRef(finals);
+  const partialRef = useRef(partial);
+  useEffect(() => { finalsRef.current = finals; }, [finals]);
+  useEffect(() => { partialRef.current = partial; }, [partial]);
 
   const start = useCallback(async () => {
     if (listening) return;
@@ -98,7 +144,15 @@ function Workbench() {
             const res = e.results[i];
             const txt = res[0].transcript;
             if (res.isFinal) {
-              setFinals((f) => [...f, txt.trim()]);
+              setFinals((f) => {
+                const next = [...f, txt.trim()];
+                // Auto-process every 3 new finals while recording
+                if (next.length - lastProcessedRef.current >= 3) {
+                  lastProcessedRef.current = next.length;
+                  debouncedRunAi(next.join(" "));
+                }
+                return next;
+              });
               interim = "";
             } else {
               interim += txt;
@@ -116,7 +170,7 @@ function Workbench() {
       console.error(e);
       stop();
     }
-  }, [listening, stop]);
+  }, [listening, stop, debouncedRunAi]);
 
   useEffect(() => () => stop(), [stop]);
 
@@ -263,18 +317,26 @@ function Workbench() {
           <header className="h-14 px-6 flex items-center justify-between border-b border-auralis shrink-0">
             <span className="text-xs uppercase tracking-[0.18em] text-secondary">Live Canvas</span>
             <div className="flex items-center gap-2">
-              <span className="px-3 py-1 bg-surface rounded-full text-xs text-primary border border-auralis">Auto-format</span>
+              <span className="px-3 py-1 bg-surface rounded-full text-xs text-primary border border-auralis">AI-Powered</span>
               <span className="px-3 py-1 bg-surface rounded-full text-xs text-secondary border border-auralis">Markdown</span>
               <span className="text-xs text-secondary ml-3 flex items-center gap-1.5">
-                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" /> Synced
+                {aiLoading ? (
+                  <>
+                    <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse" /> Thinking…
+                  </>
+                ) : (
+                  <>
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" /> Synced
+                  </>
+                )}
               </span>
             </div>
           </header>
           <div className="flex-1 overflow-y-auto p-8 min-h-0">
-            <Canvas finals={finals} partial={partial} />
+            <Canvas finals={finals} partial={partial} thoughts={thoughts} aiLoading={aiLoading} aiError={aiError} />
           </div>
           <footer className="h-10 px-6 flex items-center justify-between border-t border-auralis text-xs text-secondary shrink-0">
-            <span>{liveText.length} chars · {finals.length} segments</span>
+            <span>{liveText.length} chars · {finals.length} segments · {thoughts.length} thoughts</span>
             <span>Auralis Workbench</span>
           </footer>
         </section>
@@ -293,15 +355,24 @@ function Orb({ className, size, level }: { className: string; size: number; leve
   );
 }
 
-function Canvas({ finals, partial }: { finals: string[]; partial: string }) {
-  const blocks: { title: string; body: string }[] = [];
-  for (let i = 0; i < finals.length; i += 2) {
-    blocks.push({ title: finals[i], body: finals[i + 1] || "" });
-  }
+function Canvas({
+  finals,
+  partial,
+  thoughts,
+  aiLoading,
+  aiError,
+}: {
+  finals: string[];
+  partial: string;
+  thoughts: ThoughtBlock[];
+  aiLoading: boolean;
+  aiError: string | null;
+}) {
+  const hasContent = thoughts.length > 0 || finals.length > 0 || partial.length > 0;
 
   return (
     <div className="max-w-4xl mx-auto">
-      {blocks.length === 0 && !partial && (
+      {!hasContent && (
         <div className="min-h-[60vh] flex items-center justify-center text-center">
           <div className="max-w-sm">
             <div className="mx-auto mb-4 w-12 h-12 rounded-full bg-gradient-to-tr from-rose-300 via-indigo-200 to-emerald-200" />
@@ -309,25 +380,61 @@ function Canvas({ finals, partial }: { finals: string[]; partial: string }) {
               A canvas for thinking aloud.
             </h3>
             <p className="text-sm text-secondary">
-              Everything you say will smoothly land here, automatically organized into readable thought snippets.
+              Everything you say will be captured, then AI will organize it into clear, structured thought blocks.
             </p>
           </div>
         </div>
       )}
 
+      {aiError && (
+        <div className="mb-4 p-4 rounded-xl bg-red-500/10 border border-red-500/20 text-red-400 text-sm">
+          <span className="material-symbols-outlined text-base align-middle mr-1">error</span>
+          {aiError}
+        </div>
+      )}
+
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        {blocks.map((b, i) => (
+        {thoughts.map((t, i) => (
           <article key={i} className="bg-panel rounded-2xl border border-auralis p-5 animate-[fade-in_0.4s_ease-out]">
             <div className="flex items-center gap-2 mb-2">
               <span className="w-1.5 h-1.5 rounded-full bg-primary" />
-              <span className="text-[10px] uppercase tracking-[0.2em] text-secondary">Thought {i + 1}</span>
+              {t.tag ? (
+                <span className="text-[10px] uppercase tracking-[0.2em] text-secondary">{t.tag}</span>
+              ) : (
+                <span className="text-[10px] uppercase tracking-[0.2em] text-secondary">Thought {i + 1}</span>
+              )}
             </div>
             <h4 className="text-primary mb-1 leading-snug" style={{ fontFamily: "Instrument Serif, serif", fontSize: 22 }}>
-              {b.title}
+              {t.title}
             </h4>
-            {b.body && <p className="text-sm text-secondary leading-relaxed">{b.body}</p>}
+            {t.body && <p className="text-sm text-secondary leading-relaxed">{t.body}</p>}
           </article>
         ))}
+
+        {/* Fallback raw cards when AI hasn't processed yet */}
+        {thoughts.length === 0 && finals.length > 0 && (
+          <>
+            {(() => {
+              const blocks: { title: string; body: string }[] = [];
+              for (let i = 0; i < finals.length; i += 2) {
+                blocks.push({ title: finals[i], body: finals[i + 1] || "" });
+              }
+              return blocks.map((b, i) => (
+                <article key={`raw-${i}`} className="bg-panel rounded-2xl border border-auralis/60 p-5 animate-[fade-in_0.4s_ease-out]">
+                  <div className="flex items-center gap-2 mb-2">
+                    <span className="w-1.5 h-1.5 rounded-full bg-secondary" />
+                    <span className="text-[10px] uppercase tracking-[0.2em] text-secondary">Raw {i + 1}</span>
+                  </div>
+                  <h4 className="text-primary mb-1 leading-snug" style={{ fontFamily: "Instrument Serif, serif", fontSize: 22 }}>
+                    {b.title}
+                  </h4>
+                  {b.body && <p className="text-sm text-secondary leading-relaxed">{b.body}</p>}
+                </article>
+              ));
+            })()}
+          </>
+        )}
+
         {partial && (
           <article className="bg-surface rounded-2xl border border-dashed border-auralis p-5 md:col-span-2">
             <div className="flex items-center gap-2 mb-2">
@@ -339,6 +446,15 @@ function Canvas({ finals, partial }: { finals: string[]; partial: string }) {
               <span className="inline-block w-[2px] h-[18px] bg-primary ml-1 align-middle animate-pulse" />
             </p>
           </article>
+        )}
+
+        {aiLoading && thoughts.length > 0 && (
+          <div className="md:col-span-2 flex items-center justify-center py-6">
+            <div className="flex items-center gap-2 text-secondary text-sm">
+              <span className="w-4 h-4 border-2 border-auralis border-t-primary rounded-full animate-spin" />
+              AI is organizing your thoughts…
+            </div>
+          </div>
         )}
       </div>
     </div>
