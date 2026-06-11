@@ -75,6 +75,15 @@ function Onboarding() {
               <span className="material-symbols-outlined text-[18px]">arrow_forward</span>
             </button>
           </div>
+          <div className="px-4 pb-3 flex items-center justify-end gap-2">
+            <button
+              onClick={start}
+              className="inline-flex items-center gap-1.5 text-xs text-secondary hover:text-foreground transition-colors"
+            >
+              <span className="material-symbols-outlined text-[16px]">mic</span>
+              Or directly say it out
+            </button>
+          </div>
         </div>
 
         {/* Dropzone */}
