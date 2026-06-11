@@ -22,7 +22,11 @@ function Onboarding() {
   const [prompt, setPrompt] = useState("");
   const [files, setFiles] = useState<File[]>([]);
   const [dragging, setDragging] = useState(false);
+  const [listening, setListening] = useState(false);
+  const [voiceSupported, setVoiceSupported] = useState(true);
   const inputRef = useRef<HTMLInputElement>(null);
+  const recogRef = useRef<any>(null);
+  const baseTextRef = useRef("");
 
   const addFiles = useCallback((list: FileList | null) => {
     if (!list) return;
@@ -38,6 +42,51 @@ function Onboarding() {
   const start = useCallback(() => {
     navigate({ to: "/workbench" });
   }, [navigate]);
+
+  const stopVoice = useCallback(() => {
+    try { recogRef.current?.stop(); } catch {}
+    setListening(false);
+  }, []);
+
+  const toggleVoice = useCallback(() => {
+    if (listening) {
+      stopVoice();
+      return;
+    }
+    const SRClass: any =
+      (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    if (!SRClass) {
+      setVoiceSupported(false);
+      return;
+    }
+    const r = new SRClass();
+    r.continuous = true;
+    r.interimResults = true;
+    r.lang = navigator.language || "en-US";
+    baseTextRef.current = prompt ? prompt.trimEnd() + " " : "";
+    r.onresult = (e: any) => {
+      let interim = "";
+      let finalAdd = "";
+      for (let i = e.resultIndex; i < e.results.length; i++) {
+        const res = e.results[i];
+        const txt = res[0].transcript;
+        if (res.isFinal) finalAdd += txt;
+        else interim += txt;
+      }
+      if (finalAdd) baseTextRef.current += finalAdd.trim() + " ";
+      setPrompt((baseTextRef.current + interim).trimStart());
+    };
+    r.onerror = () => setListening(false);
+    r.onend = () => setListening(false);
+    recogRef.current = r;
+    try {
+      r.start();
+      setListening(true);
+    } catch {
+      setListening(false);
+    }
+  }, [listening, prompt, stopVoice]);
+
 
   const removeFile = (idx: number) => setFiles((p) => p.filter((_, i) => i !== idx));
 
