@@ -111,8 +111,13 @@ export const orchestrateSegment = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator((input: unknown) => InputSchema.parse(input))
   .handler(async ({ data, context }) => {
-    const { getAzureOpenAIClient } = await import("./azure-openai.server");
-    const { model, deployment } = getAzureOpenAIClient();
+    const lovableApiKey = process.env.LOVABLE_API_KEY;
+    if (!lovableApiKey) {
+      return { ops: [] as BriefOperation[], error: "Missing LOVABLE_API_KEY" };
+    }
+    const { createLovableAiGatewayProvider } = await import("./ai-gateway.server");
+    const gateway = createLovableAiGatewayProvider(lovableApiKey);
+    const model = gateway("google/gemini-3-flash-preview");
 
     const snapshotText =
       data.snapshot.length === 0
@@ -133,7 +138,7 @@ export const orchestrateSegment = createServerFn({ method: "POST" })
       ops = (output as { ops: BriefOperation[] }).ops;
     } catch (e: any) {
       aiError = e?.message || "AI call failed";
-      console.error("[orchestrate] AI error", aiError, "deployment:", deployment);
+      console.error("[orchestrate] AI error", aiError);
     }
 
     // Log every op to the audit table (applied flag stays false; client updates later if needed).
