@@ -195,10 +195,13 @@ function Onboarding() {
             </button>
             <button
               onClick={start}
-              className="shrink-0 inline-flex items-center gap-2 rounded-full bg-primary text-on-primary px-5 py-2.5 text-sm font-medium hover:opacity-90 transition-opacity"
+              disabled={submitting}
+              className="shrink-0 inline-flex items-center gap-2 rounded-full bg-primary text-on-primary px-5 py-2.5 text-sm font-medium hover:opacity-90 transition-opacity disabled:opacity-60 disabled:cursor-not-allowed"
             >
-              Start brainstorming
-              <span className="material-symbols-outlined text-[18px]">arrow_forward</span>
+              {submitting ? "Starting…" : "Start brainstorming"}
+              <span className="material-symbols-outlined text-[18px]">
+                {submitting ? "hourglass_top" : "arrow_forward"}
+              </span>
             </button>
           </div>
           {!voiceSupported && (
@@ -206,6 +209,10 @@ function Onboarding() {
               Voice input isn't supported in this browser. Try Chrome or Edge.
             </div>
           )}
+          {submitNote && (
+            <div className="px-4 pb-3 text-xs text-secondary">{submitNote}</div>
+          )}
+
 
         </div>
 
