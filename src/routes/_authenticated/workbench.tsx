@@ -96,6 +96,8 @@ function Workbench() {
   const [aiLoading, setAiLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const [userEmail, setUserEmail] = useState<string | null>(null);
+
   // Refs
   const recognizerRef = useRef<SpeechRecognizerHandle | null>(null);
   const bufferRef = useRef<ReturnType<typeof createTranscriptBuffer> | null>(null);
@@ -108,6 +110,13 @@ function Workbench() {
 
   useEffect(() => { docRef.current = doc; }, [doc]);
   useEffect(() => { activeSessionRef.current = activeSessionId; }, [activeSessionId]);
+
+  // Fetch user email
+  useEffect(() => {
+    supabase.auth.getUser().then(({ data }) => {
+      setUserEmail(data.user?.email ?? null);
+    });
+  }, []);
 
   // Sign out
   const signOut = async () => {
@@ -499,7 +508,7 @@ function Workbench() {
             <div className="border-t border-auralis p-3 flex items-center justify-between">
               <div className="flex items-center gap-2">
                 <div className="w-7 h-7 rounded-full bg-gradient-to-tr from-rose-400 via-indigo-300 to-emerald-300" />
-                <span className="text-xs text-primary font-medium">Murmur</span>
+                <span className="text-xs text-primary font-medium truncate max-w-[140px]">{userEmail ?? "Murmur"}</span>
               </div>
               <button
                 onClick={signOut}
