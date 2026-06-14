@@ -95,13 +95,18 @@ function BlockRow({
     }
   }, [block.body]);
 
+  const composingHeading = useRef(false);
+  const composingBody = useRef(false);
+
   const commitHeading = () => {
+    if (composingHeading.current) return;
     const text = headingRef.current?.innerText ?? "";
     if (text === lastHeading.current) return;
     lastHeading.current = text;
     onEditBlock(block.id, { heading: text });
   };
   const commitBody = () => {
+    if (composingBody.current) return;
     const text = bodyRef.current?.innerText ?? "";
     if (text === lastBody.current) return;
     lastBody.current = text;
@@ -137,6 +142,8 @@ function BlockRow({
           aria-label="Block heading"
           onBlur={commitHeading}
           onInput={commitHeading}
+          onCompositionStart={() => { composingHeading.current = true; }}
+          onCompositionEnd={() => { composingHeading.current = false; commitHeading(); }}
           className="outline-none text-primary mb-1.5 empty:before:content-['Heading…'] empty:before:text-secondary/40"
           style={headingStyle}
         />
@@ -150,10 +157,13 @@ function BlockRow({
         aria-label="Block body"
         onBlur={commitBody}
         onInput={commitBody}
+        onCompositionStart={() => { composingBody.current = true; }}
+        onCompositionEnd={() => { composingBody.current = false; commitBody(); }}
         className="outline-none text-primary empty:before:content-['Write_or_speak…'] empty:before:[white-space:pre] empty:before:text-secondary/40"
         style={bodyStyle}
       />
     </section>
   );
 }
+
 
