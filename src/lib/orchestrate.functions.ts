@@ -171,12 +171,11 @@ Return STRICT JSON of shape { "patches": [...] }. No prose, no fences.`;
       const rows = patches.map((p) => ({
         session_id: data.segment.sessionId,
         segment_id: data.segment.segmentId,
-        op_type:
-          p.action === "append_block"
-            ? "add_node"
-            : p.action === "update_block"
-              ? "update_node"
-              : "annotate",
+        op_type: (p.action === "append_block"
+          ? "add_node"
+          : p.action === "update_block"
+            ? "update_node"
+            : "annotate") as "add_node" | "update_node" | "annotate",
         payload: p as any,
         applied: false,
       }));
