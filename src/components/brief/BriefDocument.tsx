@@ -71,6 +71,15 @@ function BlockRow({
   const lastHeading = useRef(block.heading);
   const lastBody = useRef(block.body);
 
+  // Set initial DOM content once on mount — never via JSX children,
+  // otherwise React reconciliation resets the caret on every keystroke
+  // (which is why typing appeared "reversed").
+  useEffect(() => {
+    if (headingRef.current) headingRef.current.innerText = block.heading;
+    if (bodyRef.current) bodyRef.current.innerText = block.body;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // Sync from AI updates when the user isn't focused on this block.
   useEffect(() => {
     if (block.heading !== lastHeading.current && headingRef.current && headingRef.current !== document.activeElement) {
@@ -130,9 +139,7 @@ function BlockRow({
           onInput={commitHeading}
           className="outline-none text-primary mb-1.5 empty:before:content-['Heading…'] empty:before:text-secondary/40"
           style={headingStyle}
-        >
-          {block.heading}
-        </div>
+        />
       )}
       <div
         ref={bodyRef}
@@ -143,11 +150,10 @@ function BlockRow({
         aria-label="Block body"
         onBlur={commitBody}
         onInput={commitBody}
-        className="outline-none text-primary empty:before:content-['Write\\00a0or\\00a0speak…'] empty:before:text-secondary/40"
+        className="outline-none text-primary empty:before:content-['Write_or_speak…'] empty:before:[white-space:pre] empty:before:text-secondary/40"
         style={bodyStyle}
-      >
-        {block.body}
-      </div>
+      />
     </section>
   );
 }
+
