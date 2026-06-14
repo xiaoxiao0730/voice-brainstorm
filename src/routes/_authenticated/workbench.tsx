@@ -2,12 +2,19 @@ import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useServerFn } from "@tanstack/react-start";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import { BriefCanvas } from "@/components/brief/BriefCanvas";
+import { BriefDocument } from "@/components/brief/BriefDocument";
 import { supabase } from "@/integrations/supabase/client";
 
-import { applyBriefOperation } from "@/lib/pipeline/applyBriefOperation";
+import { applyBriefPatch } from "@/lib/pipeline/applyBriefPatch";
+import { between } from "@/lib/pipeline/orderKey";
 import { createTranscriptBuffer } from "@/lib/pipeline/transcriptBuffer";
-import type { BriefNode, BriefOperation, TranscriptSegment } from "@/lib/pipeline/types";
+import {
+  blockToNodeUpsert,
+  nodeToBlock,
+  type BriefBlock,
+  type BriefDoc,
+  type TranscriptSegment,
+} from "@/lib/pipeline/types";
 
 import { getSpeechToken } from "@/lib/speech.functions";
 import { startAzureRecognizer, type SpeechRecognizerHandle } from "@/lib/speech/azureRecognizer";
@@ -18,7 +25,6 @@ import {
   listSessions,
 } from "@/lib/session.functions";
 import {
-  deleteBriefNode,
   loadBrief,
   persistChunks,
   persistSegment,
@@ -62,7 +68,6 @@ function Workbench() {
   const getToken = useServerFn(getSpeechToken);
   const loadB = useServerFn(loadBrief);
   const upsertN = useServerFn(upsertBriefNode);
-  const deleteN = useServerFn(deleteBriefNode);
   const saveChunks = useServerFn(persistChunks);
   const saveSegment = useServerFn(persistSegment);
   const orchestrate = useServerFn(orchestrateSegment);
@@ -76,7 +81,7 @@ function Workbench() {
   const [level, setLevel] = useState(0);
   const [partial, setPartial] = useState("");
   const [finals, setFinals] = useState<{ id: string; text: string }[]>([]);
-  const [nodes, setNodes] = useState<Record<string, BriefNode>>({});
+  const [doc, setDoc] = useState<BriefDoc>({});
   const [aiLoading, setAiLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -87,11 +92,10 @@ function Workbench() {
   const analyserRef = useRef<AnalyserNode | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const rafRef = useRef<number | null>(null);
-  const nodesRef = useRef(nodes);
+  const docRef = useRef(doc);
   const activeSessionRef = useRef(activeSessionId);
-  const tempIdMap = useRef(new Map<string, string>());
 
-  useEffect(() => { nodesRef.current = nodes; }, [nodes]);
+  useEffect(() => { docRef.current = doc; }, [doc]);
   useEffect(() => { activeSessionRef.current = activeSessionId; }, [activeSessionId]);
 
   // Sign out
@@ -134,12 +138,11 @@ function Workbench() {
       setActiveSessionId(id);
       setFinals([]);
       setPartial("");
-      tempIdMap.current = new Map();
       try {
         const briefNodes = await loadB({ data: { sessionId: id } });
-        const map: Record<string, BriefNode> = {};
-        for (const n of briefNodes) map[n.id] = n;
-        setNodes(map);
+        const map: BriefDoc = {};
+        for (const n of briefNodes) map[n.id] = nodeToBlock(n);
+        setDoc(map);
       } catch (e: any) {
         setError(e.message);
       }
@@ -156,9 +159,17 @@ function Workbench() {
 
   // ============= Recording =============
 
+  const persistBlock = useCallback(
+    async (block: BriefBlock) => {
+      await upsertN({ data: blockToNodeUpsert(block) }).catch((e) =>
+        console.warn("upsert failed", e),
+      );
+    },
+    [upsertN],
+  );
+
   const onSegment = useCallback(
     async (segment: TranscriptSegment) => {
-      // Persist segment
       try {
         await saveSegment({
           data: {
@@ -175,23 +186,45 @@ function Workbench() {
         console.warn("persistSegment failed", e);
       }
 
-      // Snapshot for AI
-      const snapshot = Object.values(nodesRef.current).map((n) => ({
-        id: n.id,
-        parentId: n.parentId,
-        level: n.level,
-        text: n.text,
-        status: n.status,
-        lastEditedBy: n.lastEditedBy,
-      }));
+      // Snapshot of the current document (sorted) for the AI.
+      const snapshot = Object.values(docRef.current)
+        .sort((a, b) => a.orderKey.localeCompare(b.orderKey))
+        .map((b) => ({
+          id: b.id,
+          heading: b.heading,
+          level: b.level,
+          body: b.body,
+          locked: b.locked,
+          lastEditedBy: b.lastEditedBy,
+        }));
 
       setAiLoading(true);
       try {
-        const { ops, error: aiErr } = await orchestrate({
-          data: { segment: { segmentId: segment.segmentId, sessionId: segment.sessionId, rawText: segment.rawText, chunkIds: segment.chunkIds }, snapshot },
+        const { patches, error: aiErr } = await orchestrate({
+          data: {
+            segment: {
+              segmentId: segment.segmentId,
+              sessionId: segment.sessionId,
+              rawText: segment.rawText,
+              chunkIds: segment.chunkIds,
+            },
+            snapshot,
+          },
         });
         if (aiErr) setError(aiErr);
-        await applyOps(ops, segment.sessionId);
+
+        let current = docRef.current;
+        const toPersist: BriefBlock[] = [];
+        for (const p of patches) {
+          const { doc: next, result } = applyBriefPatch(current, p, {
+            sessionId: segment.sessionId,
+          });
+          current = next;
+          if (result.ok) toPersist.push(result.block);
+        }
+        setDoc(current);
+        docRef.current = current;
+        await Promise.all(toPersist.map(persistBlock));
       } catch (e: any) {
         setError(e.message);
       } finally {
@@ -199,54 +232,7 @@ function Workbench() {
       }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [orchestrate, saveSegment],
-  );
-
-  const applyOps = useCallback(
-    async (ops: BriefOperation[], sessionId: string) => {
-      let current = nodesRef.current;
-      const toPersist: BriefNode[] = [];
-      const toDelete: string[] = [];
-      for (const op of ops) {
-        const { nodes: next, result } = applyBriefOperation(current, op, {
-          sessionId,
-          tempIdMap: tempIdMap.current,
-        });
-        current = next;
-        if (result.ok) {
-          if (op.op === "delete_node") {
-            const id = tempIdMap.current.get(op.nodeId) ?? op.nodeId;
-            toDelete.push(id);
-          } else if (result.node) {
-            toPersist.push(result.node);
-          }
-        }
-      }
-      setNodes(current);
-      nodesRef.current = current;
-      // Persist
-      await Promise.all([
-        ...toPersist.map((n) =>
-          upsertN({
-            data: {
-              id: n.id,
-              sessionId: n.sessionId,
-              parentId: n.parentId,
-              orderKey: n.orderKey,
-              level: n.level,
-              text: n.text,
-              status: n.status,
-              lastEditedBy: n.lastEditedBy,
-              sourceChunkIds: n.sourceChunkIds,
-              confidence: n.confidence,
-              tag: n.tag,
-            },
-          }).catch((e) => console.warn("upsert failed", e)),
-        ),
-        ...toDelete.map((id) => deleteN({ data: { id } }).catch((e) => console.warn("delete failed", e))),
-      ]);
-    },
-    [upsertN, deleteN],
+    [orchestrate, saveSegment, persistBlock],
   );
 
   const startListening = async () => {
@@ -359,151 +345,63 @@ function Workbench() {
 
   useEffect(() => () => { void stopListening(); }, [stopListening]);
 
-  // ============= Canvas handlers =============
+  // ============= Document handlers =============
 
-  const onEditText = useCallback(
-    async (id: string, text: string) => {
-      const existing = nodesRef.current[id];
+  const editTimers = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
+
+  const onEditBlock = useCallback(
+    (id: string, patch: { heading?: string; body?: string }) => {
+      const existing = docRef.current[id];
       if (!existing) return;
-      const next: BriefNode = { ...existing, text, lastEditedBy: "user" };
-      const map = { ...nodesRef.current, [id]: next };
-      setNodes(map);
-      nodesRef.current = map;
-      await upsertN({
-        data: {
-          id: next.id,
-          sessionId: next.sessionId,
-          parentId: next.parentId,
-          orderKey: next.orderKey,
-          level: next.level,
-          text: next.text,
-          status: next.status,
-          lastEditedBy: next.lastEditedBy,
-          sourceChunkIds: next.sourceChunkIds,
-          confidence: next.confidence,
-          tag: next.tag,
-        },
-      }).catch((e) => console.warn("upsert failed", e));
-    },
-    [upsertN],
-  );
-
-  const onConfirm = useCallback(
-    async (id: string) => {
-      const existing = nodesRef.current[id];
-      if (!existing) return;
-      const next: BriefNode = { ...existing, status: "user_confirmed", lastEditedBy: "user" };
-      const map = { ...nodesRef.current, [id]: next };
-      setNodes(map);
-      nodesRef.current = map;
-      await upsertN({
-        data: {
-          id: next.id, sessionId: next.sessionId, parentId: next.parentId, orderKey: next.orderKey,
-          level: next.level, text: next.text, status: next.status, lastEditedBy: next.lastEditedBy,
-          sourceChunkIds: next.sourceChunkIds, confidence: next.confidence, tag: next.tag,
-        },
-      });
-    },
-    [upsertN],
-  );
-
-  const onDeleteNode = useCallback(
-    async (id: string) => {
-      const map = { ...nodesRef.current };
-      // cascade delete children locally
-      const toDel = new Set([id]);
-      let added = true;
-      while (added) {
-        added = false;
-        for (const n of Object.values(map)) {
-          if (n.parentId && toDel.has(n.parentId) && !toDel.has(n.id)) {
-            toDel.add(n.id); added = true;
-          }
-        }
-      }
-      for (const did of toDel) delete map[did];
-      setNodes(map);
-      nodesRef.current = map;
-      await Promise.all(Array.from(toDel).map((did) => deleteN({ data: { id: did } }).catch(() => {})));
-    },
-    [deleteN],
-  );
-
-  const onAddBullet = useCallback(
-    async (afterId: string | null) => {
-      if (!activeSessionId) return;
-      const after = afterId ? nodesRef.current[afterId] : null;
-      const op: BriefOperation = {
-        op: "add_node",
-        tempId: "local-" + crypto.randomUUID(),
-        parentId: after?.parentId ?? null,
-        afterId: afterId,
-        level: "bullet",
-        text: "",
-        sourceChunkIds: [],
+      const next: BriefBlock = {
+        ...existing,
+        heading: patch.heading !== undefined ? patch.heading : existing.heading,
+        body: patch.body !== undefined ? patch.body : existing.body,
+        lastEditedBy: "user",
+        locked: true,
       };
-      const { nodes: next, result } = applyBriefOperation(nodesRef.current, op, {
-        sessionId: activeSessionId,
-        tempIdMap: tempIdMap.current,
-      });
-      setNodes(next);
-      nodesRef.current = next;
-      if (result.ok && result.node) {
-        const n = { ...result.node, lastEditedBy: "user" as const };
-        nodesRef.current[n.id] = n;
-        await upsertN({
-          data: {
-            id: n.id, sessionId: n.sessionId, parentId: n.parentId, orderKey: n.orderKey,
-            level: n.level, text: n.text, status: n.status, lastEditedBy: n.lastEditedBy,
-            sourceChunkIds: n.sourceChunkIds, confidence: n.confidence, tag: n.tag,
-          },
-        });
-      }
+      const map = { ...docRef.current, [id]: next };
+      setDoc(map);
+      docRef.current = map;
+
+      // Debounced persist (600ms) per block.
+      const existingTimer = editTimers.current.get(id);
+      if (existingTimer) clearTimeout(existingTimer);
+      const t = setTimeout(() => {
+        editTimers.current.delete(id);
+        void persistBlock(next);
+      }, 600);
+      editTimers.current.set(id, t);
     },
-    [activeSessionId, upsertN],
+    [persistBlock],
   );
 
-  const onIndent = useCallback(
-    async (id: string, delta: 1 | -1) => {
-      const existing = nodesRef.current[id];
-      if (!existing) return;
-      let newParentId: string | null = existing.parentId;
-      if (delta === 1) {
-        // Indent: parent becomes the previous sibling at the same level/parent.
-        const sibs = Object.values(nodesRef.current)
-          .filter((n) => n.parentId === existing.parentId)
-          .sort((a, b) => a.orderKey.localeCompare(b.orderKey));
-        const idx = sibs.findIndex((s) => s.id === id);
-        if (idx > 0) newParentId = sibs[idx - 1].id;
-        else return;
-      } else {
-        // Outdent: parent becomes grandparent.
-        if (existing.parentId) {
-          const parent = nodesRef.current[existing.parentId];
-          newParentId = parent?.parentId ?? null;
-        } else return;
-      }
-      const next: BriefNode = { ...existing, parentId: newParentId, lastEditedBy: "user" };
-      const map = { ...nodesRef.current, [id]: next };
-      setNodes(map);
-      nodesRef.current = map;
-      await upsertN({
-        data: {
-          id: next.id, sessionId: next.sessionId, parentId: next.parentId, orderKey: next.orderKey,
-          level: next.level, text: next.text, status: next.status, lastEditedBy: next.lastEditedBy,
-          sourceChunkIds: next.sourceChunkIds, confidence: next.confidence, tag: next.tag,
-        },
-      });
-    },
-    [upsertN],
-  );
+  const onAddBlock = useCallback(async () => {
+    if (!activeSessionId) return;
+    const keys = Object.values(docRef.current).map((b) => b.orderKey).sort();
+    const newBlock: BriefBlock = {
+      id: crypto.randomUUID(),
+      sessionId: activeSessionId,
+      orderKey: between(keys.length ? keys[keys.length - 1] : null, null),
+      heading: "",
+      level: 3,
+      body: "",
+      lastEditedBy: "user",
+      locked: true,
+      sourceChunkIds: [],
+    };
+    const map = { ...docRef.current, [newBlock.id]: newBlock };
+    setDoc(map);
+    docRef.current = map;
+    await persistBlock(newBlock);
+  }, [activeSessionId, persistBlock]);
 
   const liveText = useMemo(
     () => (finals.map((f) => f.text).join(" ") + " " + partial).trim(),
     [finals, partial],
   );
 
-  const nodeCount = Object.keys(nodes).length;
+  const blockCount = Object.keys(doc).length;
 
   // ============= UI =============
 
@@ -656,7 +554,7 @@ function Workbench() {
           <header className="h-14 px-6 flex items-center justify-between border-b border-auralis shrink-0">
             <span className="text-xs uppercase tracking-[0.18em] text-secondary">Live Brief</span>
             <div className="flex items-center gap-2">
-              <span className="px-3 py-1 bg-surface rounded-full text-xs text-primary border border-auralis">Azure OpenAI</span>
+              <span className="px-3 py-1 bg-surface rounded-full text-xs text-primary border border-auralis">Gemini 3 Flash</span>
               <span className="text-xs text-secondary ml-3 flex items-center gap-1.5">
                 {aiLoading ? (
                   <>
@@ -677,18 +575,15 @@ function Workbench() {
             </div>
           )}
           <div className="flex-1 overflow-y-auto p-8 min-h-0">
-            <BriefCanvas
-              nodes={nodes}
-              onEditText={onEditText}
-              onConfirm={onConfirm}
-              onDelete={onDeleteNode}
-              onAddBullet={onAddBullet}
-              onIndent={onIndent}
+            <BriefDocument
+              doc={doc}
+              onEditBlock={onEditBlock}
+              onAddBlock={onAddBlock}
               aiLoading={aiLoading}
             />
           </div>
           <footer className="h-10 px-6 flex items-center justify-between border-t border-auralis text-xs text-secondary shrink-0">
-            <span>{liveText.length} chars · {finals.length} segments · {nodeCount} brief nodes</span>
+            <span>{liveText.length} chars · {finals.length} segments · {blockCount} blocks</span>
             <span>Murmur · <Link to="/" className="hover:text-primary">Home</Link></span>
           </footer>
         </section>

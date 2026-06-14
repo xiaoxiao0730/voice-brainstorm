@@ -1,15 +1,15 @@
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
-import { generateText, Output } from "ai";
+import { generateText } from "ai";
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
-import type { BriefOperation } from "./pipeline/types";
+import type { BriefPatch, BriefBlockLevel } from "./pipeline/types";
 
-const SnapshotNode = z.object({
+const SnapshotBlock = z.object({
   id: z.string(),
-  parentId: z.string().nullable(),
-  level: z.enum(["h1", "h2", "bullet"]),
-  text: z.string(),
-  status: z.enum(["ai_draft", "user_confirmed"]),
+  heading: z.string().default(""),
+  level: z.number().int().min(1).max(3),
+  body: z.string().default(""),
+  locked: z.boolean(),
   lastEditedBy: z.enum(["ai", "user"]),
 });
 
@@ -22,90 +22,85 @@ const SegmentInput = z.object({
 
 const InputSchema = z.object({
   segment: SegmentInput,
-  snapshot: z.array(SnapshotNode),
+  snapshot: z.array(SnapshotBlock),
 });
 
-// Schema we ask the model to fill. Discriminated union via op field.
-const AddNodeOp = z.object({
-  op: z.literal("add_node"),
-  tempId: z.string(),
-  parentId: z.string().nullable(),
-  afterId: z.string().nullable(),
-  level: z.enum(["h1", "h2", "bullet"]),
-  text: z.string(),
-  sourceChunkIds: z.array(z.string()).default([]),
-  confidence: z.number().min(0).max(1).optional(),
-  tag: z.string().optional(),
-});
-const UpdateNodeOp = z.object({
-  op: z.literal("update_node"),
-  nodeId: z.string(),
-  text: z.string(),
+// Flat schema — easy for the model to fill, easy to parse.
+const PatchSchema = z.object({
+  action: z.enum(["append_block", "update_block", "append_to_block"]),
+  blockId: z.string().nullable().optional(),
+  heading: z.string().optional(),
+  level: z.number().int().min(1).max(3).optional(),
+  bodyMarkdown: z.string().optional(),
   sourceChunkIds: z.array(z.string()).optional(),
-  confidence: z.number().min(0).max(1).optional(),
 });
-const DeleteNodeOp = z.object({
-  op: z.literal("delete_node"),
-  nodeId: z.string(),
-  reason: z.string().optional(),
-});
-const MoveNodeOp = z.object({
-  op: z.literal("move_node"),
-  nodeId: z.string(),
-  newParentId: z.string().nullable(),
-  afterId: z.string().nullable(),
-});
-const AnnotateOp = z.object({
-  op: z.literal("annotate"),
-  nodeId: z.string(),
-  tag: z.string(),
+const ResponseSchema = z.object({
+  patches: z.array(PatchSchema).default([]),
 });
 
-const OutputSchema = z.object({
-  ops: z.array(
-    z.discriminatedUnion("op", [
-      AddNodeOp,
-      UpdateNodeOp,
-      DeleteNodeOp,
-      MoveNodeOp,
-      AnnotateOp,
-    ]),
-  ),
-});
+const SYSTEM_PROMPT = `You are the AI co-author of a live thinking document (Notion-style).
 
-const SYSTEM_PROMPT = `You are the reasoning layer of a live brainstorming brief.
+The document is an ordered list of BLOCKS. Each block has:
+- id (string)
+- heading (string, may be empty)
+- level (1 = H1, 2 = H2, 3 = body paragraph / bullet group)
+- body (markdown; bullets are lines starting with "- ")
+- locked (true if the user typed or edited inside it — NEVER overwrite a locked block)
 
-You maintain an evolving outline (the "brief") while the user speaks. The brief is a tree of nodes:
-- "h1" — top-level section heading
-- "h2" — subsection heading
-- "bullet" — body bullet (may be nested under another bullet or under an h1/h2)
+Your job: given the user's latest spoken segment, output a JSON object with a "patches" array.
 
-Rules — non-negotiable:
-1. Return ONLY the MINIMUM incremental operations needed to reflect this new transcript segment in the brief. Do NOT regenerate the full brief.
-2. NEVER summarize the transcript sentence by sentence. Synthesize ideas; rewrite in your own concise wording. NEVER copy the transcript verbatim.
-3. NEVER overwrite a node where lastEditedBy="user" or status="user_confirmed". If the segment contradicts or extends such a node, add a NEW sibling instead.
-4. Prefer update_node over add_node when refining an existing point. Add new bullets only for genuinely new ideas.
-5. Use add_node with a fresh tempId you make up (any short string) for new nodes. Use real ids (from the snapshot) for nodeId / parentId / afterId references.
-6. If the segment contains no usable signal (filler, restating prior content, noise), return ops: [].
-7. Always include sourceChunkIds on add_node and update_node so the user can trace bullets back to spoken segments.
-8. Keep bullets crisp: max ~15 words. Headings: max ~6 words.
-9. afterId is the id of the sibling AFTER which to insert; null means append at end of that parent's children.
+Each patch is one of:
+1. { "action": "append_block", "blockId": null, "heading": "...", "level": 1|2|3, "bodyMarkdown": "...", "sourceChunkIds": [...] }
+   — adds a NEW block at the end. Use for genuinely new topics.
+2. { "action": "append_to_block", "blockId": "<existing id>", "bodyMarkdown": "...", "sourceChunkIds": [...] }
+   — appends a line/bullet to an existing AI block. Use when the user is elaborating a thread already in the doc.
+3. { "action": "update_block", "blockId": "<existing id>", "heading": "...", "bodyMarkdown": "...", "sourceChunkIds": [...] }
+   — rewrites an existing AI block. Use sparingly, only when the new segment clearly supersedes it.
 
-Examples:
+HARD RULES:
+- NEVER emit update_block or append_to_block targeting a block where locked=true. The user's words are sacred. Match their voice and write around them instead.
+- NEVER paste the transcript verbatim. Synthesize. Rewrite in tight, structured form.
+- If the segment is filler / restating / noise, return { "patches": [] }.
+- Headings ≤ 6 words. Bullets ≤ 20 words each. Use "- " prefix for bullet lines.
+- Always include sourceChunkIds (copy them from the segment).
+- Output STRICT JSON only. No prose, no markdown fences, no comments.
 
-Snapshot empty. Segment: "So I've been thinking about how onboarding for our app sucks — new users drop off in the first minute because they don't understand the value."
-→ ops:
-  { "op":"add_node","tempId":"t1","parentId":null,"afterId":null,"level":"h1","text":"Onboarding redesign","sourceChunkIds":["c1"] }
-  { "op":"add_node","tempId":"t2","parentId":"t1","afterId":null,"level":"bullet","text":"Users drop off in first 60 seconds","sourceChunkIds":["c1"], "tag":"insight" }
-  { "op":"add_node","tempId":"t3","parentId":"t1","afterId":null,"level":"bullet","text":"Value prop unclear at first contact","sourceChunkIds":["c1"] }
-
-Snapshot has a bullet n5 "Users drop off in first 60 seconds". Segment refines: "actually it's more like 30 seconds, and most of them never even scroll past the hero."
-→ ops:
-  { "op":"update_node","nodeId":"n5","text":"Users drop off in first 30 seconds, most never scroll past hero","sourceChunkIds":["c2"] }
-
-Segment is just "yeah, um, what was I saying."
-→ ops: []
+Example response:
+{"patches":[{"action":"append_block","blockId":null,"heading":"Onboarding redesign","level":1,"bodyMarkdown":"- Users drop off in first 30 seconds\\n- Value prop unclear at first contact","sourceChunkIds":["c1"]}]}
 `;
+
+// Robust JSON extractor — strips fences, finds first {/last }, parses.
+function extractJSON(raw: string): unknown {
+  let cleaned = raw
+    .replace(/^\s*```json\s*/i, "")
+    .replace(/^\s*```\s*/i, "")
+    .replace(/```\s*$/i, "")
+    .trim();
+
+  if (!cleaned.startsWith("{") && !cleaned.startsWith("[")) {
+    const objStart = cleaned.indexOf("{");
+    const arrStart = cleaned.indexOf("[");
+    const isArray = arrStart !== -1 && (objStart === -1 || arrStart < objStart);
+    const start = isArray ? arrStart : objStart;
+    const end = isArray ? cleaned.lastIndexOf("]") : cleaned.lastIndexOf("}");
+    if (start === -1 || end <= start) {
+      throw new Error("No JSON object found in model response");
+    }
+    cleaned = cleaned.slice(start, end + 1);
+  }
+  return JSON.parse(cleaned);
+}
+
+function renderSnapshot(snapshot: z.infer<typeof SnapshotBlock>[]): string {
+  if (snapshot.length === 0) return "(document is empty)";
+  return snapshot
+    .map((b) => {
+      const lock = b.locked ? "LOCKED" : "ai";
+      const heading = b.heading || "(no heading)";
+      return `--- block id=${b.id} level=${b.level} ${lock} ---\n## ${heading}\n${b.body}`;
+    })
+    .join("\n\n");
+}
 
 export const orchestrateSegment = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
@@ -113,49 +108,80 @@ export const orchestrateSegment = createServerFn({ method: "POST" })
   .handler(async ({ data, context }) => {
     const lovableApiKey = process.env.LOVABLE_API_KEY;
     if (!lovableApiKey) {
-      return { ops: [] as BriefOperation[], error: "Missing LOVABLE_API_KEY" };
+      return { patches: [] as BriefPatch[], error: "Missing LOVABLE_API_KEY" };
     }
     const { createLovableAiGatewayProvider } = await import("./ai-gateway.server");
     const gateway = createLovableAiGatewayProvider(lovableApiKey);
     const model = gateway("google/gemini-3-flash-preview");
 
-    const snapshotText =
-      data.snapshot.length === 0
-        ? "(brief is empty)"
-        : JSON.stringify(data.snapshot, null, 2);
+    const lockedIds = data.snapshot.filter((b) => b.locked).map((b) => b.id);
+    const userEditedExcerpts = data.snapshot
+      .filter((b) => b.locked)
+      .slice(-3)
+      .map((b) => `• [${b.heading || "untitled"}] ${b.body.slice(0, 240)}`)
+      .join("\n");
 
-    let ops: BriefOperation[] = [];
+    const prompt = `Current document:
+${renderSnapshot(data.snapshot)}
+
+LOCKED block ids (DO NOT touch): ${JSON.stringify(lockedIds)}
+
+${
+  userEditedExcerpts
+    ? `The user personally wrote/edited these — match their voice, never contradict:\n${userEditedExcerpts}\n\n`
+    : ""
+}New transcript segment (chunkIds: ${JSON.stringify(data.segment.chunkIds)}):
+"""${data.segment.rawText}"""
+
+Return STRICT JSON of shape { "patches": [...] }. No prose, no fences.`;
+
+    let patches: BriefPatch[] = [];
     let aiError: string | null = null;
+
     try {
-      const { output } = await generateText({
+      const { text, finishReason } = await generateText({
         model,
-        output: Output.object({ schema: OutputSchema }),
         system: SYSTEM_PROMPT,
-        prompt: `Current brief snapshot:\n${snapshotText}\n\nNew transcript segment (chunkIds: ${JSON.stringify(
-          data.segment.chunkIds,
-        )}):\n"""${data.segment.rawText}"""\n\nReturn the minimum incremental operations.`,
+        prompt,
+        temperature: 0.4,
       });
-      ops = (output as { ops: BriefOperation[] }).ops;
+
+      if (finishReason === "length") {
+        throw new Error("Response truncated (finish_reason=length)");
+      }
+
+      const parsed = extractJSON(text);
+      const validated = ResponseSchema.parse(parsed);
+
+      // Normalize into BriefPatch shape; coerce level to 1|2|3.
+      patches = validated.patches.map((p) => ({
+        action: p.action,
+        blockId: p.blockId ?? null,
+        heading: p.heading,
+        level: (p.level as BriefBlockLevel | undefined),
+        bodyMarkdown: p.bodyMarkdown,
+        sourceChunkIds: p.sourceChunkIds ?? [],
+      }));
     } catch (e: any) {
       aiError = e?.message || "AI call failed";
-      console.error("[orchestrate] AI error", aiError);
+      console.error("[orchestrate] AI error:", aiError);
     }
 
-    // Log every op to the audit table (applied flag stays false; client updates later if needed).
-    if (ops.length > 0) {
-      const rows = ops.map((op) => ({
+    if (patches.length > 0) {
+      const rows = patches.map((p) => ({
         session_id: data.segment.sessionId,
         segment_id: data.segment.segmentId,
-        op_type: op.op,
-        payload: op as any,
+        op_type: (p.action === "append_block"
+          ? "add_node"
+          : p.action === "update_block"
+            ? "update_node"
+            : "annotate") as "add_node" | "update_node" | "annotate",
+        payload: p as any,
         applied: false,
       }));
       const { error: logError } = await context.supabase.from("brief_operations").insert(rows);
       if (logError) console.warn("[orchestrate] op log error:", logError.message);
     }
 
-    if (aiError) {
-      return { ops, error: aiError };
-    }
-    return { ops, error: null };
+    return { patches, error: aiError };
   });
