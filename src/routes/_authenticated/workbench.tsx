@@ -22,8 +22,10 @@ import { startAzureRecognizer, type SpeechRecognizerHandle } from "@/lib/speech/
 import {
   createSession,
   endSession,
+  getSessionContext,
   listSessions,
 } from "@/lib/session.functions";
+
 import {
   loadBrief,
   persistChunks,
