@@ -33,6 +33,9 @@ import {
 import { orchestrateSegment } from "@/lib/orchestrate.functions";
 
 export const Route = createFileRoute("/_authenticated/workbench")({
+  validateSearch: (search: Record<string, unknown>) => ({
+    session: typeof search.session === "string" ? search.session : undefined,
+  }),
   head: () => ({
     meta: [
       { title: "Murmur — Co-thinking Workbench" },
@@ -47,6 +50,7 @@ export const Route = createFileRoute("/_authenticated/workbench")({
   }),
   component: Workbench,
 });
+
 
 type SessionRow = { id: string; title: string; status: string; started_at: string; ended_at: string | null };
 
