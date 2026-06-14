@@ -124,11 +124,13 @@ function Workbench() {
     }
   }, [list]);
 
-  // Initial load — get sessions, open most recent or create new
+  // Initial load — honor ?session=… first, else open most recent or create new
   useEffect(() => {
     (async () => {
       const rows = await refreshSessions();
-      if (rows.length > 0) {
+      if (requestedSessionId && rows.some((r) => r.id === requestedSessionId)) {
+        await openSession(requestedSessionId);
+      } else if (rows.length > 0) {
         await openSession(rows[0].id);
       } else {
         const created = await createS({ data: {} });
@@ -138,6 +140,7 @@ function Workbench() {
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
 
   const openSession = useCallback(
     async (id: string) => {
