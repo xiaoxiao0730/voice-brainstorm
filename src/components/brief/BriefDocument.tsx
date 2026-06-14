@@ -28,8 +28,7 @@ export function BriefDocument({ doc, onEditBlock, onAddBlock, aiLoading }: Props
               A canvas for thinking aloud.
             </h3>
             <p className="text-sm text-secondary">
-              Start speaking. After a 5-second pause, the AI will weave your thoughts into the document.
-              Edit anything freely — your words are locked and the AI will write around them.
+              Start speaking and see your ideas grow.
             </p>
           </div>
         </div>
