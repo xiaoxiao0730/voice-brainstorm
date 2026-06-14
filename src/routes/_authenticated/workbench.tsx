@@ -575,18 +575,15 @@ function Workbench() {
             </div>
           )}
           <div className="flex-1 overflow-y-auto p-8 min-h-0">
-            <BriefCanvas
-              nodes={nodes}
-              onEditText={onEditText}
-              onConfirm={onConfirm}
-              onDelete={onDeleteNode}
-              onAddBullet={onAddBullet}
-              onIndent={onIndent}
+            <BriefDocument
+              doc={doc}
+              onEditBlock={onEditBlock}
+              onAddBlock={onAddBlock}
               aiLoading={aiLoading}
             />
           </div>
           <footer className="h-10 px-6 flex items-center justify-between border-t border-auralis text-xs text-secondary shrink-0">
-            <span>{liveText.length} chars · {finals.length} segments · {nodeCount} brief nodes</span>
+            <span>{liveText.length} chars · {finals.length} segments · {blockCount} blocks</span>
             <span>Murmur · <Link to="/" className="hover:text-primary">Home</Link></span>
           </footer>
         </section>
