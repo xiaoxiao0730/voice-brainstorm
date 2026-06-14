@@ -68,7 +68,6 @@ function Workbench() {
   const getToken = useServerFn(getSpeechToken);
   const loadB = useServerFn(loadBrief);
   const upsertN = useServerFn(upsertBriefNode);
-  const deleteN = useServerFn(deleteBriefNode);
   const saveChunks = useServerFn(persistChunks);
   const saveSegment = useServerFn(persistSegment);
   const orchestrate = useServerFn(orchestrateSegment);
@@ -82,7 +81,7 @@ function Workbench() {
   const [level, setLevel] = useState(0);
   const [partial, setPartial] = useState("");
   const [finals, setFinals] = useState<{ id: string; text: string }[]>([]);
-  const [nodes, setNodes] = useState<Record<string, BriefNode>>({});
+  const [doc, setDoc] = useState<BriefDoc>({});
   const [aiLoading, setAiLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -93,11 +92,10 @@ function Workbench() {
   const analyserRef = useRef<AnalyserNode | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const rafRef = useRef<number | null>(null);
-  const nodesRef = useRef(nodes);
+  const docRef = useRef(doc);
   const activeSessionRef = useRef(activeSessionId);
-  const tempIdMap = useRef(new Map<string, string>());
 
-  useEffect(() => { nodesRef.current = nodes; }, [nodes]);
+  useEffect(() => { docRef.current = doc; }, [doc]);
   useEffect(() => { activeSessionRef.current = activeSessionId; }, [activeSessionId]);
 
   // Sign out
