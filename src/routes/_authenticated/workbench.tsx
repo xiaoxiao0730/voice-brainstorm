@@ -2,12 +2,19 @@ import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useServerFn } from "@tanstack/react-start";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import { BriefCanvas } from "@/components/brief/BriefCanvas";
+import { BriefDocument } from "@/components/brief/BriefDocument";
 import { supabase } from "@/integrations/supabase/client";
 
-import { applyBriefOperation } from "@/lib/pipeline/applyBriefOperation";
+import { applyBriefPatch } from "@/lib/pipeline/applyBriefPatch";
+import { between } from "@/lib/pipeline/orderKey";
 import { createTranscriptBuffer } from "@/lib/pipeline/transcriptBuffer";
-import type { BriefNode, BriefOperation, TranscriptSegment } from "@/lib/pipeline/types";
+import {
+  blockToNodeUpsert,
+  nodeToBlock,
+  type BriefBlock,
+  type BriefDoc,
+  type TranscriptSegment,
+} from "@/lib/pipeline/types";
 
 import { getSpeechToken } from "@/lib/speech.functions";
 import { startAzureRecognizer, type SpeechRecognizerHandle } from "@/lib/speech/azureRecognizer";
@@ -18,7 +25,6 @@ import {
   listSessions,
 } from "@/lib/session.functions";
 import {
-  deleteBriefNode,
   loadBrief,
   persistChunks,
   persistSegment,
