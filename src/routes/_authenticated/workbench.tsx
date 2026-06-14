@@ -554,7 +554,7 @@ function Workbench() {
           <header className="h-14 px-6 flex items-center justify-between border-b border-auralis shrink-0">
             <span className="text-xs uppercase tracking-[0.18em] text-secondary">Live Brief</span>
             <div className="flex items-center gap-2">
-              <span className="px-3 py-1 bg-surface rounded-full text-xs text-primary border border-auralis">Azure OpenAI</span>
+              <span className="px-3 py-1 bg-surface rounded-full text-xs text-primary border border-auralis">Gemini 3 Flash</span>
               <span className="text-xs text-secondary ml-3 flex items-center gap-1.5">
                 {aiLoading ? (
                   <>
