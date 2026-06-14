@@ -31,11 +31,15 @@ export const Route = createFileRoute("/")({
 
 function Onboarding() {
   const navigate = useNavigate();
+  const createS = useServerFn(createSession);
+  const summarize = useServerFn(summarizeContextFile);
   const [prompt, setPrompt] = useState("");
   const [files, setFiles] = useState<File[]>([]);
   const [dragging, setDragging] = useState(false);
   const [listening, setListening] = useState(false);
   const [voiceSupported, setVoiceSupported] = useState(true);
+  const [submitting, setSubmitting] = useState(false);
+  const [submitNote, setSubmitNote] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const recogRef = useRef<any>(null);
   const baseTextRef = useRef("");
@@ -51,9 +55,55 @@ function Onboarding() {
     addFiles(e.dataTransfer.files);
   }, [addFiles]);
 
-  const start = useCallback(() => {
-    navigate({ to: "/workbench" });
-  }, [navigate]);
+  const start = useCallback(async () => {
+    if (submitting) return;
+    setSubmitting(true);
+    setSubmitNote(null);
+    try {
+      // Get the signed-in user (needed for the per-user storage path).
+      const { data: userRes, error: userErr } = await supabase.auth.getUser();
+      if (userErr || !userRes.user) throw new Error(userErr?.message || "Not signed in");
+      const userId = userRes.user.id;
+
+      // 1. Create the session row with the onboarding prompt.
+      const session = await createS({ data: { prompt: prompt.trim() } });
+
+      // 2. Upload each file to private storage and ask the server to summarize it.
+      if (files.length > 0) {
+        setSubmitNote(`Uploading ${files.length} file${files.length === 1 ? "" : "s"}…`);
+        for (const file of files) {
+          const safeName = file.name.replace(/[^\w.\-]+/g, "_");
+          const path = `${userId}/${session.id}/${crypto.randomUUID()}-${safeName}`;
+          const { error: upErr } = await supabase.storage
+            .from("session-context")
+            .upload(path, file, {
+              contentType: file.type || "application/octet-stream",
+              upsert: false,
+            });
+          if (upErr) {
+            console.warn("Upload failed:", file.name, upErr.message);
+            continue;
+          }
+          // Fire-and-forget summarization; don't block navigation on it.
+          void summarize({
+            data: {
+              sessionId: session.id,
+              path,
+              name: file.name,
+              mime: file.type || "application/octet-stream",
+              size: file.size,
+            },
+          }).catch((e) => console.warn("Summarize failed:", file.name, e?.message));
+        }
+      }
+
+      navigate({ to: "/workbench", search: { session: session.id } });
+    } catch (e: any) {
+      setSubmitNote(e?.message || "Couldn't start session");
+      setSubmitting(false);
+    }
+  }, [submitting, prompt, files, createS, summarize, navigate]);
+
 
   const stopVoice = useCallback(() => {
     try { recogRef.current?.stop(); } catch {}
