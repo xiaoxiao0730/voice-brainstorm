@@ -1,151 +1,103 @@
 ## Goal
 
-Replace the browser's SpeechRecognition + single-shot Gemini call with a real pipeline:
-Azure Speech → buffered TranscriptSegments → Azure OpenAI reasoning that emits **incremental BriefOperations** → validated merge into a Notion-style editable canvas (H1 / H2 / bullet body) → persisted to Lovable Cloud.
+Make the Live Brief work reliably: stop the "could not parse the response" crash, batch LLM calls to natural pauses (~5s silence), switch the canvas from a node-tree to a Notion-style document, and keep the AI's writes as additive patches that respect what the user has edited.
 
-## Architecture
+## Problem analysis
 
-```text
-Mic ──► Azure Speech SDK (browser, token-auth)
-          │  partial + final recognition events
-          ▼
-   TranscriptBuffer  (50 words EN / 80 chars CN / 8s / silence)
-          │  flush → TranscriptSegment
-          ▼
-   POST /api/orchestrate  (TanStack server route, streaming SSE)
-          │  Azure OpenAI chat completions (JSON-schema mode)
-          ▼
-   BriefOperation[]  (add_node / update_node / delete_node / reorder / annotate)
-          │
-          ▼
-   Client validator + reducer → BriefDoc state
-          │           (rejects ops on user_confirmed / user-edited nodes)
-          ▼
-   <BriefCanvas /> contentEditable bullet outliner
-          │
-          ▼
-   Lovable Cloud (sessions, transcript_segments, brief_nodes, brief_ops)
+1. **Parse failure** — `orchestrateSegment` uses `generateText` + `Output.object({ schema: OutputSchema })` with Gemini. Gemini frequently rejects/struggles with deeply nested `discriminatedUnion` schemas, and when it returns prose or partial JSON the AI SDK throws "No object generated: could not parse the response." There is no fallback parser, no retry, no `finish_reason` check.
+2. **LLM called too often** — `transcriptBuffer` flushes on 1.2s silence / 50 words / 8s, so we call the LLM every couple of sentences. User wants ~5s silence as the primary trigger.
+3. **Wrong mental model** — current UI is a tree of `BriefNode`s (h1/h2/bullet) rendered as `<li>` rows with per-node contentEditable. User wants ONE document the user types into freely, with the LLM appending/refining sections, not emitting `add_node`/`update_node` ops over a tree.
+4. **No memory of user edits** — model gets a node snapshot but no clear "this is what the user wrote/changed, do not overwrite" channel beyond a `lastEditedBy` flag.
+
+## Plan
+
+### 1. Switch the data model to a document with sections
+
+New shape (in `src/lib/pipeline/types.ts`):
+```ts
+type BriefBlock = {
+  id: string;            // stable uuid
+  heading: string;       // "" for intro/unlabeled
+  level: 1 | 2 | 3;      // heading level
+  body: string;          // markdown text (bullets as "- ..." lines)
+  lastEditedBy: "ai" | "user";
+  locked: boolean;       // true after user edits inside it
+  sourceChunkIds: string[];
+};
+type BriefDoc = { blocks: BriefBlock[] };
 ```
 
-## 1. Secrets & connections
+Persistence: reuse the existing `brief_nodes` table by treating each row as a block (level→heading level, text→body markdown, parent_id stays null). No migration needed for v1.
 
-Add as runtime secrets:
-- `AZURE_SPEECH_KEY`, `AZURE_SPEECH_REGION`
-- `AZURE_OPENAI_ENDPOINT` (e.g. `https://<resource>.openai.azure.com`)
-- `AZURE_OPENAI_API_KEY`
-- `AZURE_OPENAI_DEPLOYMENT` (your gpt-4o / gpt-4.1 deployment name)
-- `AZURE_OPENAI_API_VERSION` (e.g. `2024-10-21`)
+### 2. New Notion-style canvas component
 
-Auth: enable Google sign-in + email/password (Lovable Cloud managed). All workbench routes move under `src/routes/_authenticated/`.
+Replace `BriefCanvas` with `BriefDocument`:
+- One scrollable column, max-width ~720px.
+- Each block renders: an editable heading (`<h1/h2/h3 contentEditable>`) + an editable body (`<div contentEditable>` rendering markdown-ish text; bullets via leading `- `).
+- Typing anywhere marks that block `lastEditedBy="user"` and `locked=true`, debounced 600ms → persists via `upsertBriefNode`.
+- AI-appended blocks fade in; locked blocks get a subtle "edited" indicator and the AI cannot overwrite them.
+- Empty state: a single placeholder block that says "Start speaking…".
 
-## 2. Database (Lovable Cloud)
+### 3. Trigger LLM only on real pauses
 
-Tables, all scoped to `auth.uid()` via RLS:
-- `sessions` — id, user_id, title, status, started_at, ended_at
-- `transcript_chunks` — id, session_id, text, is_final, start_ms, end_ms, lang
-- `transcript_segments` — id, session_id, chunk_ids[], raw_text, start_ms, end_ms, boundary_reason
-- `brief_nodes` — id, session_id, parent_id, order_key, level (`h1`|`h2`|`bullet`), text, status (`ai_draft`|`user_confirmed`), last_edited_by (`ai`|`user`), source_chunk_ids[], confidence, updated_at
-- `brief_operations` — id, session_id, segment_id, op_type, payload jsonb, applied bool, rejection_reason, created_at  (audit log)
+Update `transcriptBuffer.ts`:
+- `SILENCE_MS` 1200 → **5000**.
+- Keep a hard ceiling: flush on 30s elapsed OR ~150 words to avoid runaway segments during continuous speech.
+- Remove per-sentence flushes.
 
-GRANTs + RLS policies in the same migration. Order key uses fractional indexing string so AI inserts don't renumber siblings.
+### 4. Rewrite the orchestrator to emit safe patches
 
-## 3. Azure Speech (browser)
-
-- Install `microsoft-cognitiveservices-speech-sdk`.
-- New server fn `getSpeechToken()` → returns short-lived token from `https://<region>.api.cognitive.microsoft.com/sts/v1.0/issueToken` using `AZURE_SPEECH_KEY`. Never ship the key.
-- `src/lib/speech/azureRecognizer.ts` — wraps `SpeechRecognizer` with continuous recognition; emits `{ kind: "partial"|"final", text, offsetMs, durationMs }`. Auto-detect EN/CN via `AutoDetectSourceLanguageConfig`.
-- Replace the `webkitSpeechRecognition` block in `workbench.tsx`.
-
-## 4. TranscriptBuffer
-
-`src/lib/pipeline/transcriptBuffer.ts`:
-- Stores finalized chunks since last flush.
-- Flush when ANY of: ≥50 EN words, ≥80 CN chars, ≥8s elapsed, or ≥1.2s silence after a final.
-- Dedupes by chunk id and by trailing-substring match to drop Azure's overlap re-finals.
-- Emits `TranscriptSegment { segmentId, sessionId, chunkIds, rawText, startTimeMs, endTimeMs, boundaryReason }`.
-- Persists chunk + segment via server fns as it goes.
-
-## 5. Orchestrator (Azure OpenAI)
-
-`src/routes/api/orchestrate.ts` — streaming server route (SSE). Input: `{ sessionId, segment, briefSnapshot }`.
-
-- Uses AI SDK `@ai-sdk/azure` with deployment from env. Model is **whatever Azure deployment the user provisioned** (gpt-4o recommended).
-- System prompt enforces:
-  - Maintain an *evolving* brief; do not re-summarize prior content.
-  - Never copy transcript verbatim; rewrite as concise bullets.
-  - Never overwrite nodes where `lastEditedBy === "user"` or `status === "user_confirmed"`.
-  - Output ONLY a JSON array of `BriefOperation`s — the minimum to reflect this segment. Empty array is valid.
-  - Few-shot examples for: first segment (creates H1 + bullets), refinement segment (updates a bullet), tangent (adds new H2 section), no-op segment.
-- Response schema (zod, also passed to model as JSON schema):
+In `orchestrate.functions.ts`:
+- Replace the `discriminatedUnion` schema with a **flat, simple** schema Gemini handles reliably:
   ```ts
-  BriefOperation =
-    | { op: "add_node"; tempId; parentId|null; afterId|null; level; text; sourceChunkIds[]; confidence }
-    | { op: "update_node"; nodeId; text; sourceChunkIds[]; confidence }
-    | { op: "delete_node"; nodeId; reason }
-    | { op: "move_node"; nodeId; newParentId|null; afterId|null }
-    | { op: "annotate"; nodeId; tag } // "insight" | "question" | "action"
+  z.object({
+    patches: z.array(z.object({
+      action: z.enum(["append_block", "update_block", "append_to_block"]),
+      blockId: z.string().nullable(),    // null for append_block
+      heading: z.string().default(""),
+      level: z.number().int().min(1).max(3).default(2),
+      bodyMarkdown: z.string().default(""),
+      sourceChunkIds: z.array(z.string()).default([]),
+    })).default([]),
+  })
   ```
-- Streams ops as they're produced (`text/event-stream`, one JSON op per `data:` line) so the canvas updates progressively.
-- Persists every op (applied or not) to `brief_operations` for replay/debug.
+- Build prompt with two clearly separated sections:
+  1. **Current document** (rendered as markdown, with each block prefixed by `<!-- block:{id} locked={true|false} -->`).
+  2. **New transcript segment** plus the **list of locked block ids** the model MUST NOT touch.
+- System prompt rules: never rewrite a locked block; prefer `append_to_block` for refinements on AI blocks; create a new block only for genuinely new topics; return `{ "patches": [] }` if nothing meaningful.
+- **Robust parsing fallback**: if `Output.object` throws, call `generateText` again WITHOUT the schema and reuse a tolerant `extractJSON` helper (strip ```json fences, find first `{`/last `}`, `JSON.parse`, validate with Zod). If that also fails, return `{ patches: [], error }` instead of crashing the segment.
+- Drop unused op types (`move_node`, `annotate`, `delete_node`) — out of scope for v1 document model.
 
-## 6. Client merge & validation
+### 5. Apply patches client-side, respecting locks
 
-`src/lib/pipeline/applyBriefOperation.ts`:
-1. Resolve target node; reject if missing.
-2. Reject any op touching a node with `lastEditedBy="user"` or `status="user_confirmed"` (log to `brief_operations.rejection_reason`).
-3. Resolve `tempId` → real id after add_node persists.
-4. Enforce level rules (no bullet under bullet beyond depth 3, H1 only at root).
-5. Update local Zustand store + write through to `brief_nodes` via server fn.
+New reducer `applyBriefPatch(doc, patch)`:
+- `append_block` → push new block at end.
+- `append_to_block` → if target exists and `!locked`, append `\n\n{bodyMarkdown}` to body; if locked, fall back to creating a new block right after it.
+- `update_block` → only if `!locked`; otherwise skip and log.
+- Always persist via `upsertBriefNode` after apply.
 
-## 7. Notion-style canvas
+### 6. Feed user edits back to the model
 
-Replace today's card grid with `src/components/brief/BriefCanvas.tsx`:
-- Single scrollable column, contentEditable list. Three styles via `level`:
-  - `h1` → Instrument Serif 32px
-  - `h2` → Instrument Serif 22px
-  - `bullet` → Inter 14px with `•` marker; supports nested indent
-- Keyboard: Enter = new sibling bullet, Tab/Shift-Tab = indent, `/` = level menu (H1/H2/bullet/toggle confirmed).
-- On any user edit: set `lastEditedBy="user"`, debounce 600ms, persist, lock against AI overwrite. Subtle "edited" dot indicator.
-- "Confirm" action (⌘↵) sets `status="user_confirmed"`.
-- Each node shows hoverable source chips → click jumps transcript panel to the source segment.
+When sending the snapshot, include the last ~3 user-edited block excerpts under a `"User has personally written/edited these — match their voice and never contradict:"` header. This gives the model concrete memory of the user's wording without complex fine-tuning.
 
-Drag/drop reordering is out of scope for this iteration (manual order via keyboard).
+### 7. Verification
 
-## 8. Workbench wiring
+- Manually trigger one short utterance → expect exactly one LLM call after 5s silence, one or two `append_block` patches, document renders.
+- Edit a block, speak again → that block stays untouched; new content lands as a new block or appended to a different AI block.
+- Force a malformed model response (temporary test) → orchestrator returns `{ patches: [], error }`, UI shows a small toast, no crash.
 
-`src/routes/_authenticated/workbench.tsx`:
-- On Start: create `session` row, init Azure recognizer + buffer.
-- On each segment flush: append to transcript panel, POST to `/api/orchestrate`, stream ops into reducer.
-- On Stop: final flush, mark session ended.
-- Sidebar lists user's sessions (already mocked — wire to real query).
-- Loading/error UI for 429 (rate limit) and Azure quota errors.
+## Files touched
 
-## 9. Out of scope for this round (saved for "level up")
+- `src/lib/pipeline/types.ts` — add `BriefBlock`, `BriefDoc`, patch types.
+- `src/lib/pipeline/transcriptBuffer.ts` — silence 5s, ceilings.
+- `src/lib/pipeline/applyBriefPatch.ts` — new reducer (replaces `applyBriefOperation`).
+- `src/lib/orchestrate.functions.ts` — new flat schema, tolerant parser, user-edit memory in prompt.
+- `src/components/brief/BriefDocument.tsx` — new Notion-style component (replaces `BriefCanvas`).
+- `src/routes/_authenticated/workbench.tsx` — swap canvas, wire new patch flow.
+- `src/lib/brief.functions.ts` — unchanged shape; still upserts rows.
 
-- Step 7 "co-thinking" blocks (questions/insights side panel) — schema reserves `annotate` op for it.
-- Multi-user collaborative editing.
-- Voice diarization.
-- Drag/drop reordering.
-- Offline queue.
+## Out of scope (v1)
 
-## Technical notes
-
-- Keep Azure OpenAI calls strictly server-side; AI SDK + `@ai-sdk/azure` provider configured per-request inside the route handler (not module scope) so env reads happen at runtime.
-- Use server functions (not edge functions) for all DB writes — TanStack idiom.
-- `brief_operations` table doubles as the audit trail and as the replay log for future "rewind brief" UX.
-- Fractional order keys (e.g. `mudder` library or simple midpoint strings) so AI can insert between siblings without rewriting peers.
-- The current `processTranscript` server fn and ThoughtBlock UI are deleted; nothing else in the app depends on them.
-
-## Files touched / created
-
-- delete: `src/lib/ai.functions.ts` (replaced)
-- new: `src/lib/azure/openai.server.ts`, `src/lib/azure/speech.server.ts`, `src/lib/speech/azureRecognizer.ts`, `src/lib/pipeline/{transcriptBuffer,applyBriefOperation,briefStore}.ts`, `src/lib/pipeline/types.ts`
-- new server route: `src/routes/api/orchestrate.ts`
-- new server fns: `src/lib/session.functions.ts`, `src/lib/brief.functions.ts`, `src/lib/speech.functions.ts`
-- new components: `src/components/brief/{BriefCanvas,BriefNode,SourceChip}.tsx`
-- move + rewrite: `src/routes/workbench.tsx` → `src/routes/_authenticated/workbench.tsx`
-- new: `src/routes/auth.tsx` (sign-in with Google + email)
-- migration: tables + RLS + GRANTs above
-- secrets: 5 Azure secrets via `add_secret`
-
-After you approve, I'll request the 5 Azure secrets first, then run the migration, then build the code in dependency order (DB types → speech → buffer → orchestrator → canvas → workbench).
+- Slash commands, drag-to-reorder, rich inline formatting (bold/italic/links).
+- Real-time multi-cursor / collaboration.
+- Migration of any existing session data (current sessions can be left as-is or cleared).
