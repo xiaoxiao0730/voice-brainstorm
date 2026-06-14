@@ -1,9 +1,11 @@
 import type { BoundaryReason, TranscriptChunk, TranscriptSegment } from "./types";
 
-const EN_WORD_LIMIT = 50;
-const CN_CHAR_LIMIT = 80;
-const TIME_LIMIT_MS = 8_000;
-const SILENCE_MS = 1_200;
+// Only flush when the user has stopped speaking for a real pause, or hits a
+// hard ceiling. The LLM is called per flush, so smaller numbers = more calls.
+const EN_WORD_LIMIT = 150;
+const CN_CHAR_LIMIT = 240;
+const TIME_LIMIT_MS = 30_000;
+const SILENCE_MS = 5_000;
 
 function isCjk(text: string): boolean {
   // Quick heuristic: >30% CJK chars means treat as CJK.
