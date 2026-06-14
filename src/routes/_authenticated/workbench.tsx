@@ -619,6 +619,21 @@ function Workbench() {
                   </>
                 )}
               </span>
+              <button
+                onClick={() => {
+                  const active = sessions.find((s) => s.id === activeSessionId);
+                  void exportBriefToDocx(doc, active?.title ?? "Live Brief").catch((e) =>
+                    setError(e?.message ?? "Export failed"),
+                  );
+                }}
+                disabled={blockCount === 0}
+                className="ml-3 px-3 py-1.5 rounded-full border border-auralis bg-surface text-primary text-xs font-medium hover:bg-surface-variant disabled:opacity-40 flex items-center gap-1.5"
+                aria-label="Export to Word"
+                title="Export to Word (.docx)"
+              >
+                <span className="material-symbols-outlined text-base">download</span>
+                Export
+              </button>
             </div>
           </header>
           {error && (
