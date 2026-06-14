@@ -22,8 +22,10 @@ import { startAzureRecognizer, type SpeechRecognizerHandle } from "@/lib/speech/
 import {
   createSession,
   endSession,
+  getSessionContext,
   listSessions,
 } from "@/lib/session.functions";
+
 import {
   loadBrief,
   persistChunks,
@@ -33,6 +35,9 @@ import {
 import { orchestrateSegment } from "@/lib/orchestrate.functions";
 
 export const Route = createFileRoute("/_authenticated/workbench")({
+  validateSearch: (search: Record<string, unknown>) => ({
+    session: typeof search.session === "string" ? search.session : undefined,
+  }),
   head: () => ({
     meta: [
       { title: "Murmur — Co-thinking Workbench" },
@@ -48,6 +53,7 @@ export const Route = createFileRoute("/_authenticated/workbench")({
   component: Workbench,
 });
 
+
 type SessionRow = { id: string; title: string; status: string; started_at: string; ended_at: string | null };
 
 function relative(ts: string) {
@@ -61,10 +67,15 @@ function relative(ts: string) {
 function Workbench() {
   const navigate = useNavigate();
 
+  const { session: requestedSessionId } = Route.useSearch();
+
   // Server fn hooks
   const list = useServerFn(listSessions);
   const createS = useServerFn(createSession);
+
   const endS = useServerFn(endSession);
+  const getCtx = useServerFn(getSessionContext);
+
   const getToken = useServerFn(getSpeechToken);
   const loadB = useServerFn(loadBrief);
   const upsertN = useServerFn(upsertBriefNode);
@@ -117,11 +128,13 @@ function Workbench() {
     }
   }, [list]);
 
-  // Initial load — get sessions, open most recent or create new
+  // Initial load — honor ?session=… first, else open most recent or create new
   useEffect(() => {
     (async () => {
       const rows = await refreshSessions();
-      if (rows.length > 0) {
+      if (requestedSessionId && rows.some((r) => r.id === requestedSessionId)) {
+        await openSession(requestedSessionId);
+      } else if (rows.length > 0) {
         await openSession(rows[0].id);
       } else {
         const created = await createS({ data: {} });
@@ -131,6 +144,7 @@ function Workbench() {
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
 
   const openSession = useCallback(
     async (id: string) => {
@@ -142,14 +156,43 @@ function Workbench() {
         const briefNodes = await loadB({ data: { sessionId: id } });
         const map: BriefDoc = {};
         for (const n of briefNodes) map[n.id] = nodeToBlock(n);
+
+        // First time opening a session that has an onboarding prompt → seed
+        // it as the first locked block so the AI treats it as the user's
+        // intent and writes around it.
+        if (Object.keys(map).length === 0) {
+          try {
+            const ctx = await getCtx({ data: { sessionId: id } });
+            if (ctx.prompt?.trim()) {
+              const seeded: BriefBlock = {
+                id: crypto.randomUUID(),
+                sessionId: id,
+                orderKey: between(null, null),
+                heading: "Starting thought",
+                level: 2,
+                body: ctx.prompt.trim(),
+                lastEditedBy: "user",
+                locked: true,
+                sourceChunkIds: [],
+              };
+              map[seeded.id] = seeded;
+              void upsertN({ data: blockToNodeUpsert(seeded) }).catch((e) =>
+                console.warn("seed upsert failed", e),
+              );
+            }
+          } catch (e) {
+            console.warn("getCtx failed", e);
+          }
+        }
         setDoc(map);
       } catch (e: any) {
         setError(e.message);
       }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [loadB],
+    [loadB, getCtx, upsertN],
   );
+
 
   const newSession = async () => {
     const created = await createS({ data: {} });

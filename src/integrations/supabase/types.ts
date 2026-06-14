@@ -127,9 +127,11 @@ export type Database = {
       }
       sessions: {
         Row: {
+          context_files: Json
           created_at: string
           ended_at: string | null
           id: string
+          prompt: string
           started_at: string
           status: Database["public"]["Enums"]["session_status"]
           title: string
@@ -137,9 +139,11 @@ export type Database = {
           user_id: string
         }
         Insert: {
+          context_files?: Json
           created_at?: string
           ended_at?: string | null
           id?: string
+          prompt?: string
           started_at?: string
           status?: Database["public"]["Enums"]["session_status"]
           title?: string
@@ -147,9 +151,11 @@ export type Database = {
           user_id: string
         }
         Update: {
+          context_files?: Json
           created_at?: string
           ended_at?: string | null
           id?: string
+          prompt?: string
           started_at?: string
           status?: Database["public"]["Enums"]["session_status"]
           title?: string
