@@ -33,6 +33,7 @@ import {
   upsertBriefNode,
 } from "@/lib/brief.functions";
 import { orchestrateSegment } from "@/lib/orchestrate.functions";
+import { exportBriefToDocx } from "@/lib/exportDocx";
 
 export const Route = createFileRoute("/_authenticated/workbench")({
   validateSearch: (search: Record<string, unknown>) => ({
