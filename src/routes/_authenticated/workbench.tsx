@@ -74,6 +74,8 @@ function Workbench() {
   const createS = useServerFn(createSession);
 
   const endS = useServerFn(endSession);
+  const getCtx = useServerFn(getSessionContext);
+
   const getToken = useServerFn(getSpeechToken);
   const loadB = useServerFn(loadBrief);
   const upsertN = useServerFn(upsertBriefNode);
