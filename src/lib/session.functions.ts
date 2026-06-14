@@ -70,3 +70,30 @@ export const renameSession = createServerFn({ method: "POST" })
     if (error) throw new Error(error.message);
     return { ok: true };
   });
+
+export const getSessionContext = createServerFn({ method: "GET" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((input: unknown) =>
+    z.object({ sessionId: z.string().uuid() }).parse(input),
+  )
+  .handler(async ({ data, context }) => {
+    const { data: row, error } = await context.supabase
+      .from("sessions")
+      .select("id, title, prompt, context_files")
+      .eq("id", data.sessionId)
+      .single();
+    if (error) throw new Error(error.message);
+    return {
+      id: row.id as string,
+      title: row.title as string,
+      prompt: (row.prompt as string) ?? "",
+      contextFiles: (Array.isArray(row.context_files) ? row.context_files : []) as Array<{
+        path: string;
+        name: string;
+        mime: string;
+        size: number;
+        summary: string;
+        status: string;
+      }>,
+    };
+  });
