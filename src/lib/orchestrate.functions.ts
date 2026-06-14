@@ -121,7 +121,37 @@ export const orchestrateSegment = createServerFn({ method: "POST" })
       .map((b) => `• [${b.heading || "untitled"}] ${b.body.slice(0, 240)}`)
       .join("\n");
 
-    const prompt = `Current document:
+    // Pull the onboarding prompt + uploaded-file summaries for THIS session.
+    let onboardingPrompt = "";
+    let contextSummaries = "";
+    try {
+      const { data: sessRow } = await context.supabase
+        .from("sessions")
+        .select("prompt, context_files")
+        .eq("id", data.segment.sessionId)
+        .single();
+      if (sessRow) {
+        onboardingPrompt = (sessRow.prompt as string) || "";
+        const files = Array.isArray(sessRow.context_files) ? (sessRow.context_files as any[]) : [];
+        contextSummaries = files
+          .filter((f) => f && typeof f.summary === "string" && f.summary.trim())
+          .slice(0, 6)
+          .map((f) => `• ${f.name}: ${f.summary.slice(0, 800)}`)
+          .join("\n\n");
+      }
+    } catch {
+      /* non-fatal — keep going without context */
+    }
+
+    const prompt = `${
+      onboardingPrompt
+        ? `User's original intent (from onboarding):\n"""${onboardingPrompt}"""\n\n`
+        : ""
+    }${
+      contextSummaries
+        ? `Reference material the user attached (use as background, do NOT regurgitate):\n${contextSummaries}\n\n`
+        : ""
+    }Current document:
 ${renderSnapshot(data.snapshot)}
 
 LOCKED block ids (DO NOT touch): ${JSON.stringify(lockedIds)}
@@ -134,6 +164,7 @@ ${
 """${data.segment.rawText}"""
 
 Return STRICT JSON of shape { "patches": [...] }. No prose, no fences.`;
+
 
     let patches: BriefPatch[] = [];
     let aiError: string | null = null;
