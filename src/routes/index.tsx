@@ -172,7 +172,10 @@ function Onboarding() {
               value={prompt}
               onChange={(e) => setPrompt(e.target.value)}
               onKeyDown={(e) => {
-                if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) start();
+                if (e.key === "Enter" && !e.shiftKey) {
+                  e.preventDefault();
+                  start();
+                }
               }}
               rows={3}
               placeholder="Type what you want to brainstorm…"
