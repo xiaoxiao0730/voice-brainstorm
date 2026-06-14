@@ -65,9 +65,12 @@ function relative(ts: string) {
 function Workbench() {
   const navigate = useNavigate();
 
+  const { session: requestedSessionId } = Route.useSearch();
+
   // Server fn hooks
   const list = useServerFn(listSessions);
   const createS = useServerFn(createSession);
+
   const endS = useServerFn(endSession);
   const getToken = useServerFn(getSpeechToken);
   const loadB = useServerFn(loadBrief);
