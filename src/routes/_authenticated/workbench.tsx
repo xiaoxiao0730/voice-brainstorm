@@ -156,14 +156,43 @@ function Workbench() {
         const briefNodes = await loadB({ data: { sessionId: id } });
         const map: BriefDoc = {};
         for (const n of briefNodes) map[n.id] = nodeToBlock(n);
+
+        // First time opening a session that has an onboarding prompt → seed
+        // it as the first locked block so the AI treats it as the user's
+        // intent and writes around it.
+        if (Object.keys(map).length === 0) {
+          try {
+            const ctx = await getCtx({ data: { sessionId: id } });
+            if (ctx.prompt?.trim()) {
+              const seeded: BriefBlock = {
+                id: crypto.randomUUID(),
+                sessionId: id,
+                orderKey: between(null, null),
+                heading: "Starting thought",
+                level: 2,
+                body: ctx.prompt.trim(),
+                lastEditedBy: "user",
+                locked: true,
+                sourceChunkIds: [],
+              };
+              map[seeded.id] = seeded;
+              void upsertN({ data: blockToNodeUpsert(seeded) }).catch((e) =>
+                console.warn("seed upsert failed", e),
+              );
+            }
+          } catch (e) {
+            console.warn("getCtx failed", e);
+          }
+        }
         setDoc(map);
       } catch (e: any) {
         setError(e.message);
       }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [loadB],
+    [loadB, getCtx, upsertN],
   );
+
 
   const newSession = async () => {
     const created = await createS({ data: {} });
