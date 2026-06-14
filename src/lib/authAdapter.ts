@@ -1,33 +1,82 @@
-// Adapter to bridge existing lovable API calls to the new private auth package (@voice-brainstorm/auth) or a custom implementation.
-// This adapter exposes `createLovableAuth()` so existing code that imports
-// `createLovableAuth` from the previous Lovable SDK can keep working with minimal changes.
+import { initializeApp, getApps, getApp } from "firebase/app";
+import { getAuth, signInWithPopup, GoogleAuthProvider, OAuthProvider } from "firebase/auth";
+
+// Optional: if your adapter needs to call a server endpoint to exchange Firebase token for Supabase session
+const EXCHANGE_URL = (import.meta.env.VITE_AUTH_EXCHANGE_URL as string) || "";
+
+function ensureFirebaseApp() {
+  if (!getApps().length) {
+    initializeApp({
+      apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
+      authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
+      projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID,
+      appId: import.meta.env.VITE_FIREBASE_APP_ID,
+    } as any);
+  }
+  return getApp();
+}
+
+function mapProvider(provider: "google" | "apple" | "microsoft" | "lovable") {
+  switch (provider) {
+    case "google":
+      return new GoogleAuthProvider();
+    case "apple":
+      return new OAuthProvider("apple.com");
+    case "microsoft":
+      return new OAuthProvider("microsoft.com");
+    case "lovable":
+    default:
+      return new OAuthProvider("openid");
+  }
+}
 
 export function createLovableAuth() {
-  // Return an object with the same surface as the old lovable client: at minimum `signInWithOAuth`.
   return {
     async signInWithOAuth(provider: "google" | "apple" | "microsoft" | "lovable", opts?: any) {
       try {
-        // Try to dynamically import the private npm package. If it's not installed yet,
-        // the dynamic import will fail and we'll return a helpful error instead of crashing the app.
-        const mod = await import("@voice-brainstorm/auth");
-        // The private package should expose a compatible API. Here we try a common shape:
-        // - createAuthClient() -> client with signInWithOAuth(provider, opts)
-        // Adjust according to your actual package export.
-        if (mod?.createAuthClient) {
-          const client = mod.createAuthClient();
-          if (typeof client.signInWithOAuth === "function") {
-            return await client.signInWithOAuth(provider, opts);
+        ensureFirebaseApp();
+        const auth = getAuth();
+        const providerObj = mapProvider(provider as any);
+
+        if (opts?.extraParams && typeof (providerObj as any).setCustomParameters === "function") {
+          (providerObj as any).setCustomParameters({ ...opts.extraParams });
+        }
+
+        const cred = await signInWithPopup(auth, providerObj as any);
+        const idToken = await cred.user.getIdToken();
+        const accessToken = ((cred as any)?.credential?.accessToken) as string | undefined;
+
+        // If an exchange endpoint is configured (server-side), call it to obtain Supabase-compatible tokens.
+        if (EXCHANGE_URL) {
+          try {
+            const res = await fetch(EXCHANGE_URL, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ idToken, provider, accessToken }),
+            });
+            if (!res.ok) {
+              const txt = await res.text();
+              return { error: new Error(`Exchange endpoint returned ${res.status}: ${txt}`) } as any;
+            }
+            const data = await res.json();
+            // Expecting server to return Supabase session-like tokens under `tokens` or direct fields
+            // Example response: { tokens: { access_token, refresh_token, expires_at } }
+            const tokens = data.tokens ?? data;
+            return { tokens } as any;
+          } catch (e) {
+            return { error: e instanceof Error ? e : new Error(String(e)) } as any;
           }
         }
 
-        // If the package shape is different, try to call a direct helper
-        if (typeof mod.signInWithOAuth === "function") {
-          return await mod.signInWithOAuth(provider, opts);
-        }
-
-        return { error: new Error("@voice-brainstorm/auth is installed but does not expose a compatible API") };
+        // No exchange endpoint configured -> return Firebase tokens (id_token, access_token)
+        return {
+          tokens: {
+            id_token: idToken,
+            access_token: accessToken,
+          },
+        } as any;
       } catch (e) {
-        return { error: e instanceof Error ? e : new Error(String(e)) };
+        return { error: e instanceof Error ? e : new Error(String(e)) } as any;
       }
     },
   } as const;
