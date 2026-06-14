@@ -138,12 +138,11 @@ function Workbench() {
       setActiveSessionId(id);
       setFinals([]);
       setPartial("");
-      tempIdMap.current = new Map();
       try {
         const briefNodes = await loadB({ data: { sessionId: id } });
-        const map: Record<string, BriefNode> = {};
-        for (const n of briefNodes) map[n.id] = n;
-        setNodes(map);
+        const map: BriefDoc = {};
+        for (const n of briefNodes) map[n.id] = nodeToBlock(n);
+        setDoc(map);
       } catch (e: any) {
         setError(e.message);
       }
@@ -160,9 +159,17 @@ function Workbench() {
 
   // ============= Recording =============
 
+  const persistBlock = useCallback(
+    async (block: BriefBlock) => {
+      await upsertN({ data: blockToNodeUpsert(block) }).catch((e) =>
+        console.warn("upsert failed", e),
+      );
+    },
+    [upsertN],
+  );
+
   const onSegment = useCallback(
     async (segment: TranscriptSegment) => {
-      // Persist segment
       try {
         await saveSegment({
           data: {
@@ -179,23 +186,45 @@ function Workbench() {
         console.warn("persistSegment failed", e);
       }
 
-      // Snapshot for AI
-      const snapshot = Object.values(nodesRef.current).map((n) => ({
-        id: n.id,
-        parentId: n.parentId,
-        level: n.level,
-        text: n.text,
-        status: n.status,
-        lastEditedBy: n.lastEditedBy,
-      }));
+      // Snapshot of the current document (sorted) for the AI.
+      const snapshot = Object.values(docRef.current)
+        .sort((a, b) => a.orderKey.localeCompare(b.orderKey))
+        .map((b) => ({
+          id: b.id,
+          heading: b.heading,
+          level: b.level,
+          body: b.body,
+          locked: b.locked,
+          lastEditedBy: b.lastEditedBy,
+        }));
 
       setAiLoading(true);
       try {
-        const { ops, error: aiErr } = await orchestrate({
-          data: { segment: { segmentId: segment.segmentId, sessionId: segment.sessionId, rawText: segment.rawText, chunkIds: segment.chunkIds }, snapshot },
+        const { patches, error: aiErr } = await orchestrate({
+          data: {
+            segment: {
+              segmentId: segment.segmentId,
+              sessionId: segment.sessionId,
+              rawText: segment.rawText,
+              chunkIds: segment.chunkIds,
+            },
+            snapshot,
+          },
         });
         if (aiErr) setError(aiErr);
-        await applyOps(ops, segment.sessionId);
+
+        let current = docRef.current;
+        const toPersist: BriefBlock[] = [];
+        for (const p of patches) {
+          const { doc: next, result } = applyBriefPatch(current, p, {
+            sessionId: segment.sessionId,
+          });
+          current = next;
+          if (result.ok) toPersist.push(result.block);
+        }
+        setDoc(current);
+        docRef.current = current;
+        await Promise.all(toPersist.map(persistBlock));
       } catch (e: any) {
         setError(e.message);
       } finally {
@@ -203,54 +232,7 @@ function Workbench() {
       }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [orchestrate, saveSegment],
-  );
-
-  const applyOps = useCallback(
-    async (ops: BriefOperation[], sessionId: string) => {
-      let current = nodesRef.current;
-      const toPersist: BriefNode[] = [];
-      const toDelete: string[] = [];
-      for (const op of ops) {
-        const { nodes: next, result } = applyBriefOperation(current, op, {
-          sessionId,
-          tempIdMap: tempIdMap.current,
-        });
-        current = next;
-        if (result.ok) {
-          if (op.op === "delete_node") {
-            const id = tempIdMap.current.get(op.nodeId) ?? op.nodeId;
-            toDelete.push(id);
-          } else if (result.node) {
-            toPersist.push(result.node);
-          }
-        }
-      }
-      setNodes(current);
-      nodesRef.current = current;
-      // Persist
-      await Promise.all([
-        ...toPersist.map((n) =>
-          upsertN({
-            data: {
-              id: n.id,
-              sessionId: n.sessionId,
-              parentId: n.parentId,
-              orderKey: n.orderKey,
-              level: n.level,
-              text: n.text,
-              status: n.status,
-              lastEditedBy: n.lastEditedBy,
-              sourceChunkIds: n.sourceChunkIds,
-              confidence: n.confidence,
-              tag: n.tag,
-            },
-          }).catch((e) => console.warn("upsert failed", e)),
-        ),
-        ...toDelete.map((id) => deleteN({ data: { id } }).catch((e) => console.warn("delete failed", e))),
-      ]);
-    },
-    [upsertN, deleteN],
+    [orchestrate, saveSegment, persistBlock],
   );
 
   const startListening = async () => {
