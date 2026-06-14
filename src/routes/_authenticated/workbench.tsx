@@ -96,6 +96,8 @@ function Workbench() {
   const [aiLoading, setAiLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const [userEmail, setUserEmail] = useState<string | null>(null);
+
   // Refs
   const recognizerRef = useRef<SpeechRecognizerHandle | null>(null);
   const bufferRef = useRef<ReturnType<typeof createTranscriptBuffer> | null>(null);
@@ -108,6 +110,13 @@ function Workbench() {
 
   useEffect(() => { docRef.current = doc; }, [doc]);
   useEffect(() => { activeSessionRef.current = activeSessionId; }, [activeSessionId]);
+
+  // Fetch user email
+  useEffect(() => {
+    supabase.auth.getUser().then(({ data }) => {
+      setUserEmail(data.user?.email ?? null);
+    });
+  }, []);
 
   // Sign out
   const signOut = async () => {
