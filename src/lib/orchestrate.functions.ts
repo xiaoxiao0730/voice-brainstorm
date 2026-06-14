@@ -47,22 +47,77 @@ The document is an ordered list of BLOCKS. Each block has:
 - body (markdown; bullets are lines starting with "- ")
 - locked (true if the user typed or edited inside it — NEVER overwrite a locked block)
 
-Your job: given the user's latest spoken segment, output a JSON object with a "patches" array.
+Your job: given the user's latest spoken segment, update the document by returning a JSON object with a "patches" array.
+
+You are NOT summarizing sentence by sentence. You are restructuring the user's messy spoken thoughts into a clearer thinking document.
+
+Output content in the user's transcribed language by default. Keep product/technical terms in English when they are naturally used by the user. Do not translate proper nouns or technical product names awkwardly.
 
 Each patch is one of:
 1. { "action": "append_block", "blockId": null, "heading": "...", "level": 1|2|3, "bodyMarkdown": "...", "sourceChunkIds": [...] }
-   — adds a NEW block at the end. Use for genuinely new topics.
+   — adds a NEW block at the end only when the segment introduces a genuinely new topic.
 2. { "action": "append_to_block", "blockId": "<existing id>", "bodyMarkdown": "...", "sourceChunkIds": [...] }
    — appends a line/bullet to an existing AI block. Use when the user is elaborating a thread already in the doc.
 3. { "action": "update_block", "blockId": "<existing id>", "heading": "...", "bodyMarkdown": "...", "sourceChunkIds": [...] }
-   — rewrites an existing AI block. Use sparingly, only when the new segment clearly supersedes it.
+   — rewrites an existing AI block only when the user clearly revises a previous idea or the existing AI-generated block is too complicated, or several related points should be merged into a cleaner structure. Use sparingly, only when the new segment clearly supersedes it.
 
 HARD RULES:
 - NEVER emit update_block or append_to_block targeting a block where locked=true. The user's words are sacred. Match their voice and write around them instead.
 - NEVER paste the transcript verbatim. Synthesize. Rewrite in tight, structured form.
+- Do not write abstract summaries. Prefer concrete, usable statements.
 - If the segment is filler / restating / noise, return { "patches": [] }.
 - Headings ≤ 6 words. Bullets ≤ 20 words each. Use "- " prefix for bullet lines.
 - Always include sourceChunkIds (copy them from the segment).
+- bodyMarkdown must use numbered structure by default.
+
+Use:
+1. ...
+2. ...
+3. ...
+
+Use nested bullets only for details under a numbered point:
+
+1. ...
+ - ...
+ - ...
+Do NOT use loose bullet lists as the default format.
+Each numbered point should be concrete and short. Prefer 1–2 lines per point.
+- Organize by semantic relationship, not by speaking order.
+
+Related ideas may appear far apart in the transcript.
+Group them under the same topic when they refer to the same issue.
+
+Common sections include but are not limited to:
+Goal, Current Situation, Problem, Ideas, Demand, Constraint, Plan, Questions, Next Step, etc.
+
+Do not create every section automatically.
+Only create sections that are useful.
+
+When deciding where to put new content:
+
+If it extends an existing topic, append to that block.
+If it refines or corrects an existing AI block, update that block.
+If it starts a new topic, append a new block.
+If it is filler or repeated, return no patches.
+
+- The output should feel like a working product / technical planning document.
+
+Prefer:
+
+specific nouns
+clear action verbs
+concrete requirements
+explicit constraints
+short numbered points
+practical wording
+
+Avoid:
+
+long paragraphs
+transcript-like fragments
+overly polished marketing language
+generic consulting language
+
 - Output STRICT JSON only. No prose, no markdown fences, no comments.
 
 Example response:
@@ -144,9 +199,7 @@ export const orchestrateSegment = createServerFn({ method: "POST" })
     }
 
     const prompt = `${
-      onboardingPrompt
-        ? `User's original intent (from onboarding):\n"""${onboardingPrompt}"""\n\n`
-        : ""
+      onboardingPrompt ? `User's original intent (from onboarding):\n"""${onboardingPrompt}"""\n\n` : ""
     }${
       contextSummaries
         ? `Reference material the user attached (use as background, do NOT regurgitate):\n${contextSummaries}\n\n`
@@ -164,7 +217,6 @@ ${
 """${data.segment.rawText}"""
 
 Return STRICT JSON of shape { "patches": [...] }. No prose, no fences.`;
-
 
     let patches: BriefPatch[] = [];
     let aiError: string | null = null;
@@ -189,7 +241,7 @@ Return STRICT JSON of shape { "patches": [...] }. No prose, no fences.`;
         action: p.action,
         blockId: p.blockId ?? null,
         heading: p.heading,
-        level: (p.level as BriefBlockLevel | undefined),
+        level: p.level as BriefBlockLevel | undefined,
         bodyMarkdown: p.bodyMarkdown,
         sourceChunkIds: p.sourceChunkIds ?? [],
       }));
