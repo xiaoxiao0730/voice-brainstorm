@@ -1,6 +1,10 @@
 import { createFileRoute, redirect, useNavigate } from "@tanstack/react-router";
 import { useCallback, useRef, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
+import { useServerFn } from "@tanstack/react-start";
+import { createSession } from "@/lib/session.functions";
+import { summarizeContextFile } from "@/lib/context.functions";
+
 
 export const Route = createFileRoute("/")({
   ssr: false,
