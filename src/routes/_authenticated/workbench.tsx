@@ -99,6 +99,16 @@ function Workbench() {
 
   const [userEmail, setUserEmail] = useState<string | null>(null);
 
+  const MODEL_OPTIONS = [
+    { id: "google/gemini-3-flash-preview", label: "Gemini 3 Flash" },
+    { id: "google/gemini-2.5-pro", label: "Gemini 2.5 Pro" },
+    { id: "openai/gpt-5", label: "GPT-5" },
+    { id: "openai/gpt-5-mini", label: "GPT-5 Mini" },
+  ] as const;
+  const [model, setModel] = useState<(typeof MODEL_OPTIONS)[number]["id"]>("google/gemini-3-flash-preview");
+  const modelRef = useRef(model);
+  useEffect(() => { modelRef.current = model; }, [model]);
+
   // Refs
   const recognizerRef = useRef<SpeechRecognizerHandle | null>(null);
   const bufferRef = useRef<ReturnType<typeof createTranscriptBuffer> | null>(null);
@@ -262,6 +272,7 @@ function Workbench() {
               chunkIds: segment.chunkIds,
             },
             snapshot,
+            model: modelRef.current,
           },
         });
         if (aiErr) setError(aiErr);
@@ -397,6 +408,26 @@ function Workbench() {
   }, []);
 
   useEffect(() => () => { void stopListening(); }, [stopListening]);
+
+  // Tap "T" anywhere (outside text inputs) to toggle voice listening.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.repeat) return;
+      if (e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
+      if (e.key !== "t" && e.key !== "T") return;
+      const t = e.target as HTMLElement | null;
+      if (t) {
+        const tag = t.tagName;
+        if (tag === "INPUT" || tag === "TEXTAREA" || t.isContentEditable) return;
+      }
+      e.preventDefault();
+      if (listening) void stopListening();
+      else void startListening();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [listening, stopListening, activeSessionId]);
 
   // ============= Document handlers =============
 
@@ -574,6 +605,11 @@ function Workbench() {
               Stop
             </button>
           </div>
+          <div className="px-5 pb-3 flex items-center justify-center shrink-0">
+            <span className="text-[11px] text-secondary">
+              Tip: press <kbd className="px-1.5 py-0.5 rounded border border-auralis bg-surface text-[10px] font-mono">T</kbd> to {listening ? "stop" : "start"} talking
+            </span>
+          </div>
 
           {/* Transcript */}
           <div className="border-t border-auralis bg-surface/60 shrink-0">
@@ -607,7 +643,17 @@ function Workbench() {
           <header className="h-14 px-6 flex items-center justify-between border-b border-auralis shrink-0">
             <span className="text-xs uppercase tracking-[0.18em] text-secondary">Live Brief</span>
             <div className="flex items-center gap-2">
-              <span className="px-3 py-1 bg-surface rounded-full text-xs text-primary border border-auralis">Gemini 3 Flash</span>
+              <select
+                value={model}
+                onChange={(e) => setModel(e.target.value as typeof model)}
+                className="px-3 py-1 bg-surface rounded-full text-xs text-primary border border-auralis hover:bg-surface-variant cursor-pointer focus:outline-none focus:ring-1 focus:ring-primary"
+                aria-label="AI model"
+                title="Select AI model"
+              >
+                {MODEL_OPTIONS.map((m) => (
+                  <option key={m.id} value={m.id}>{m.label}</option>
+                ))}
+              </select>
               <span className="text-xs text-secondary ml-3 flex items-center gap-1.5">
                 {aiLoading ? (
                   <>

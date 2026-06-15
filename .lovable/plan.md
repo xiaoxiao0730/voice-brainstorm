@@ -1,103 +1,28 @@
-## Goal
-
-Make the Live Brief work reliably: stop the "could not parse the response" crash, batch LLM calls to natural pauses (~5s silence), switch the canvas from a node-tree to a Notion-style document, and keep the AI's writes as additive patches that respect what the user has edited.
-
-## Problem analysis
-
-1. **Parse failure** — `orchestrateSegment` uses `generateText` + `Output.object({ schema: OutputSchema })` with Gemini. Gemini frequently rejects/struggles with deeply nested `discriminatedUnion` schemas, and when it returns prose or partial JSON the AI SDK throws "No object generated: could not parse the response." There is no fallback parser, no retry, no `finish_reason` check.
-2. **LLM called too often** — `transcriptBuffer` flushes on 1.2s silence / 50 words / 8s, so we call the LLM every couple of sentences. User wants ~5s silence as the primary trigger.
-3. **Wrong mental model** — current UI is a tree of `BriefNode`s (h1/h2/bullet) rendered as `<li>` rows with per-node contentEditable. User wants ONE document the user types into freely, with the LLM appending/refining sections, not emitting `add_node`/`update_node` ops over a tree.
-4. **No memory of user edits** — model gets a node snapshot but no clear "this is what the user wrote/changed, do not overwrite" channel beyond a `lastEditedBy` flag.
-
 ## Plan
 
-### 1. Switch the data model to a document with sections
+### 1. Tap-T hotkey (toggle voice)
+In `src/routes/_authenticated/workbench.tsx`, add a global `keydown` listener:
+- When user presses `T` (no modifiers), toggle the mic: if not listening → `startListening()`, if listening → `stopListening()`.
+- Ignore when focus is in `<input>`, `<textarea>`, `[contenteditable]`, or when modifier keys (Ctrl/Cmd/Alt/Meta) are held.
+- Ignore auto-repeat (`e.repeat`).
+- Show a small hint near the mic button: "Press T to talk".
 
-New shape (in `src/lib/pipeline/types.ts`):
-```ts
-type BriefBlock = {
-  id: string;            // stable uuid
-  heading: string;       // "" for intro/unlabeled
-  level: 1 | 2 | 3;      // heading level
-  body: string;          // markdown text (bullets as "- ..." lines)
-  lastEditedBy: "ai" | "user";
-  locked: boolean;       // true after user edits inside it
-  sourceChunkIds: string[];
-};
-type BriefDoc = { blocks: BriefBlock[] };
-```
+### 2. AI model selector
+Add a dropdown in the workbench header (next to Export) with 4 Lovable AI Gateway models:
+- **Gemini 3 Flash** (`google/gemini-3-flash-preview`) — default, fast
+- **Gemini 2.5 Pro** (`google/gemini-2.5-pro`) — deeper reasoning
+- **GPT-5** (`openai/gpt-5`) — OpenAI all-rounder
+- **GPT-5 Mini** (`openai/gpt-5-mini`) — cheaper OpenAI
 
-Persistence: reuse the existing `brief_nodes` table by treating each row as a block (level→heading level, text→body markdown, parent_id stays null). No migration needed for v1.
+Note on GPT-4o: the Lovable AI Gateway doesn't expose `gpt-4o`. GPT-5 / GPT-5 Mini are the current OpenAI options. If you specifically need `gpt-4o` later, we'd add a custom OpenAI API key.
 
-### 2. New Notion-style canvas component
+### 3. Wiring
+- `src/lib/orchestrate.functions.ts`: extend `InputSchema` with `model: z.string().optional()`, validate against the allow-list, default to `google/gemini-3-flash-preview`, pass to `gateway(model)`.
+- `src/routes/_authenticated/workbench.tsx`: store selected model in local state, pass it in the `orchestrate({ data: { ..., model } })` call.
 
-Replace `BriefCanvas` with `BriefDocument`:
-- One scrollable column, max-width ~720px.
-- Each block renders: an editable heading (`<h1/h2/h3 contentEditable>`) + an editable body (`<div contentEditable>` rendering markdown-ish text; bullets via leading `- `).
-- Typing anywhere marks that block `lastEditedBy="user"` and `locked=true`, debounced 600ms → persists via `upsertBriefNode`.
-- AI-appended blocks fade in; locked blocks get a subtle "edited" indicator and the AI cannot overwrite them.
-- Empty state: a single placeholder block that says "Start speaking…".
+### Cost note (for your earlier question)
+The **Lovable AI Gateway** is Lovable's hosted AI service — your app calls models like Gemini/GPT through Lovable's infrastructure, no separate API key needed. **It is usage-based**: each call draws from your workspace's free monthly AI balance ($1/mo free until early 2026). If you exceed it, you top up in Settings → Cloud & AI balance. Cheaper models (Gemini Flash) cost less per call than premium ones (GPT-5, Gemini 2.5 Pro), so the selector also gives you cost control.
 
-### 3. Trigger LLM only on real pauses
-
-Update `transcriptBuffer.ts`:
-- `SILENCE_MS` 1200 → **5000**.
-- Keep a hard ceiling: flush on 30s elapsed OR ~150 words to avoid runaway segments during continuous speech.
-- Remove per-sentence flushes.
-
-### 4. Rewrite the orchestrator to emit safe patches
-
-In `orchestrate.functions.ts`:
-- Replace the `discriminatedUnion` schema with a **flat, simple** schema Gemini handles reliably:
-  ```ts
-  z.object({
-    patches: z.array(z.object({
-      action: z.enum(["append_block", "update_block", "append_to_block"]),
-      blockId: z.string().nullable(),    // null for append_block
-      heading: z.string().default(""),
-      level: z.number().int().min(1).max(3).default(2),
-      bodyMarkdown: z.string().default(""),
-      sourceChunkIds: z.array(z.string()).default([]),
-    })).default([]),
-  })
-  ```
-- Build prompt with two clearly separated sections:
-  1. **Current document** (rendered as markdown, with each block prefixed by `<!-- block:{id} locked={true|false} -->`).
-  2. **New transcript segment** plus the **list of locked block ids** the model MUST NOT touch.
-- System prompt rules: never rewrite a locked block; prefer `append_to_block` for refinements on AI blocks; create a new block only for genuinely new topics; return `{ "patches": [] }` if nothing meaningful.
-- **Robust parsing fallback**: if `Output.object` throws, call `generateText` again WITHOUT the schema and reuse a tolerant `extractJSON` helper (strip ```json fences, find first `{`/last `}`, `JSON.parse`, validate with Zod). If that also fails, return `{ patches: [], error }` instead of crashing the segment.
-- Drop unused op types (`move_node`, `annotate`, `delete_node`) — out of scope for v1 document model.
-
-### 5. Apply patches client-side, respecting locks
-
-New reducer `applyBriefPatch(doc, patch)`:
-- `append_block` → push new block at end.
-- `append_to_block` → if target exists and `!locked`, append `\n\n{bodyMarkdown}` to body; if locked, fall back to creating a new block right after it.
-- `update_block` → only if `!locked`; otherwise skip and log.
-- Always persist via `upsertBriefNode` after apply.
-
-### 6. Feed user edits back to the model
-
-When sending the snapshot, include the last ~3 user-edited block excerpts under a `"User has personally written/edited these — match their voice and never contradict:"` header. This gives the model concrete memory of the user's wording without complex fine-tuning.
-
-### 7. Verification
-
-- Manually trigger one short utterance → expect exactly one LLM call after 5s silence, one or two `append_block` patches, document renders.
-- Edit a block, speak again → that block stays untouched; new content lands as a new block or appended to a different AI block.
-- Force a malformed model response (temporary test) → orchestrator returns `{ patches: [], error }`, UI shows a small toast, no crash.
-
-## Files touched
-
-- `src/lib/pipeline/types.ts` — add `BriefBlock`, `BriefDoc`, patch types.
-- `src/lib/pipeline/transcriptBuffer.ts` — silence 5s, ceilings.
-- `src/lib/pipeline/applyBriefPatch.ts` — new reducer (replaces `applyBriefOperation`).
-- `src/lib/orchestrate.functions.ts` — new flat schema, tolerant parser, user-edit memory in prompt.
-- `src/components/brief/BriefDocument.tsx` — new Notion-style component (replaces `BriefCanvas`).
-- `src/routes/_authenticated/workbench.tsx` — swap canvas, wire new patch flow.
-- `src/lib/brief.functions.ts` — unchanged shape; still upserts rows.
-
-## Out of scope (v1)
-
-- Slash commands, drag-to-reorder, rich inline formatting (bold/italic/links).
-- Real-time multi-cursor / collaboration.
-- Migration of any existing session data (current sessions can be left as-is or cleared).
+### Files touched
+- `src/routes/_authenticated/workbench.tsx`
+- `src/lib/orchestrate.functions.ts`
