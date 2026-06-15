@@ -4,11 +4,12 @@ import type { BriefBlock, BriefDoc } from "@/lib/pipeline/types";
 type Props = {
   doc: BriefDoc;
   onEditBlock: (id: string, patch: { heading?: string; body?: string }) => void;
+  onDeleteBlock: (id: string) => void;
   onAddBlock: () => void;
   aiLoading: boolean;
 };
 
-export function BriefDocument({ doc, onEditBlock, onAddBlock, aiLoading }: Props) {
+export function BriefDocument({ doc, onEditBlock, onDeleteBlock, onAddBlock, aiLoading }: Props) {
   const ordered = useMemo(
     () => Object.values(doc).sort((a, b) => a.orderKey.localeCompare(b.orderKey)),
     [doc],
@@ -36,7 +37,7 @@ export function BriefDocument({ doc, onEditBlock, onAddBlock, aiLoading }: Props
 
       <article className="space-y-5">
         {ordered.map((block) => (
-          <BlockRow key={block.id} block={block} onEditBlock={onEditBlock} />
+          <BlockRow key={block.id} block={block} onEditBlock={onEditBlock} onDeleteBlock={onDeleteBlock} />
         ))}
       </article>
 
@@ -62,9 +63,11 @@ export function BriefDocument({ doc, onEditBlock, onAddBlock, aiLoading }: Props
 function BlockRow({
   block,
   onEditBlock,
+  onDeleteBlock,
 }: {
   block: BriefBlock;
   onEditBlock: (id: string, patch: { heading?: string; body?: string }) => void;
+  onDeleteBlock: (id: string) => void;
 }) {
   const headingRef = useRef<HTMLDivElement>(null);
   const bodyRef = useRef<HTMLDivElement>(null);
@@ -133,6 +136,15 @@ function BlockRow({
       {block.locked && (
         <span className="absolute -left-4 top-2 w-1 h-[calc(100%-1rem)] rounded-full bg-amber-400/50" title="You edited this" />
       )}
+      {/* Delete button — visible on hover */}
+      <button
+        onClick={() => onDeleteBlock(block.id)}
+        className="absolute -right-8 top-1 w-7 h-7 rounded-md flex items-center justify-center text-secondary opacity-0 group-hover:opacity-100 hover:text-rose-500 hover:bg-rose-500/10 transition-all"
+        title="Delete block"
+        aria-label="Delete block"
+      >
+        <span className="material-symbols-outlined text-[18px]">delete</span>
+      </button>
       {showHeading && (
         <div
           ref={headingRef}

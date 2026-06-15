@@ -27,6 +27,7 @@ import {
 } from "@/lib/session.functions";
 
 import {
+  deleteBriefNode,
   loadBrief,
   persistChunks,
   persistSegment,
