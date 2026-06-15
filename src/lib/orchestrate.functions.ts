@@ -231,11 +231,14 @@ Return STRICT JSON of shape { "patches": [...] }. No prose, no fences.`;
     let aiError: string | null = null;
 
     try {
+      const selectedModel = data.model ?? DEFAULT_MODEL;
+      // GPT-5 family only supports the default temperature (1).
+      const supportsCustomTemperature = !selectedModel.startsWith("openai/gpt-5");
       const { text, finishReason } = await generateText({
         model,
         system: SYSTEM_PROMPT,
         prompt,
-        temperature: 0.4,
+        ...(supportsCustomTemperature ? { temperature: 0.4 } : {}),
       });
 
       if (finishReason === "length") {
