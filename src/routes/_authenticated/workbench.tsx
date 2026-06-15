@@ -81,6 +81,7 @@ function Workbench() {
   const getToken = useServerFn(getSpeechToken);
   const loadB = useServerFn(loadBrief);
   const upsertN = useServerFn(upsertBriefNode);
+  const deleteN = useServerFn(deleteBriefNode);
   const saveChunks = useServerFn(persistChunks);
   const saveSegment = useServerFn(persistSegment);
   const orchestrate = useServerFn(orchestrateSegment);
@@ -459,6 +460,17 @@ function Workbench() {
       editTimers.current.set(id, t);
     },
     [persistBlock],
+  );
+
+  const onDeleteBlock = useCallback(
+    async (id: string) => {
+      const next = { ...docRef.current };
+      delete next[id];
+      setDoc(next);
+      docRef.current = next;
+      await deleteN({ data: { id } }).catch((e) => console.warn("delete failed", e));
+    },
+    [deleteN],
   );
 
   const onAddBlock = useCallback(async () => {
