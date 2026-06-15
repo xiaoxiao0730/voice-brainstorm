@@ -51,6 +51,23 @@ function AuthPage() {
     navigate({ to: "/" });
   };
 
+  const friendlyError = (msg: string): string => {
+    const m = msg.toLowerCase();
+    if (m.includes("invalid login credentials") || m.includes("invalid_credentials"))
+      return "邮箱或密码不对。如果还没注册，请点下面的 Create one 先注册账号。";
+    if (m.includes("weak password") || m.includes("pwned"))
+      return "这个密码太弱或在已泄漏密码库里，请换一个更复杂的（建议 10+ 位，混合字母数字符号）。";
+    if (m.includes("user already registered") || m.includes("already been registered"))
+      return "这个邮箱已经注册过了，请直接登录。";
+    if (m.includes("email not confirmed"))
+      return "邮箱还没确认，请先到邮箱点确认链接。";
+    if (m.includes("rate limit") || m.includes("too many"))
+      return "尝试太频繁了，请稍等一分钟再试。";
+    if (m.includes("password should be at least") || m.includes("at least 6"))
+      return "密码至少 6 位。";
+    return msg;
+  };
+
   const onEmail = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
@@ -65,14 +82,14 @@ function AuthPage() {
         if (err) throw err;
         const { data: sess } = await supabase.auth.getSession();
         if (sess.session) navigate({ to: "/" });
-        else setError("Check your email to confirm your account, then sign in.");
+        else setError("注册成功，请到邮箱点确认链接后再回来登录。");
       } else {
         const { error: err } = await supabase.auth.signInWithPassword({ email, password });
         if (err) throw err;
         navigate({ to: "/" });
       }
     } catch (e: any) {
-      setError(e?.message || "Sign-in failed");
+      setError(friendlyError(e?.message || "Sign-in failed"));
     } finally {
       setBusy(false);
     }
