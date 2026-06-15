@@ -409,6 +409,26 @@ function Workbench() {
 
   useEffect(() => () => { void stopListening(); }, [stopListening]);
 
+  // Tap "T" anywhere (outside text inputs) to toggle voice listening.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.repeat) return;
+      if (e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
+      if (e.key !== "t" && e.key !== "T") return;
+      const t = e.target as HTMLElement | null;
+      if (t) {
+        const tag = t.tagName;
+        if (tag === "INPUT" || tag === "TEXTAREA" || t.isContentEditable) return;
+      }
+      e.preventDefault();
+      if (listening) void stopListening();
+      else void startListening();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [listening, stopListening, activeSessionId]);
+
   // ============= Document handlers =============
 
   const editTimers = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
@@ -618,7 +638,17 @@ function Workbench() {
           <header className="h-14 px-6 flex items-center justify-between border-b border-auralis shrink-0">
             <span className="text-xs uppercase tracking-[0.18em] text-secondary">Live Brief</span>
             <div className="flex items-center gap-2">
-              <span className="px-3 py-1 bg-surface rounded-full text-xs text-primary border border-auralis">Gemini 3 Flash</span>
+              <select
+                value={model}
+                onChange={(e) => setModel(e.target.value as typeof model)}
+                className="px-3 py-1 bg-surface rounded-full text-xs text-primary border border-auralis hover:bg-surface-variant cursor-pointer focus:outline-none focus:ring-1 focus:ring-primary"
+                aria-label="AI model"
+                title="Select AI model"
+              >
+                {MODEL_OPTIONS.map((m) => (
+                  <option key={m.id} value={m.id}>{m.label}</option>
+                ))}
+              </select>
               <span className="text-xs text-secondary ml-3 flex items-center gap-1.5">
                 {aiLoading ? (
                   <>
