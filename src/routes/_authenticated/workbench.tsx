@@ -99,6 +99,16 @@ function Workbench() {
 
   const [userEmail, setUserEmail] = useState<string | null>(null);
 
+  const MODEL_OPTIONS = [
+    { id: "google/gemini-3-flash-preview", label: "Gemini 3 Flash" },
+    { id: "google/gemini-2.5-pro", label: "Gemini 2.5 Pro" },
+    { id: "openai/gpt-5", label: "GPT-5" },
+    { id: "openai/gpt-5-mini", label: "GPT-5 Mini" },
+  ] as const;
+  const [model, setModel] = useState<(typeof MODEL_OPTIONS)[number]["id"]>("google/gemini-3-flash-preview");
+  const modelRef = useRef(model);
+  useEffect(() => { modelRef.current = model; }, [model]);
+
   // Refs
   const recognizerRef = useRef<SpeechRecognizerHandle | null>(null);
   const bufferRef = useRef<ReturnType<typeof createTranscriptBuffer> | null>(null);
@@ -262,6 +272,7 @@ function Workbench() {
               chunkIds: segment.chunkIds,
             },
             snapshot,
+            model: modelRef.current,
           },
         });
         if (aiErr) setError(aiErr);
