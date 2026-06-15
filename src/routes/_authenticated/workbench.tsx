@@ -705,6 +705,7 @@ function Workbench() {
             <BriefDocument
               doc={doc}
               onEditBlock={onEditBlock}
+              onDeleteBlock={onDeleteBlock}
               onAddBlock={onAddBlock}
               aiLoading={aiLoading}
             />
