@@ -20,9 +20,18 @@ const SegmentInput = z.object({
   chunkIds: z.array(z.string()).default([]),
 });
 
+const ALLOWED_MODELS = [
+  "google/gemini-3-flash-preview",
+  "google/gemini-2.5-pro",
+  "openai/gpt-5",
+  "openai/gpt-5-mini",
+] as const;
+const DEFAULT_MODEL = "google/gemini-3-flash-preview";
+
 const InputSchema = z.object({
   segment: SegmentInput,
   snapshot: z.array(SnapshotBlock),
+  model: z.enum(ALLOWED_MODELS).optional(),
 });
 
 // Flat schema — easy for the model to fill, easy to parse.
@@ -167,7 +176,7 @@ export const orchestrateSegment = createServerFn({ method: "POST" })
     }
     const { createLovableAiGatewayProvider } = await import("./ai-gateway.server");
     const gateway = createLovableAiGatewayProvider(lovableApiKey);
-    const model = gateway("google/gemini-3-flash-preview");
+    const model = gateway(data.model ?? DEFAULT_MODEL);
 
     const lockedIds = data.snapshot.filter((b) => b.locked).map((b) => b.id);
     const userEditedExcerpts = data.snapshot
