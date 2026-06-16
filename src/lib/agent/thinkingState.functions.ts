@@ -80,7 +80,7 @@ export const detectThinkingState = createServerFn({ method: "POST" })
         ? (rawState as ThinkingState)
         : "thinking_continuing";
       const confidence = clamp01(Number(parsed.confidence ?? 0.4));
-      const evidence = typeof parsed?.evidence === "string" ? parsed.evidence.slice(0, 240) : "";
+      const evidence = typeof parsed.evidence === "string" ? parsed.evidence.slice(0, 240) : "";
 
       return { state, confidence, evidence };
     } catch (e) {
