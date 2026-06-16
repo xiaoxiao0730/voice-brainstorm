@@ -558,9 +558,107 @@ function Workbench() {
       bufferRef.current.dispose();
       bufferRef.current = null;
     }
+    // Disconnect the agent too — its mic track is cloned from the now-stopped stream.
+    if (realtimeRef.current) {
+      try { await realtimeRef.current.disconnect(); } catch { /* ignore */ }
+      realtimeRef.current = null;
+    }
+    setAgentStatus((s) => (agentEnabledRef.current ? "off" : s));
   }, []);
 
   useEffect(() => () => { void stopListening(); }, [stopListening]);
+
+  // ============= Agent connect / toggle / feedback =============
+
+  const connectAgent = useCallback(async () => {
+    if (realtimeRef.current) return;
+    if (!streamRef.current) {
+      setError("Start listening first so the agent can hear you.");
+      return;
+    }
+    setAgentStatus("connecting");
+    try {
+      const { clientSecret, model: rtModel } = await mintRealtime();
+      const client = await connectRealtime({
+        clientSecret,
+        model: rtModel,
+        micStream: streamRef.current,
+        events: {
+          onConnected: () => setAgentStatus("listening"),
+          onAgentSpeakingStart: () => setAgentStatus("speaking"),
+          onAgentSpeakingEnd: () => setAgentStatus("listening"),
+          onUserBargeIn: () => setAgentStatus("listening"),
+          onDisconnected: () => setAgentStatus("off"),
+          onError: (err) => {
+            console.warn("realtime error", err);
+            setAgentStatus("error");
+          },
+        },
+      });
+      realtimeRef.current = client;
+    } catch (e: any) {
+      setError(e.message ?? "Failed to connect agent");
+      setAgentStatus("error");
+    }
+  }, [mintRealtime]);
+
+  const toggleAgent = useCallback(async () => {
+    if (agentEnabled) {
+      if (realtimeRef.current) {
+        try { await realtimeRef.current.disconnect(); } catch { /* ignore */ }
+        realtimeRef.current = null;
+      }
+      setAgentEnabled(false);
+      setAgentStatus("off");
+      setSuggestion(null);
+      return;
+    }
+    setAgentEnabled(true);
+    // Voice is best-effort: requires mic to be on. Text suggestions work
+    // even without the Realtime connection.
+    if (streamRef.current) {
+      void connectAgent();
+    } else {
+      setAgentStatus("listening"); // text-only mode until mic starts
+    }
+  }, [agentEnabled, connectAgent]);
+
+  // Auto-connect Realtime when mic starts AND agent is enabled.
+  useEffect(() => {
+    if (agentEnabled && listening && !realtimeRef.current) {
+      void connectAgent();
+    }
+  }, [agentEnabled, listening, connectAgent]);
+
+  const handleSuggestionAccept = useCallback(() => {
+    const id = suggestionInterventionId.current;
+    policyRef.current.recordFeedback("accepted");
+    if (id) void recordFb({ data: { interventionId: id, feedback: "accepted" } }).catch(() => {});
+    setSuggestion(null);
+    suggestionInterventionId.current = null;
+  }, [recordFb]);
+
+  const handleSuggestionDismiss = useCallback(() => {
+    const id = suggestionInterventionId.current;
+    policyRef.current.recordFeedback("dismissed");
+    if (id) void recordFb({ data: { interventionId: id, feedback: "dismissed" } }).catch(() => {});
+    setSuggestion(null);
+    suggestionInterventionId.current = null;
+  }, [recordFb]);
+
+  const handleAskOutLoud = useCallback(() => {
+    const text = suggestion?.text ?? "";
+    const id = suggestionInterventionId.current;
+    if (text && realtimeRef.current) {
+      policyRef.current.recordIntervention("voice");
+      realtimeRef.current.speak(text);
+    }
+    policyRef.current.recordFeedback("requested_more");
+    if (id) void recordFb({ data: { interventionId: id, feedback: "requested_more" } }).catch(() => {});
+    setSuggestion(null);
+    suggestionInterventionId.current = null;
+  }, [recordFb, suggestion]);
+
 
   // Tap "T" anywhere (outside text inputs) to toggle voice listening.
   useEffect(() => {
