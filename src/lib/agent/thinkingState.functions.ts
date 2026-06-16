@@ -74,11 +74,12 @@ export const detectThinkingState = createServerFn({ method: "POST" })
         prompt: userPrompt,
       });
 
-      const parsed = extractJson(text);
-      const state = THINKING_STATES.includes(parsed?.state as ThinkingState)
-        ? (parsed.state as ThinkingState)
+      const parsed = extractJson(text) ?? {};
+      const rawState = parsed.state;
+      const state = THINKING_STATES.includes(rawState as ThinkingState)
+        ? (rawState as ThinkingState)
         : "thinking_continuing";
-      const confidence = clamp01(Number(parsed?.confidence ?? 0.4));
+      const confidence = clamp01(Number(parsed.confidence ?? 0.4));
       const evidence = typeof parsed?.evidence === "string" ? parsed.evidence.slice(0, 240) : "";
 
       return { state, confidence, evidence };
