@@ -14,6 +14,50 @@ export type Database = {
   }
   public: {
     Tables: {
+      agent_interventions: {
+        Row: {
+          created_at: string
+          decision: string
+          detected_state: string
+          feedback: string | null
+          id: string
+          response_text: string | null
+          segment_id: string | null
+          session_id: string
+          state_confidence: number | null
+        }
+        Insert: {
+          created_at?: string
+          decision: string
+          detected_state: string
+          feedback?: string | null
+          id?: string
+          response_text?: string | null
+          segment_id?: string | null
+          session_id: string
+          state_confidence?: number | null
+        }
+        Update: {
+          created_at?: string
+          decision?: string
+          detected_state?: string
+          feedback?: string | null
+          id?: string
+          response_text?: string | null
+          segment_id?: string | null
+          session_id?: string
+          state_confidence?: number | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "agent_interventions_session_id_fkey"
+            columns: ["session_id"]
+            isOneToOne: false
+            referencedRelation: "sessions"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       brief_nodes: {
         Row: {
           confidence: number | null
