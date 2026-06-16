@@ -36,6 +36,17 @@ import {
 import { orchestrateSegment } from "@/lib/orchestrate.functions";
 import { exportBriefToDocx } from "@/lib/exportDocx";
 
+import { getRealtimeSession } from "@/lib/agent/realtime.functions";
+import { connectRealtime, type RealtimeClient } from "@/lib/agent/realtimeClient";
+import { detectThinkingState, type ThinkingState } from "@/lib/agent/thinkingState.functions";
+import { generateIntervention } from "@/lib/agent/responseGenerator.functions";
+import {
+  logIntervention,
+  recordInterventionFeedback,
+} from "@/lib/agent/interventionLog.functions";
+import { createPolicyEngine, type InterventionLevel } from "@/lib/agent/interventionPolicy";
+import { AgentStatusPill, AgentSuggestionCard, type AgentStatus, type AgentSuggestion } from "@/components/agent/AgentPanel";
+
 export const Route = createFileRoute("/_authenticated/workbench")({
   validateSearch: (search: Record<string, unknown>) => ({
     session: typeof search.session === "string" ? search.session : undefined,
@@ -85,6 +96,11 @@ function Workbench() {
   const saveChunks = useServerFn(persistChunks);
   const saveSegment = useServerFn(persistSegment);
   const orchestrate = useServerFn(orchestrateSegment);
+  const detectState = useServerFn(detectThinkingState);
+  const generateNudge = useServerFn(generateIntervention);
+  const logIntv = useServerFn(logIntervention);
+  const recordFb = useServerFn(recordInterventionFeedback);
+  const mintRealtime = useServerFn(getRealtimeSession);
 
   // UI state
   const [sessions, setSessions] = useState<SessionRow[]>([]);
@@ -98,6 +114,12 @@ function Workbench() {
   const [doc, setDoc] = useState<BriefDoc>({});
   const [aiLoading, setAiLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Agent state
+  const [agentEnabled, setAgentEnabled] = useState(false);
+  const [agentStatus, setAgentStatus] = useState<AgentStatus>("off");
+  const [suggestion, setSuggestion] = useState<AgentSuggestion | null>(null);
+  const suggestionInterventionId = useRef<string | null>(null);
 
   const [userEmail, setUserEmail] = useState<string | null>(null);
 
@@ -121,8 +143,15 @@ function Workbench() {
   const docRef = useRef(doc);
   const activeSessionRef = useRef(activeSessionId);
 
+  // Agent refs
+  const realtimeRef = useRef<RealtimeClient | null>(null);
+  const policyRef = useRef(createPolicyEngine());
+  const recentTextsRef = useRef<string[]>([]);
+  const agentEnabledRef = useRef(agentEnabled);
+
   useEffect(() => { docRef.current = doc; }, [doc]);
   useEffect(() => { activeSessionRef.current = activeSessionId; }, [activeSessionId]);
+  useEffect(() => { agentEnabledRef.current = agentEnabled; }, [agentEnabled]);
 
   // Fetch user email
   useEffect(() => {
@@ -296,9 +325,131 @@ function Workbench() {
       } finally {
         setAiLoading(false);
       }
+
+      // ============= Agent layer =============
+      // Run in parallel with the rest; never throw out of onSegment.
+      void runAgentTurn(segment).catch((e) => console.warn("agent turn failed", e));
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [orchestrate, saveSegment, persistBlock],
+  );
+
+  // Runs the thinking-state detector + intervention policy after each
+  // committed transcript segment. Keeps a rolling window of recent texts so
+  // the detector has short-term context.
+  const runAgentTurn = useCallback(
+    async (segment: TranscriptSegment) => {
+      if (!agentEnabledRef.current) return;
+
+      // Update rolling transcript window (keep last 6).
+      recentTextsRef.current = [...recentTextsRef.current, segment.rawText].slice(-6);
+
+      const snapshot = Object.values(docRef.current)
+        .sort((a, b) => a.orderKey.localeCompare(b.orderKey))
+        .map((b) => ({ heading: b.heading, level: b.level, body: b.body }));
+
+      setAgentStatus((s) => (s === "speaking" ? s : "thinking"));
+      let detected: { state: ThinkingState; confidence: number; evidence: string };
+      try {
+        const res = await detectState({
+          data: {
+            latestText: segment.rawText,
+            recentTexts: recentTextsRef.current.slice(0, -1),
+            snapshot,
+          },
+        });
+        detected = { state: res.state, confidence: res.confidence, evidence: res.evidence ?? "" };
+      } catch (e) {
+        console.warn("detectThinkingState failed", e);
+        setAgentStatus((s) => (s === "speaking" ? s : "listening"));
+        return;
+      }
+
+      const decision = policyRef.current.decide(detected.state, detected.confidence);
+
+      // Log every decision (even silent) for evaluation.
+      let interventionId: string | null = null;
+      try {
+        const logged = await logIntv({
+          data: {
+            sessionId: segment.sessionId,
+            segmentId: segment.segmentId,
+            detectedState: detected.state,
+            stateConfidence: detected.confidence,
+            decision,
+          },
+        });
+        interventionId = logged.id;
+      } catch (e) {
+        console.warn("logIntervention failed", e);
+      }
+
+      if (decision === "silent") {
+        setAgentStatus((s) => (s === "speaking" ? s : "listening"));
+        return;
+      }
+
+      // Generate the nudge text.
+      let text = "";
+      try {
+        const r = await generateNudge({
+          data: {
+            state: detected.state,
+            evidence: detected.evidence,
+            latestText: segment.rawText,
+            recentTexts: recentTextsRef.current.slice(0, -1),
+            snapshot,
+            level: decision,
+          },
+        });
+        text = r.text ?? "";
+      } catch (e) {
+        console.warn("generateIntervention failed", e);
+      }
+
+      if (!text.trim()) {
+        setAgentStatus((s) => (s === "speaking" ? s : "listening"));
+        return;
+      }
+
+      policyRef.current.recordIntervention(decision);
+
+      // Persist the generated text alongside the intervention row.
+      if (interventionId) {
+        try {
+          await logIntv({
+            data: {
+              sessionId: segment.sessionId,
+              segmentId: segment.segmentId,
+              detectedState: detected.state,
+              stateConfidence: detected.confidence,
+              decision,
+              responseText: text,
+            },
+          });
+        } catch { /* best effort */ }
+      }
+
+      if (decision === "text") {
+        suggestionInterventionId.current = interventionId;
+        setSuggestion({ id: interventionId ?? crypto.randomUUID(), text, state: detected.state });
+        setAgentStatus((s) => (s === "speaking" ? s : "listening"));
+        return;
+      }
+
+      // voice
+      if (realtimeRef.current) {
+        setAgentStatus("speaking");
+        realtimeRef.current.speak(text);
+      } else {
+        // Realtime not connected — fall back to a text suggestion.
+        suggestionInterventionId.current = interventionId;
+        setSuggestion({ id: interventionId ?? crypto.randomUUID(), text, state: detected.state });
+        setAgentStatus("listening");
+      }
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [detectState, generateNudge, logIntv],
   );
 
   const startListening = async () => {
@@ -407,9 +558,107 @@ function Workbench() {
       bufferRef.current.dispose();
       bufferRef.current = null;
     }
+    // Disconnect the agent too — its mic track is cloned from the now-stopped stream.
+    if (realtimeRef.current) {
+      try { await realtimeRef.current.disconnect(); } catch { /* ignore */ }
+      realtimeRef.current = null;
+    }
+    setAgentStatus((s) => (agentEnabledRef.current ? "off" : s));
   }, []);
 
   useEffect(() => () => { void stopListening(); }, [stopListening]);
+
+  // ============= Agent connect / toggle / feedback =============
+
+  const connectAgent = useCallback(async () => {
+    if (realtimeRef.current) return;
+    if (!streamRef.current) {
+      setError("Start listening first so the agent can hear you.");
+      return;
+    }
+    setAgentStatus("connecting");
+    try {
+      const { clientSecret, model: rtModel } = await mintRealtime();
+      const client = await connectRealtime({
+        clientSecret,
+        model: rtModel,
+        micStream: streamRef.current,
+        events: {
+          onConnected: () => setAgentStatus("listening"),
+          onAgentSpeakingStart: () => setAgentStatus("speaking"),
+          onAgentSpeakingEnd: () => setAgentStatus("listening"),
+          onUserBargeIn: () => setAgentStatus("listening"),
+          onDisconnected: () => setAgentStatus("off"),
+          onError: (err) => {
+            console.warn("realtime error", err);
+            setAgentStatus("error");
+          },
+        },
+      });
+      realtimeRef.current = client;
+    } catch (e: any) {
+      setError(e.message ?? "Failed to connect agent");
+      setAgentStatus("error");
+    }
+  }, [mintRealtime]);
+
+  const toggleAgent = useCallback(async () => {
+    if (agentEnabled) {
+      if (realtimeRef.current) {
+        try { await realtimeRef.current.disconnect(); } catch { /* ignore */ }
+        realtimeRef.current = null;
+      }
+      setAgentEnabled(false);
+      setAgentStatus("off");
+      setSuggestion(null);
+      return;
+    }
+    setAgentEnabled(true);
+    // Voice is best-effort: requires mic to be on. Text suggestions work
+    // even without the Realtime connection.
+    if (streamRef.current) {
+      void connectAgent();
+    } else {
+      setAgentStatus("listening"); // text-only mode until mic starts
+    }
+  }, [agentEnabled, connectAgent]);
+
+  // Auto-connect Realtime when mic starts AND agent is enabled.
+  useEffect(() => {
+    if (agentEnabled && listening && !realtimeRef.current) {
+      void connectAgent();
+    }
+  }, [agentEnabled, listening, connectAgent]);
+
+  const handleSuggestionAccept = useCallback(() => {
+    const id = suggestionInterventionId.current;
+    policyRef.current.recordFeedback("accepted");
+    if (id) void recordFb({ data: { interventionId: id, feedback: "accepted" } }).catch(() => {});
+    setSuggestion(null);
+    suggestionInterventionId.current = null;
+  }, [recordFb]);
+
+  const handleSuggestionDismiss = useCallback(() => {
+    const id = suggestionInterventionId.current;
+    policyRef.current.recordFeedback("dismissed");
+    if (id) void recordFb({ data: { interventionId: id, feedback: "dismissed" } }).catch(() => {});
+    setSuggestion(null);
+    suggestionInterventionId.current = null;
+  }, [recordFb]);
+
+  const handleAskOutLoud = useCallback(() => {
+    const text = suggestion?.text ?? "";
+    const id = suggestionInterventionId.current;
+    if (text && realtimeRef.current) {
+      policyRef.current.recordIntervention("voice");
+      realtimeRef.current.speak(text);
+    }
+    policyRef.current.recordFeedback("requested_more");
+    if (id) void recordFb({ data: { interventionId: id, feedback: "requested_more" } }).catch(() => {});
+    setSuggestion(null);
+    suggestionInterventionId.current = null;
+  }, [recordFb, suggestion]);
+
 
   // Tap "T" anywhere (outside text inputs) to toggle voice listening.
   useEffect(() => {
@@ -656,6 +905,7 @@ function Workbench() {
           <header className="h-14 px-6 flex items-center justify-between border-b border-auralis shrink-0">
             <span className="text-xs uppercase tracking-[0.18em] text-secondary">Live Brief</span>
             <div className="flex items-center gap-2">
+              <AgentStatusPill status={agentStatus} enabled={agentEnabled} onToggle={() => void toggleAgent()} />
               <select
                 value={model}
                 onChange={(e) => setModel(e.target.value as typeof model)}
@@ -716,6 +966,13 @@ function Workbench() {
           </footer>
         </section>
       </main>
+
+      <AgentSuggestionCard
+        suggestion={suggestion}
+        onAccept={handleSuggestionAccept}
+        onDismiss={handleSuggestionDismiss}
+        onAskOutLoud={handleAskOutLoud}
+      />
     </div>
   );
 }
