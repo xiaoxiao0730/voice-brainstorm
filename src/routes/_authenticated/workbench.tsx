@@ -325,9 +325,131 @@ function Workbench() {
       } finally {
         setAiLoading(false);
       }
+
+      // ============= Agent layer =============
+      // Run in parallel with the rest; never throw out of onSegment.
+      void runAgentTurn(segment).catch((e) => console.warn("agent turn failed", e));
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [orchestrate, saveSegment, persistBlock],
+  );
+
+  // Runs the thinking-state detector + intervention policy after each
+  // committed transcript segment. Keeps a rolling window of recent texts so
+  // the detector has short-term context.
+  const runAgentTurn = useCallback(
+    async (segment: TranscriptSegment) => {
+      if (!agentEnabledRef.current) return;
+
+      // Update rolling transcript window (keep last 6).
+      recentTextsRef.current = [...recentTextsRef.current, segment.rawText].slice(-6);
+
+      const snapshot = Object.values(docRef.current)
+        .sort((a, b) => a.orderKey.localeCompare(b.orderKey))
+        .map((b) => ({ heading: b.heading, level: b.level, body: b.body }));
+
+      setAgentStatus((s) => (s === "speaking" ? s : "thinking"));
+      let detected: { state: ThinkingState; confidence: number; evidence: string };
+      try {
+        const res = await detectState({
+          data: {
+            latestText: segment.rawText,
+            recentTexts: recentTextsRef.current.slice(0, -1),
+            snapshot,
+          },
+        });
+        detected = { state: res.state, confidence: res.confidence, evidence: res.evidence ?? "" };
+      } catch (e) {
+        console.warn("detectThinkingState failed", e);
+        setAgentStatus((s) => (s === "speaking" ? s : "listening"));
+        return;
+      }
+
+      const decision = policyRef.current.decide(detected.state, detected.confidence);
+
+      // Log every decision (even silent) for evaluation.
+      let interventionId: string | null = null;
+      try {
+        const logged = await logIntv({
+          data: {
+            sessionId: segment.sessionId,
+            segmentId: segment.segmentId,
+            detectedState: detected.state,
+            stateConfidence: detected.confidence,
+            decision,
+          },
+        });
+        interventionId = logged.id;
+      } catch (e) {
+        console.warn("logIntervention failed", e);
+      }
+
+      if (decision === "silent") {
+        setAgentStatus((s) => (s === "speaking" ? s : "listening"));
+        return;
+      }
+
+      // Generate the nudge text.
+      let text = "";
+      try {
+        const r = await generateNudge({
+          data: {
+            state: detected.state,
+            evidence: detected.evidence,
+            latestText: segment.rawText,
+            recentTexts: recentTextsRef.current.slice(0, -1),
+            snapshot,
+            level: decision,
+          },
+        });
+        text = r.text ?? "";
+      } catch (e) {
+        console.warn("generateIntervention failed", e);
+      }
+
+      if (!text.trim()) {
+        setAgentStatus((s) => (s === "speaking" ? s : "listening"));
+        return;
+      }
+
+      policyRef.current.recordIntervention(decision);
+
+      // Persist the generated text alongside the intervention row.
+      if (interventionId) {
+        try {
+          await logIntv({
+            data: {
+              sessionId: segment.sessionId,
+              segmentId: segment.segmentId,
+              detectedState: detected.state,
+              stateConfidence: detected.confidence,
+              decision,
+              responseText: text,
+            },
+          });
+        } catch { /* best effort */ }
+      }
+
+      if (decision === "text") {
+        suggestionInterventionId.current = interventionId;
+        setSuggestion({ id: interventionId ?? crypto.randomUUID(), text, state: detected.state });
+        setAgentStatus((s) => (s === "speaking" ? s : "listening"));
+        return;
+      }
+
+      // voice
+      if (realtimeRef.current) {
+        setAgentStatus("speaking");
+        realtimeRef.current.speak(text);
+      } else {
+        // Realtime not connected — fall back to a text suggestion.
+        suggestionInterventionId.current = interventionId;
+        setSuggestion({ id: interventionId ?? crypto.randomUUID(), text, state: detected.state });
+        setAgentStatus("listening");
+      }
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [detectState, generateNudge, logIntv],
   );
 
   const startListening = async () => {
