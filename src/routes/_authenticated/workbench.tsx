@@ -36,6 +36,17 @@ import {
 import { orchestrateSegment } from "@/lib/orchestrate.functions";
 import { exportBriefToDocx } from "@/lib/exportDocx";
 
+import { getRealtimeSession } from "@/lib/agent/realtime.functions";
+import { connectRealtime, type RealtimeClient } from "@/lib/agent/realtimeClient";
+import { detectThinkingState, type ThinkingState } from "@/lib/agent/thinkingState.functions";
+import { generateIntervention } from "@/lib/agent/responseGenerator.functions";
+import {
+  logIntervention,
+  recordInterventionFeedback,
+} from "@/lib/agent/interventionLog.functions";
+import { createPolicyEngine, type InterventionLevel } from "@/lib/agent/interventionPolicy";
+import { AgentStatusPill, AgentSuggestionCard, type AgentStatus, type AgentSuggestion } from "@/components/agent/AgentPanel";
+
 export const Route = createFileRoute("/_authenticated/workbench")({
   validateSearch: (search: Record<string, unknown>) => ({
     session: typeof search.session === "string" ? search.session : undefined,
@@ -85,6 +96,11 @@ function Workbench() {
   const saveChunks = useServerFn(persistChunks);
   const saveSegment = useServerFn(persistSegment);
   const orchestrate = useServerFn(orchestrateSegment);
+  const detectState = useServerFn(detectThinkingState);
+  const generateNudge = useServerFn(generateIntervention);
+  const logIntv = useServerFn(logIntervention);
+  const recordFb = useServerFn(recordInterventionFeedback);
+  const mintRealtime = useServerFn(getRealtimeSession);
 
   // UI state
   const [sessions, setSessions] = useState<SessionRow[]>([]);
