@@ -115,6 +115,12 @@ function Workbench() {
   const [aiLoading, setAiLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // Agent state
+  const [agentEnabled, setAgentEnabled] = useState(false);
+  const [agentStatus, setAgentStatus] = useState<AgentStatus>("off");
+  const [suggestion, setSuggestion] = useState<AgentSuggestion | null>(null);
+  const suggestionInterventionId = useRef<string | null>(null);
+
   const [userEmail, setUserEmail] = useState<string | null>(null);
 
   const MODEL_OPTIONS = [
@@ -137,8 +143,15 @@ function Workbench() {
   const docRef = useRef(doc);
   const activeSessionRef = useRef(activeSessionId);
 
+  // Agent refs
+  const realtimeRef = useRef<RealtimeClient | null>(null);
+  const policyRef = useRef(createPolicyEngine());
+  const recentTextsRef = useRef<string[]>([]);
+  const agentEnabledRef = useRef(agentEnabled);
+
   useEffect(() => { docRef.current = doc; }, [doc]);
   useEffect(() => { activeSessionRef.current = activeSessionId; }, [activeSessionId]);
+  useEffect(() => { agentEnabledRef.current = agentEnabled; }, [agentEnabled]);
 
   // Fetch user email
   useEffect(() => {
