@@ -114,6 +114,7 @@ function Workbench() {
   const logIntv = useServerFn(logIntervention);
   const recordFb = useServerFn(recordInterventionFeedback);
   const mintRealtime = useServerFn(getRealtimeSession);
+  const fastReplyFn = useServerFn(fastReply);
 
   // UI state
   const [sessions, setSessions] = useState<SessionRow[]>([]);
@@ -133,7 +134,11 @@ function Workbench() {
   const [agentEnabled, setAgentEnabled] = useState(false);
   const [agentStatus, setAgentStatus] = useState<AgentStatus>("off");
   const [suggestion, setSuggestion] = useState<AgentSuggestion | null>(null);
+  const [ghostPatch, setGhostPatch] = useState<CanvasGhostPatch | null>(null);
+  const [agentMode, setAgentMode] = useState<AgentMode>("guide");
+  const [muted, setMuted] = useState(false);
   const suggestionInterventionId = useRef<string | null>(null);
+  const ghostInterventionId = useRef<string | null>(null);
 
   const [userEmail, setUserEmail] = useState<string | null>(null);
 
