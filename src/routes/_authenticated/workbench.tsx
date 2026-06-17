@@ -1349,6 +1349,12 @@ function Workbench() {
         onDismiss={handleSuggestionDismiss}
         onAskOutLoud={handleAskOutLoud}
       />
+      <CanvasGhostPatchCard
+        patch={ghostPatch}
+        onAccept={handleGhostAccept}
+        onEdit={handleGhostEdit}
+        onDismiss={handleGhostDismiss}
+      />
     </div>
   );
 }
