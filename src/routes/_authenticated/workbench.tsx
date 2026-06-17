@@ -598,7 +598,9 @@ function Workbench() {
             const chunkId = crypto.randomUUID();
             const labeled = `🤖 ${text}`;
             setFinals((f) => [...f, { id: chunkId, text: labeled }]);
-            const now = Date.now();
+            // Use a small offset relative to agent-connect time — the DB
+            // column is a 32-bit integer, so raw Date.now() overflows.
+            const offset = Date.now() - agentConnectedAtRef.current;
             saveChunks({
               data: {
                 sessionId,
@@ -606,8 +608,8 @@ function Workbench() {
                   id: chunkId,
                   text: labeled,
                   isFinal: true,
-                  startMs: now,
-                  endMs: now,
+                  startMs: offset,
+                  endMs: offset,
                   lang: "agent",
                 }],
               },
