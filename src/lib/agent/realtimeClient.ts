@@ -17,6 +17,7 @@ export type RealtimeEvents = {
   onDisconnected?: () => void;
   onAgentSpeakingStart?: () => void;
   onAgentSpeakingEnd?: () => void;
+  onAgentTranscript?: (text: string) => void;
   onUserBargeIn?: () => void;
   onError?: (err: Error) => void;
 };
