@@ -1210,28 +1210,59 @@ function Workbench() {
 
           {/* Controls */}
           <div className="px-5 pb-4 flex items-center justify-center gap-2 shrink-0">
+            {/* Start / Stop toggle */}
             <button
-              onClick={startListening}
-              disabled={listening || !activeSessionId}
-              className="px-5 py-2.5 rounded-full bg-primary text-on-primary text-sm font-medium disabled:opacity-40 hover:opacity-90 flex items-center gap-2"
+              onClick={() => { listening ? void stopListening() : void startListening(); }}
+              disabled={!activeSessionId}
+              className={`px-5 py-2.5 rounded-full text-sm font-medium disabled:opacity-40 hover:opacity-90 flex items-center gap-2 ${
+                listening
+                  ? "border border-auralis bg-surface text-primary hover:bg-surface-variant"
+                  : "bg-primary text-on-primary"
+              }`}
             >
-              <span className="material-symbols-outlined text-base">mic</span>
-              Start
+              <span className="material-symbols-outlined text-base">{listening ? "stop" : "mic"}</span>
+              {listening ? "Stop" : "Start"}
             </button>
+
+            {/* Talk with Agent toggle */}
             <button
-              onClick={() => { void stopListening(); }}
-              disabled={!listening}
-              className="px-5 py-2.5 rounded-full border border-auralis bg-surface text-primary text-sm font-medium disabled:opacity-40 hover:bg-surface-variant flex items-center gap-2"
+              onClick={() => void toggleAgent()}
+              disabled={!activeSessionId}
+              className={`px-5 py-2.5 rounded-full text-sm font-medium disabled:opacity-40 hover:opacity-90 flex items-center gap-2 ${
+                agentEnabled
+                  ? "border border-auralis bg-surface text-primary hover:bg-surface-variant"
+                  : "bg-primary text-on-primary"
+              }`}
+              title={agentEnabled ? "Stop talking with agent" : "Talk with agent"}
             >
-              <span className="material-symbols-outlined text-base">stop</span>
-              Stop
+              <span
+                className={`w-1.5 h-1.5 rounded-full ${
+                  agentStatus === "connecting"
+                    ? "bg-amber-400 animate-pulse"
+                    : agentStatus === "thinking"
+                    ? "bg-amber-500 animate-pulse"
+                    : agentStatus === "speaking"
+                    ? "bg-indigo-500 animate-pulse"
+                    : agentStatus === "listening"
+                    ? "bg-emerald-500"
+                    : agentStatus === "error"
+                    ? "bg-rose-500"
+                    : "bg-secondary"
+                }`}
+              />
+              {!agentEnabled
+                ? "Talk with Agent"
+                : agentStatus === "connecting"
+                ? "Connecting…"
+                : agentStatus === "thinking"
+                ? "Agent Thinking…"
+                : agentStatus === "speaking"
+                ? "Agent Speaking…"
+                : agentStatus === "error"
+                ? "Agent Error"
+                : "Stop Agent"}
             </button>
-            <AgentStatusPill status={agentStatus} enabled={agentEnabled} onToggle={() => void toggleAgent()} />
-            <AgentModeSelector
-              mode={agentMode}
-              onChange={changeAgentMode}
-              disabled={!agentEnabled}
-            />
+
             {muted && (
               <button
                 onClick={() => setMuted(false)}
