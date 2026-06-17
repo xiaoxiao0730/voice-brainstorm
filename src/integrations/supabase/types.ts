@@ -21,6 +21,8 @@ export type Database = {
           detected_state: string
           feedback: string | null
           id: string
+          intent: string | null
+          lane: string
           response_text: string | null
           segment_id: string | null
           session_id: string
@@ -32,6 +34,8 @@ export type Database = {
           detected_state: string
           feedback?: string | null
           id?: string
+          intent?: string | null
+          lane?: string
           response_text?: string | null
           segment_id?: string | null
           session_id: string
@@ -43,6 +47,8 @@ export type Database = {
           detected_state?: string
           feedback?: string | null
           id?: string
+          intent?: string | null
+          lane?: string
           response_text?: string | null
           segment_id?: string | null
           session_id?: string
