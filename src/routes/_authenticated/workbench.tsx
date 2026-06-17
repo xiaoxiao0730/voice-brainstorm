@@ -50,9 +50,7 @@ import { createPolicyEngine, type BackgroundDecision } from "@/lib/agent/interve
 import { classifyFastIntent, fastCannedReply, type FastIntent } from "@/lib/agent/fastIntent";
 import { loadAgentMode, saveAgentMode, type AgentMode } from "@/lib/agent/agentMode";
 import {
-  AgentStatusPill,
   AgentSuggestionCard,
-  AgentModeSelector,
   CanvasGhostPatchCard,
   type AgentStatus,
   type AgentSuggestion,
