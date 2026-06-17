@@ -1,5 +1,5 @@
 import { createServerFn } from "@tanstack/react-start";
-import { generateText } from "ai";
+import { Output, generateText } from "ai";
 import { z } from "zod";
 
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
@@ -18,27 +18,43 @@ const InputSchema = z.object({
   latestText: z.string().default(""),
   recentTexts: z.array(z.string()).max(8).default([]),
   snapshot: z.array(SnapshotBlock).max(60).default([]),
-  level: z.enum(["text", "voice"]),
+  // text = card, voice = spoken, canvas = ghost block proposal.
+  level: z.enum(["text", "voice", "canvas"]),
 });
 
-const SYSTEM_PROMPT = `You are a co-thinking partner, not an assistant. The user is thinking out loud about an early-stage product idea, and a Live Brief is being built alongside them. You only get to speak when the policy engine decides the user genuinely needs a nudge.
+const SYSTEM_TEXT_VOICE = `You are a co-thinking partner for the BACKGROUND structural lane. A separate fast lane handles greetings, direct questions, and chit-chat — you NEVER do those. You only speak when the user is stuck, contradicting themselves, missing structure, or explicitly asking for deeper help.
 
-HARD RULES — violating any of these makes the response unusable:
-- Maximum 1–2 sentences. No paragraphs, no lists, no preamble.
-- Never produce a full answer. Never introduce ideas not grounded in the Live Brief or the user's own words.
+HARD RULES:
+- Maximum 1–2 sentences. No paragraphs, no lists.
 - Either ask ONE useful question OR offer ONE structural reframing — never both.
 - Reference something concrete from the Live Brief or the user's latest segment.
-- Match the user's language (English if they speak English, Chinese if they speak Chinese).
-- Voice responses must sound natural when spoken aloud — no markdown, no bullet points.
+- Match the user's language.
+- Voice responses must sound natural when spoken aloud — no markdown.
 
-For each thinking state, your job:
-- stuck: name what you're hearing and offer one direction to unstick (one question).
-- contradiction_detected: point out the specific tension between two parts of the brief, ask which is true.
-- missing_structure: suggest the single most-needed structural element (problem? assumption? next step?).
-- explicit_request: answer the user's question with one concrete suggestion grounded in the brief.
-- thinking_continuing, pause_but_not_done: you should not have been called — return an empty string.
+Per state:
+- stuck: name what you hear and offer one direction.
+- contradiction_detected: point to the specific tension, ask which holds.
+- missing_structure: name the single most-needed structural element.
+- explicit_request: answer with one concrete suggestion grounded in the brief.
+- thinking_continuing / pause_but_not_done: return an empty string.
 
-Output ONLY the response text. No JSON, no quotes, no labels.`;
+Output ONLY the response text.`;
+
+const CanvasPatchSchema = z.object({
+  heading: z.string().max(80).default(""),
+  body: z.string().min(1).max(400),
+  rationale: z.string().max(200).default(""),
+});
+
+const SYSTEM_CANVAS = `You propose ONE small structural addition to a Live Brief — the kind a co-thinker would jot at the side as a ghost suggestion. The user will see it as a dashed-outline block they can accept, edit, or dismiss.
+
+HARD RULES:
+- Propose exactly one block. It must fill a clear structural gap (e.g. missing problem statement, missing assumption, missing target user, missing next step).
+- Heading: short (2–6 words). Body: 1–3 sentences, plain text, matches user's language.
+- Ground every claim in the user's own words or the existing brief. Do NOT invent new facts.
+- Rationale: one short phrase explaining why this is missing (shown as a hover tip).
+
+Return strict JSON matching the schema.`;
 
 export const generateIntervention = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
@@ -58,23 +74,40 @@ export const generateIntervention = createServerFn({ method: "POST" })
       : "(empty)";
 
     const recentStr = data.recentTexts.length ? data.recentTexts.join(" / ") : "(none)";
+    const gateway = createLovableAiGatewayProvider(apiKey);
+
+    if (data.level === "canvas") {
+      const userPrompt = `LIVE BRIEF:\n${briefStr}\n\nRECENT USER SPEECH: ${recentStr}\nLATEST USER SEGMENT: ${data.latestText}\n\nDETECTED STATE: ${data.state}\nWHY: ${data.evidence}\n\nPropose one ghost block now.`;
+      try {
+        const { experimental_output } = await generateText({
+          model: gateway("google/gemini-3-flash-preview"),
+          system: SYSTEM_CANVAS,
+          prompt: userPrompt,
+          experimental_output: Output.object({ schema: CanvasPatchSchema }),
+        });
+        return {
+          text: experimental_output.body,
+          patch: {
+            heading: experimental_output.heading,
+            body: experimental_output.body,
+            rationale: experimental_output.rationale,
+          },
+        };
+      } catch (e) {
+        const message = e instanceof Error ? e.message : String(e);
+        return { text: "", error: message };
+      }
+    }
 
     const userPrompt = `LIVE BRIEF:\n${briefStr}\n\nRECENT USER SPEECH: ${recentStr}\nLATEST USER SEGMENT: ${data.latestText}\n\nDETECTED STATE: ${data.state}\nWHY: ${data.evidence}\nDELIVERY: ${data.level === "voice" ? "spoken aloud" : "shown as a small suggestion card"}\n\nWrite the response now. 1–2 sentences max.`;
-
-    const gateway = createLovableAiGatewayProvider(apiKey);
 
     try {
       const { text } = await generateText({
         model: gateway("google/gemini-3-flash-preview"),
-        system: SYSTEM_PROMPT,
+        system: SYSTEM_TEXT_VOICE,
         prompt: userPrompt,
       });
-
-      const clean = text
-        .trim()
-        .replace(/^["'"「『]+|["'"」』]+$/g, "")
-        .trim();
-
+      const clean = text.trim().replace(/^["'"「『]+|["'"」』]+$/g, "").trim();
       return { text: clean };
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
