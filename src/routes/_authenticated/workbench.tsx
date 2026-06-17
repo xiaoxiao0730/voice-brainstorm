@@ -145,13 +145,17 @@ function Workbench() {
 
   // Agent refs
   const realtimeRef = useRef<RealtimeClient | null>(null);
-  const policyRef = useRef(createPolicyEngine());
+  const policyRef = useRef(createPolicyEngine(null));
   const recentTextsRef = useRef<string[]>([]);
   const agentEnabledRef = useRef(agentEnabled);
   const agentConnectedAtRef = useRef(Date.now());
 
   useEffect(() => { docRef.current = doc; }, [doc]);
-  useEffect(() => { activeSessionRef.current = activeSessionId; }, [activeSessionId]);
+  useEffect(() => {
+    activeSessionRef.current = activeSessionId;
+    // Rebuild policy engine with persisted cooldown state for this session.
+    policyRef.current = createPolicyEngine(activeSessionId);
+  }, [activeSessionId]);
   useEffect(() => { agentEnabledRef.current = agentEnabled; }, [agentEnabled]);
 
   // Fetch user email
