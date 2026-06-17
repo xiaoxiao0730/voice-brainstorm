@@ -563,7 +563,8 @@ function Workbench() {
       try { await realtimeRef.current.disconnect(); } catch { /* ignore */ }
       realtimeRef.current = null;
     }
-    setAgentStatus((s) => (agentEnabledRef.current ? "off" : s));
+    setAgentEnabled(false);
+    setAgentStatus("off");
   }, []);
 
   useEffect(() => () => { void stopListening(); }, [stopListening]);
