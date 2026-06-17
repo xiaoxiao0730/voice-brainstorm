@@ -572,7 +572,7 @@ function Workbench() {
 
   const connectAgent = useCallback(async () => {
     if (realtimeRef.current) return;
-    if (!streamRef.current) {
+    if (!streamRef.current || !activeSessionRef.current) {
       setError("Start listening first so the agent can hear you.");
       return;
     }
@@ -589,6 +589,29 @@ function Workbench() {
           onAgentSpeakingEnd: () => setAgentStatus("listening"),
           onUserBargeIn: () => setAgentStatus("listening"),
           onDisconnected: () => setAgentStatus("off"),
+          onAgentTranscript: (text) => {
+            const sessionId = activeSessionRef.current;
+            if (!sessionId || !text) return;
+            // Surface the agent's spoken line in the transcript list and
+            // persist it as a chunk so it shows up alongside user speech.
+            const chunkId = crypto.randomUUID();
+            const labeled = `🤖 ${text}`;
+            setFinals((f) => [...f, { id: chunkId, text: labeled }]);
+            const now = Date.now();
+            saveChunks({
+              data: {
+                sessionId,
+                chunks: [{
+                  id: chunkId,
+                  text: labeled,
+                  isFinal: true,
+                  startMs: now,
+                  endMs: now,
+                  lang: "agent",
+                }],
+              },
+            }).catch((err) => console.warn("persist agent chunk failed", err));
+          },
           onError: (err) => {
             console.warn("realtime error", err);
             setAgentStatus("error");
@@ -600,7 +623,7 @@ function Workbench() {
       setError(e.message ?? "Failed to connect agent");
       setAgentStatus("error");
     }
-  }, [mintRealtime]);
+  }, [mintRealtime, saveChunks]);
 
   const toggleAgent = useCallback(async () => {
     if (agentEnabled) {
@@ -613,15 +636,15 @@ function Workbench() {
       setSuggestion(null);
       return;
     }
-    setAgentEnabled(true);
-    // Voice is best-effort: requires mic to be on. Text suggestions work
-    // even without the Realtime connection.
-    if (streamRef.current) {
-      void connectAgent();
-    } else {
-      setAgentStatus("listening"); // text-only mode until mic starts
+    // Agent requires mic to be on — it only responds while the user is
+    // actively talking through the Start button.
+    if (!listening || !streamRef.current) {
+      setError("Click Start to begin talking before turning the agent on.");
+      return;
     }
-  }, [agentEnabled, connectAgent]);
+    setAgentEnabled(true);
+    void connectAgent();
+  }, [agentEnabled, listening, connectAgent]);
 
   // Auto-connect Realtime when mic starts AND agent is enabled.
   useEffect(() => {
