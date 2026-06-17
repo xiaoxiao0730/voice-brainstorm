@@ -173,7 +173,7 @@ export async function connectRealtime(opts: ConnectOptions): Promise<RealtimeCli
         type: "response.create",
         response: {
           conversation: "none",
-          modalities: ["audio", "text"],
+          output_modalities: ["audio"],
           instructions: text,
         },
       });
