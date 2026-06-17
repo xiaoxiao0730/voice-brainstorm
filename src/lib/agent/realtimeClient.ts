@@ -107,6 +107,12 @@ export async function connectRealtime(opts: ConnectOptions): Promise<RealtimeCli
           events.onAgentSpeakingStart?.();
         }
         break;
+      case "response.output_audio_transcript.done":
+      case "response.audio_transcript.done": {
+        const t = (evt as any).transcript;
+        if (typeof t === "string" && t.trim()) events.onAgentTranscript?.(t.trim());
+        break;
+      }
       case "response.done":
       case "response.cancelled":
         if (agentSpeaking) {
