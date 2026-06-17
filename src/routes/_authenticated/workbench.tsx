@@ -870,11 +870,15 @@ function Workbench() {
       setSuggestion(null);
       return;
     }
-    // Agent requires mic to be on — it only responds while the user is
-    // actively talking through the Start button.
+    // Auto-start mic if not already listening — Talk with Agent implies
+    // both panels should be live.
     if (!listening || !streamRef.current) {
-      setError("Click Start to begin talking before turning the agent on.");
-      return;
+      try {
+        await startListening();
+      } catch {
+        setError("Couldn't access the microphone. Check browser permissions and try again.");
+        return;
+      }
     }
     setAgentEnabled(true);
     void connectAgent();
