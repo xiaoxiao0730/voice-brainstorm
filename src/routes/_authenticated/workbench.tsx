@@ -1227,6 +1227,20 @@ function Workbench() {
               Stop
             </button>
             <AgentStatusPill status={agentStatus} enabled={agentEnabled} onToggle={() => void toggleAgent()} />
+            <AgentModeSelector
+              mode={agentMode}
+              onChange={changeAgentMode}
+              disabled={!agentEnabled}
+            />
+            {muted && (
+              <button
+                onClick={() => setMuted(false)}
+                className="px-2.5 py-1 rounded-full border border-rose-500/40 bg-rose-500/10 text-rose-500 text-[11px]"
+                title="Agent muted — click to resume"
+              >
+                Muted
+              </button>
+            )}
           </div>
           <div className="px-5 pb-3 flex items-center justify-center shrink-0">
             <span className="text-[11px] text-secondary">
