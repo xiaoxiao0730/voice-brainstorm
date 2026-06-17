@@ -1,4 +1,4 @@
-// Pure client-side decision layer. No LLM. No network.
+// Client-side decision layer with persisted cooldown state (per session).
 // Decides whether the agent should stay silent, surface a text suggestion,
 // or speak out loud, based on detected thinking state + recency + feedback.
 
@@ -33,13 +33,52 @@ const SOFT_VOICE_GAP_MS = 90_000;      // contradiction / missing_structure
 const MIN_TEXT_GAP_MS = 12_000;
 const NEGATIVE_PENALTY_MULT = 2;       // doubles cooldown after recent dismiss/correction
 
-export function createPolicyEngine(): PolicyEngine {
-  const state: PolicyState = {
+const STORAGE_PREFIX = "murmur.agent.policy.";
+
+function storageKey(sessionId: string | null | undefined) {
+  return sessionId ? `${STORAGE_PREFIX}${sessionId}` : null;
+}
+
+function loadPersisted(sessionId: string | null | undefined): PolicyState | null {
+  const key = storageKey(sessionId);
+  if (!key || typeof window === "undefined") return null;
+  try {
+    const raw = window.localStorage.getItem(key);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Partial<PolicyState>;
+    return {
+      lastInterventionAt: Number(parsed.lastInterventionAt) || 0,
+      lastVoiceAt: Number(parsed.lastVoiceAt) || 0,
+      recentFeedback: Array.isArray(parsed.recentFeedback)
+        ? (parsed.recentFeedback.slice(-8) as FeedbackSignal[])
+        : [],
+      consecutiveDismissed: Number(parsed.consecutiveDismissed) || 0,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function persist(sessionId: string | null | undefined, state: PolicyState) {
+  const key = storageKey(sessionId);
+  if (!key || typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(key, JSON.stringify(state));
+  } catch {
+    /* quota / unavailable — ignore */
+  }
+}
+
+export function createPolicyEngine(sessionId?: string | null): PolicyEngine {
+  const persisted = loadPersisted(sessionId);
+  const state: PolicyState = persisted ?? {
     lastInterventionAt: 0,
     lastVoiceAt: 0,
     recentFeedback: [],
     consecutiveDismissed: 0,
   };
+
+  const save = () => persist(sessionId, state);
 
   const recentlyNegative = () => {
     const last3 = state.recentFeedback.slice(-3);
@@ -71,8 +110,6 @@ export function createPolicyEngine(): PolicyEngine {
       case "contradiction_detected":
       case "missing_structure": {
         if (confidence < 0.7) return "silent";
-        // Default to text. Promote to voice only after a long quiet period
-        // AND no recent negative feedback.
         if (sinceVoice >= SOFT_VOICE_GAP_MS * penalty && state.consecutiveDismissed === 0) {
           return "voice";
         }
@@ -90,6 +127,7 @@ export function createPolicyEngine(): PolicyEngine {
     const now = Date.now();
     state.lastInterventionAt = now;
     if (level === "voice") state.lastVoiceAt = now;
+    save();
   };
 
   const recordFeedback = (signal: FeedbackSignal) => {
@@ -100,6 +138,7 @@ export function createPolicyEngine(): PolicyEngine {
     } else if (signal === "accepted" || signal === "requested_more" || signal === "edited_after") {
       state.consecutiveDismissed = 0;
     }
+    save();
   };
 
   return {
