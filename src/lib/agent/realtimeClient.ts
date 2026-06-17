@@ -78,14 +78,18 @@ export async function connectRealtime(opts: ConnectOptions): Promise<RealtimeCli
         type: "realtime",
         instructions:
           "You are a silent co-thinking partner. Do not speak unless given explicit instructions inside a response.create event. Never start a turn on your own. When you do speak, keep it to 1–2 short sentences.",
-        turn_detection: {
-          type: "server_vad",
-          threshold: 0.55,
-          prefix_padding_ms: 200,
-          silence_duration_ms: 500,
-          // Detect user speech but DO NOT auto-create a response.
-          create_response: false,
-          interrupt_response: true,
+        audio: {
+          input: {
+            turn_detection: {
+              type: "server_vad",
+              threshold: 0.55,
+              prefix_padding_ms: 200,
+              silence_duration_ms: 500,
+              // Detect user speech but DO NOT auto-create a response.
+              create_response: false,
+              interrupt_response: true,
+            },
+          },
         },
       },
     });
