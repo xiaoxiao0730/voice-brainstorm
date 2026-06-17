@@ -392,22 +392,157 @@ function Workbench() {
         setAiLoading(false);
       }
 
-      // ============= Agent layer =============
-      // Run in parallel with the rest; never throw out of onSegment.
-      void runAgentTurn(segment).catch((e) => console.warn("agent turn failed", e));
+      // ============= Two-lane agent =============
+      // Fast lane: low-latency dialogue/control. Background: structural reasoning.
+      // Run both in parallel, never throw out of onSegment.
+      void runFastLane(segment).catch((e) => console.warn("fast lane failed", e));
+      void runBackgroundLane(segment).catch((e) => console.warn("background lane failed", e));
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [orchestrate, saveSegment, persistBlock],
   );
 
-  // Runs the thinking-state detector + intervention policy after each
-  // committed transcript segment. Keeps a rolling window of recent texts so
-  // the detector has short-term context.
-  const runAgentTurn = useCallback(
+  // ---- FAST LANE ----
+  // Classifies the segment with a rule-based router, executes controls, and
+  // produces a short voice reply for greetings / direct questions / acks.
+  // NEVER touches the Live Brief or canvas.
+  const runFastLane = useCallback(
     async (segment: TranscriptSegment) => {
       if (!agentEnabledRef.current) return;
+      const { intent } = classifyFastIntent(segment.rawText);
 
-      // Update rolling transcript window (keep last 6).
+      // Controls always run, even when muted.
+      switch (intent) {
+        case "control_listen":
+          changeAgentMode("listen");
+          break;
+        case "control_guide":
+          changeAgentMode("guide");
+          break;
+        case "control_answer":
+          // Note: classifier emits this only for explicit mode phrases.
+          changeAgentMode("answer");
+          break;
+        case "control_mute":
+          setMuted(true);
+          mutedRef.current = true;
+          try { realtimeRef.current?.cancel(); } catch { /* ignore */ }
+          break;
+        case "control_resume":
+          setMuted(false);
+          mutedRef.current = false;
+          break;
+        default:
+          break;
+      }
+
+      // Log every fast classification (silent or not) for evaluation.
+      const logFast = async (text: string | null, intentName: FastIntent) => {
+        try {
+          await logIntv({
+            data: {
+              sessionId: segment.sessionId,
+              segmentId: segment.segmentId,
+              decision: text ? "voice" : "silent",
+              responseText: text ?? undefined,
+              lane: "fast",
+              intent: intentName,
+            },
+          });
+        } catch (e) { console.warn("logIntervention(fast) failed", e); }
+      };
+
+      if (mutedRef.current && intent !== "control_resume") {
+        void logFast(null, intent);
+        return;
+      }
+
+      const mode = agentModeRef.current;
+
+      // Decide whether the fast lane should speak for this intent.
+      const shouldSpeak = (() => {
+        switch (intent) {
+          case "control_mute": return false;
+          case "control_listen":
+          case "control_guide":
+          case "control_resume":
+            return true; // always ack
+          case "greeting":
+            return mode !== "listen";
+          case "simple_direct_question":
+            return mode === "answer" || mode === "guide";
+          case "light_guidance_request":
+            return mode !== "listen";
+          case "request_summary":
+          case "structural_deep_question":
+            // Brief verbal ack only — background owns the real reply.
+            return mode !== "listen";
+          default:
+            return false;
+        }
+      })();
+
+      if (!shouldSpeak) {
+        void logFast(null, intent);
+        return;
+      }
+
+      // Compose the reply. Canned where possible; LLM only for direct questions.
+      let text = fastCannedReply(intent, segment.rawText);
+      if (!text && intent === "simple_direct_question") {
+        try {
+          const r = await fastReplyFn({
+            data: { question: segment.rawText, language: "auto" },
+          });
+          text = (r.text ?? "").trim() || null;
+        } catch (e) {
+          console.warn("fastReply failed", e);
+        }
+      }
+      if (!text) {
+        void logFast(null, intent);
+        return;
+      }
+
+      // Speak via Realtime if connected; else surface as a text card.
+      if (realtimeRef.current) {
+        // Cancel any in-flight speech to keep the fast lane snappy.
+        try { realtimeRef.current.cancel(); } catch { /* ignore */ }
+        setAgentStatus("speaking");
+        realtimeRef.current.speak(text);
+      } else {
+        suggestionInterventionId.current = null;
+        setSuggestion({ id: crypto.randomUUID(), text, state: intent });
+      }
+      policyRef.current.recordFast();
+      void logFast(text, intent);
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [changeAgentMode, fastReplyFn, logIntv],
+  );
+
+  // ---- BACKGROUND LANE ----
+  // Owns Live Brief reasoning, suggestion cards, canvas ghost patches.
+  const runBackgroundLane = useCallback(
+    async (segment: TranscriptSegment) => {
+      if (!agentEnabledRef.current) return;
+      if (mutedRef.current) return;
+
+      // Skip background reasoning entirely when the fast lane already
+      // classified this segment as a control or pure greeting.
+      const { intent } = classifyFastIntent(segment.rawText);
+      if (
+        intent === "greeting" ||
+        intent === "control_listen" ||
+        intent === "control_guide" ||
+        intent === "control_answer" ||
+        intent === "control_mute" ||
+        intent === "control_resume" ||
+        intent === "simple_direct_question"
+      ) {
+        return;
+      }
+
       recentTextsRef.current = [...recentTextsRef.current, segment.rawText].slice(-6);
 
       const snapshot = Object.values(docRef.current)
@@ -431,9 +566,20 @@ function Workbench() {
         return;
       }
 
-      const decision = policyRef.current.decide(detected.state, detected.confidence);
+      let decision = policyRef.current.decideStructural(detected.state, detected.confidence);
 
-      // Log every decision (even silent) for evaluation.
+      // Mutex with fast lane: if fast just spoke / is speaking, downgrade voice → text.
+      const fastBusy =
+        policyRef.current.isFastRecent(3_000) ||
+        realtimeRef.current?.isAgentSpeaking() === true;
+      if (decision === "voice" && fastBusy) decision = "text_suggestion";
+
+      // Listen mode: never voice. Demote to text.
+      if (agentModeRef.current === "listen" && decision === "voice") {
+        decision = "text_suggestion";
+      }
+
+      // Log decision (silent included).
       let interventionId: string | null = null;
       try {
         const logged = await logIntv({
@@ -443,6 +589,7 @@ function Workbench() {
             detectedState: detected.state,
             stateConfidence: detected.confidence,
             decision,
+            lane: "structural",
           },
         });
         interventionId = logged.id;
@@ -455,8 +602,12 @@ function Workbench() {
         return;
       }
 
-      // Generate the nudge text.
+      const genLevel: "text" | "voice" | "canvas" =
+        decision === "canvas_suggestion" ? "canvas" :
+        decision === "voice" ? "voice" : "text";
+
       let text = "";
+      let patch: { heading: string; body: string; rationale: string } | undefined;
       try {
         const r = await generateNudge({
           data: {
@@ -465,22 +616,22 @@ function Workbench() {
             latestText: segment.rawText,
             recentTexts: recentTextsRef.current.slice(0, -1),
             snapshot,
-            level: decision,
+            level: genLevel,
           },
         });
         text = r.text ?? "";
+        patch = (r as { patch?: typeof patch }).patch;
       } catch (e) {
         console.warn("generateIntervention failed", e);
       }
 
-      if (!text.trim()) {
+      if (!text.trim() && !patch) {
         setAgentStatus((s) => (s === "speaking" ? s : "listening"));
         return;
       }
 
-      policyRef.current.recordIntervention(decision);
+      policyRef.current.recordStructural(decision);
 
-      // Persist the generated text alongside the intervention row.
       if (interventionId) {
         try {
           await logIntv({
@@ -491,24 +642,36 @@ function Workbench() {
               stateConfidence: detected.confidence,
               decision,
               responseText: text,
+              lane: "structural",
             },
           });
         } catch { /* best effort */ }
       }
 
-      if (decision === "text") {
+      if (decision === "canvas_suggestion" && patch) {
+        ghostInterventionId.current = interventionId;
+        setGhostPatch({
+          id: interventionId ?? crypto.randomUUID(),
+          heading: patch.heading ?? "",
+          body: patch.body,
+          rationale: patch.rationale ?? "",
+        });
+        setAgentStatus((s) => (s === "speaking" ? s : "listening"));
+        return;
+      }
+
+      if (decision === "text_suggestion") {
         suggestionInterventionId.current = interventionId;
         setSuggestion({ id: interventionId ?? crypto.randomUUID(), text, state: detected.state });
         setAgentStatus((s) => (s === "speaking" ? s : "listening"));
         return;
       }
 
-      // voice
-      if (realtimeRef.current) {
+      // voice (only reached when fast lane is idle and mode allows it)
+      if (realtimeRef.current && !realtimeRef.current.isAgentSpeaking()) {
         setAgentStatus("speaking");
         realtimeRef.current.speak(text);
       } else {
-        // Realtime not connected — fall back to a text suggestion.
         suggestionInterventionId.current = interventionId;
         setSuggestion({ id: interventionId ?? crypto.randomUUID(), text, state: detected.state });
         setAgentStatus("listening");
@@ -517,6 +680,7 @@ function Workbench() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [detectState, generateNudge, logIntv],
   );
+
 
   const startListening = async () => {
     if (listening || !activeSessionId) return;
