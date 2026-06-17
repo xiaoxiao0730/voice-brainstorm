@@ -88,6 +88,7 @@ function Workbench() {
   const createS = useServerFn(createSession);
 
   const endS = useServerFn(endSession);
+  const deleteS = useServerFn(deleteSession);
   const getCtx = useServerFn(getSessionContext);
 
   const getToken = useServerFn(getSpeechToken);
