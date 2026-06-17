@@ -259,6 +259,40 @@ function Workbench() {
     await openSession(created.id);
   };
 
+  const handleDeleteSession = useCallback(
+    async (id: string) => {
+      const target = sessions.find((s) => s.id === id);
+      const label = target?.title ?? "this session";
+      if (!window.confirm(`Delete "${label}"? This permanently removes its transcript and brief.`)) return;
+      setMenuOpenFor(null);
+      try {
+        await deleteS({ data: { sessionId: id } });
+        if (typeof window !== "undefined") {
+          window.localStorage.removeItem(`murmur.agent.policy.${id}`);
+        }
+        const rows = await refreshSessions();
+        if (activeSessionId === id) {
+          if (rows.length > 0) {
+            await openSession(rows[0].id);
+          } else {
+            const created = await createS({ data: {} });
+            await refreshSessions();
+            await openSession(created.id);
+          }
+        }
+      } catch (e: any) {
+        setError(e?.message ?? "Delete failed");
+      }
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [deleteS, sessions, activeSessionId, refreshSessions, openSession],
+  );
+
+    const created = await createS({ data: {} });
+    await refreshSessions();
+    await openSession(created.id);
+  };
+
   // ============= Recording =============
 
   const persistBlock = useCallback(
