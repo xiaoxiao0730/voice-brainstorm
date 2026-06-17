@@ -21,6 +21,7 @@ import { startAzureRecognizer, type SpeechRecognizerHandle } from "@/lib/speech/
 
 import {
   createSession,
+  deleteSession,
   endSession,
   getSessionContext,
   listSessions,
