@@ -724,25 +724,37 @@ function Workbench() {
   }, [recordFb, suggestion]);
 
 
-  // Tap "T" anywhere (outside text inputs) to toggle voice listening.
+  // Hotkeys (outside text inputs):
+  //   T → toggle voice listening (Azure STT only)
+  //   A → start talking with agent mode on (enables agent + starts listening)
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.repeat) return;
       if (e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
-      if (e.key !== "t" && e.key !== "T") return;
+      const key = e.key.toLowerCase();
+      if (key !== "t" && key !== "a") return;
       const t = e.target as HTMLElement | null;
       if (t) {
         const tag = t.tagName;
         if (tag === "INPUT" || tag === "TEXTAREA" || t.isContentEditable) return;
       }
       e.preventDefault();
-      if (listening) void stopListening();
-      else void startListening();
+      if (key === "t") {
+        if (listening) void stopListening();
+        else void startListening();
+        return;
+      }
+      // "a": start agent conversation
+      (async () => {
+        if (!listening) await startListening();
+        if (!agentEnabledRef.current) await toggleAgent();
+      })();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [listening, stopListening, activeSessionId]);
+  }, [listening, stopListening, activeSessionId, toggleAgent]);
+
 
   // ============= Document handlers =============
 
