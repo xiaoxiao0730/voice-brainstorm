@@ -647,12 +647,9 @@ function Workbench() {
     void connectAgent();
   }, [agentEnabled, listening, connectAgent]);
 
-  // Auto-connect Realtime when mic starts AND agent is enabled.
-  useEffect(() => {
-    if (agentEnabled && listening && !realtimeRef.current) {
-      void connectAgent();
-    }
-  }, [agentEnabled, listening, connectAgent]);
+  // Note: no auto-connect effect — toggleAgent owns connection lifecycle.
+  // A duplicate connect here caused two peer connections / double audio.
+
 
   const handleSuggestionAccept = useCallback(() => {
     const id = suggestionInterventionId.current;
