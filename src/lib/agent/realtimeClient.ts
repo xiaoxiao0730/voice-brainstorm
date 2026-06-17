@@ -128,6 +128,7 @@ export async function connectRealtime(opts: ConnectOptions): Promise<RealtimeCli
         if (agentSpeaking) {
           // User barged in — cancel the in-flight response.
           send({ type: "response.cancel" });
+          agentSpeaking = false;
           events.onUserBargeIn?.();
         }
         break;
