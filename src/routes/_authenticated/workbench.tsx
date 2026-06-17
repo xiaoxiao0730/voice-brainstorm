@@ -906,7 +906,7 @@ function Workbench() {
     const text = suggestion?.text ?? "";
     const id = suggestionInterventionId.current;
     if (text && realtimeRef.current) {
-      policyRef.current.recordIntervention("voice");
+      policyRef.current.recordStructural("voice");
       realtimeRef.current.speak(text);
     }
     policyRef.current.recordFeedback("requested_more");
