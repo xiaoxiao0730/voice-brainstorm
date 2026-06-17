@@ -288,10 +288,6 @@ function Workbench() {
     [deleteS, sessions, activeSessionId, refreshSessions, openSession],
   );
 
-    const created = await createS({ data: {} });
-    await refreshSessions();
-    await openSession(created.id);
-  };
 
   // ============= Recording =============
 
