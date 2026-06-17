@@ -724,25 +724,37 @@ function Workbench() {
   }, [recordFb, suggestion]);
 
 
-  // Tap "T" anywhere (outside text inputs) to toggle voice listening.
+  // Hotkeys (outside text inputs):
+  //   T → toggle voice listening (Azure STT only)
+  //   A → start talking with agent mode on (enables agent + starts listening)
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.repeat) return;
       if (e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
-      if (e.key !== "t" && e.key !== "T") return;
+      const key = e.key.toLowerCase();
+      if (key !== "t" && key !== "a") return;
       const t = e.target as HTMLElement | null;
       if (t) {
         const tag = t.tagName;
         if (tag === "INPUT" || tag === "TEXTAREA" || t.isContentEditable) return;
       }
       e.preventDefault();
-      if (listening) void stopListening();
-      else void startListening();
+      if (key === "t") {
+        if (listening) void stopListening();
+        else void startListening();
+        return;
+      }
+      // "a": start agent conversation
+      (async () => {
+        if (!listening) await startListening();
+        if (!agentEnabledRef.current) await toggleAgent();
+      })();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [listening, stopListening, activeSessionId]);
+  }, [listening, stopListening, activeSessionId, toggleAgent]);
+
 
   // ============= Document handlers =============
 
@@ -973,12 +985,15 @@ function Workbench() {
               <span className="material-symbols-outlined text-base">stop</span>
               Stop
             </button>
+            <AgentStatusPill status={agentStatus} enabled={agentEnabled} onToggle={() => void toggleAgent()} />
           </div>
           <div className="px-5 pb-3 flex items-center justify-center shrink-0">
             <span className="text-[11px] text-secondary">
-              Tip: press <kbd className="px-1.5 py-0.5 rounded border border-auralis bg-surface text-[10px] font-mono">T</kbd> to {listening ? "stop" : "start"} talking
+              Press <kbd className="px-1.5 py-0.5 rounded border border-auralis bg-surface text-[10px] font-mono">T</kbd> to {listening ? "stop" : "start"} talking ·{" "}
+              <kbd className="px-1.5 py-0.5 rounded border border-auralis bg-surface text-[10px] font-mono">A</kbd> to talk with agent
             </span>
           </div>
+
 
           {/* Transcript */}
           <div className="border-t border-auralis bg-surface/60 shrink-0">
@@ -1012,7 +1027,6 @@ function Workbench() {
           <header className="h-14 px-6 flex items-center justify-between border-b border-auralis shrink-0">
             <span className="text-xs uppercase tracking-[0.18em] text-secondary">Live Brief</span>
             <div className="flex items-center gap-2">
-              <AgentStatusPill status={agentStatus} enabled={agentEnabled} onToggle={() => void toggleAgent()} />
               <select
                 value={model}
                 onChange={(e) => setModel(e.target.value as typeof model)}
