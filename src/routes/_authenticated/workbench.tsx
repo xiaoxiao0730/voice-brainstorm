@@ -148,6 +148,7 @@ function Workbench() {
   const policyRef = useRef(createPolicyEngine());
   const recentTextsRef = useRef<string[]>([]);
   const agentEnabledRef = useRef(agentEnabled);
+  const agentConnectedAtRef = useRef(Date.now());
 
   useEffect(() => { docRef.current = doc; }, [doc]);
   useEffect(() => { activeSessionRef.current = activeSessionId; }, [activeSessionId]);
