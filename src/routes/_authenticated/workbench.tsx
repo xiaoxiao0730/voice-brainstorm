@@ -148,6 +148,7 @@ function Workbench() {
   const policyRef = useRef(createPolicyEngine());
   const recentTextsRef = useRef<string[]>([]);
   const agentEnabledRef = useRef(agentEnabled);
+  const agentConnectedAtRef = useRef(Date.now());
 
   useEffect(() => { docRef.current = doc; }, [doc]);
   useEffect(() => { activeSessionRef.current = activeSessionId; }, [activeSessionId]);
@@ -585,7 +586,10 @@ function Workbench() {
         model: rtModel,
         micStream: streamRef.current,
         events: {
-          onConnected: () => setAgentStatus("listening"),
+          onConnected: () => {
+            agentConnectedAtRef.current = Date.now();
+            setAgentStatus("listening");
+          },
           onAgentSpeakingStart: () => setAgentStatus("speaking"),
           onAgentSpeakingEnd: () => setAgentStatus("listening"),
           onUserBargeIn: () => setAgentStatus("listening"),
@@ -598,7 +602,9 @@ function Workbench() {
             const chunkId = crypto.randomUUID();
             const labeled = `🤖 ${text}`;
             setFinals((f) => [...f, { id: chunkId, text: labeled }]);
-            const now = Date.now();
+            // Use a small offset relative to agent-connect time — the DB
+            // column is a 32-bit integer, so raw Date.now() overflows.
+            const offset = Date.now() - agentConnectedAtRef.current;
             saveChunks({
               data: {
                 sessionId,
@@ -606,8 +612,8 @@ function Workbench() {
                   id: chunkId,
                   text: labeled,
                   isFinal: true,
-                  startMs: now,
-                  endMs: now,
+                  startMs: offset,
+                  endMs: offset,
                   lang: "agent",
                 }],
               },
@@ -647,12 +653,9 @@ function Workbench() {
     void connectAgent();
   }, [agentEnabled, listening, connectAgent]);
 
-  // Auto-connect Realtime when mic starts AND agent is enabled.
-  useEffect(() => {
-    if (agentEnabled && listening && !realtimeRef.current) {
-      void connectAgent();
-    }
-  }, [agentEnabled, listening, connectAgent]);
+  // Note: no auto-connect effect — toggleAgent owns connection lifecycle.
+  // A duplicate connect here caused two peer connections / double audio.
+
 
   const handleSuggestionAccept = useCallback(() => {
     const id = suggestionInterventionId.current;
