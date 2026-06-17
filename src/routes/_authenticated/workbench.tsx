@@ -849,18 +849,61 @@ function Workbench() {
             </div>
             <nav className="flex-1 overflow-y-auto px-2 pb-4 space-y-0.5">
               {sessions.map((s) => (
-                <button
+                <div
                   key={s.id}
-                  onClick={() => openSession(s.id)}
-                  className={`w-full text-left px-3 py-2 rounded-lg transition-colors ${
+                  className={`group relative w-full rounded-lg transition-colors ${
                     activeSessionId === s.id
                       ? "bg-surface-variant text-primary"
                       : "text-secondary hover:bg-surface-variant/60 hover:text-primary"
                   }`}
                 >
-                  <div className="text-sm font-medium truncate">{s.title}</div>
-                  <div className="text-[11px] text-secondary mt-0.5">{relative(s.started_at)}</div>
-                </button>
+                  <button
+                    onClick={() => openSession(s.id)}
+                    className="w-full text-left px-3 py-2 pr-9"
+                  >
+                    <div className="text-sm font-medium truncate">{s.title}</div>
+                    <div className="text-[11px] text-secondary mt-0.5">{relative(s.started_at)}</div>
+                  </button>
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setMenuOpenFor((cur) => (cur === s.id ? null : s.id));
+                    }}
+                    className={`absolute top-1.5 right-1.5 w-7 h-7 rounded-md flex items-center justify-center text-secondary hover:bg-surface hover:text-primary ${
+                      menuOpenFor === s.id ? "opacity-100" : "opacity-0 group-hover:opacity-100 focus:opacity-100"
+                    }`}
+                    aria-label="Session options"
+                    aria-haspopup="menu"
+                    aria-expanded={menuOpenFor === s.id}
+                  >
+                    <span className="material-symbols-outlined text-[18px]">more_horiz</span>
+                  </button>
+                  {menuOpenFor === s.id && (
+                    <>
+                      <div
+                        className="fixed inset-0 z-10"
+                        onClick={() => setMenuOpenFor(null)}
+                        aria-hidden="true"
+                      />
+                      <div
+                        role="menu"
+                        className="absolute z-20 top-9 right-1.5 min-w-[140px] rounded-md border border-auralis bg-surface shadow-lg py-1"
+                      >
+                        <button
+                          role="menuitem"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            void handleDeleteSession(s.id);
+                          }}
+                          className="w-full text-left px-3 py-1.5 text-xs text-rose-500 hover:bg-surface-variant flex items-center gap-2"
+                        >
+                          <span className="material-symbols-outlined text-[16px]">delete</span>
+                          Delete
+                        </button>
+                      </div>
+                    </>
+                  )}
+                </div>
               ))}
             </nav>
             <div className="border-t border-auralis p-3 flex items-center justify-between">
