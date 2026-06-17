@@ -973,12 +973,15 @@ function Workbench() {
               <span className="material-symbols-outlined text-base">stop</span>
               Stop
             </button>
+            <AgentStatusPill status={agentStatus} enabled={agentEnabled} onToggle={() => void toggleAgent()} />
           </div>
           <div className="px-5 pb-3 flex items-center justify-center shrink-0">
             <span className="text-[11px] text-secondary">
-              Tip: press <kbd className="px-1.5 py-0.5 rounded border border-auralis bg-surface text-[10px] font-mono">T</kbd> to {listening ? "stop" : "start"} talking
+              Press <kbd className="px-1.5 py-0.5 rounded border border-auralis bg-surface text-[10px] font-mono">T</kbd> to {listening ? "stop" : "start"} talking ·{" "}
+              <kbd className="px-1.5 py-0.5 rounded border border-auralis bg-surface text-[10px] font-mono">A</kbd> to talk with agent
             </span>
           </div>
+
 
           {/* Transcript */}
           <div className="border-t border-auralis bg-surface/60 shrink-0">
