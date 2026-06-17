@@ -1015,7 +1015,6 @@ function Workbench() {
           <header className="h-14 px-6 flex items-center justify-between border-b border-auralis shrink-0">
             <span className="text-xs uppercase tracking-[0.18em] text-secondary">Live Brief</span>
             <div className="flex items-center gap-2">
-              <AgentStatusPill status={agentStatus} enabled={agentEnabled} onToggle={() => void toggleAgent()} />
               <select
                 value={model}
                 onChange={(e) => setModel(e.target.value as typeof model)}
