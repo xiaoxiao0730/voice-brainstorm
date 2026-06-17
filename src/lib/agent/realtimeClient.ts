@@ -17,6 +17,7 @@ export type RealtimeEvents = {
   onDisconnected?: () => void;
   onAgentSpeakingStart?: () => void;
   onAgentSpeakingEnd?: () => void;
+  onAgentTranscript?: (text: string) => void;
   onUserBargeIn?: () => void;
   onError?: (err: Error) => void;
 };
@@ -67,9 +68,14 @@ export async function connectRealtime(opts: ConnectOptions): Promise<RealtimeCli
 
   dc.onopen = () => {
     // Configure the session: silent by default, server-VAD for barge-in only.
+    // NOTE: OpenAI Realtime GA requires `session.type: "realtime"`. Without
+    // it the session.update is rejected and the server falls back to
+    // defaults (which include create_response: true) — that causes the
+    // agent to auto-reply to every user utterance.
     send({
       type: "session.update",
       session: {
+        type: "realtime",
         instructions:
           "You are a silent co-thinking partner. Do not speak unless given explicit instructions inside a response.create event. Never start a turn on your own. When you do speak, keep it to 1–2 short sentences.",
         turn_detection: {
@@ -101,6 +107,12 @@ export async function connectRealtime(opts: ConnectOptions): Promise<RealtimeCli
           events.onAgentSpeakingStart?.();
         }
         break;
+      case "response.output_audio_transcript.done":
+      case "response.audio_transcript.done": {
+        const t = (evt as any).transcript;
+        if (typeof t === "string" && t.trim()) events.onAgentTranscript?.(t.trim());
+        break;
+      }
       case "response.done":
       case "response.cancelled":
         if (agentSpeaking) {
