@@ -586,7 +586,10 @@ function Workbench() {
         model: rtModel,
         micStream: streamRef.current,
         events: {
-          onConnected: () => setAgentStatus("listening"),
+          onConnected: () => {
+            agentConnectedAtRef.current = Date.now();
+            setAgentStatus("listening");
+          },
           onAgentSpeakingStart: () => setAgentStatus("speaking"),
           onAgentSpeakingEnd: () => setAgentStatus("listening"),
           onUserBargeIn: () => setAgentStatus("listening"),
