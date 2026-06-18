@@ -358,156 +358,24 @@ function Workbench() {
         setAiLoading(false);
       }
 
-      // ============= Two-lane agent =============
-      // Fast lane: low-latency dialogue/control. Background: structural reasoning.
-      // Run both in parallel, never throw out of onSegment.
-      void runFastLane(segment).catch((e) => console.warn("fast lane failed", e));
-      void runBackgroundLane(segment).catch((e) => console.warn("background lane failed", e));
+      // ============= Background Canvas Lane =============
+      // Runs unconditionally on every committed segment. Independent of the
+      // Realtime voice lane — never gated on whether the agent is speaking.
+      void runBackgroundCanvas(segment).catch((e) => console.warn("canvas lane failed", e));
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [orchestrate, saveSegment, persistBlock],
   );
 
-  // ---- FAST LANE ----
-  // Classifies the segment with a rule-based router, executes controls, and
-  // produces a short voice reply for greetings / direct questions / acks.
-  // NEVER touches the Live Brief or canvas.
-  const runFastLane = useCallback(
+  // ---- BACKGROUND CANVAS LANE ----
+  // Reads the committed STT segment, asks a deep model for a structural
+  // addition to the Live Brief, and (when emitted) inserts it inline as a
+  // locked AI-authored block. Optionally whispers a one-line insight into the
+  // active Realtime voice session as silent system context.
+  const runBackgroundCanvas = useCallback(
     async (segment: TranscriptSegment) => {
-      if (!agentEnabledRef.current) return;
-      const { intent } = classifyFastIntent(segment.rawText);
-
-      // Controls always run, even when muted.
-      switch (intent) {
-        case "control_listen":
-          changeAgentMode("listen");
-          break;
-        case "control_guide":
-          changeAgentMode("guide");
-          break;
-        case "control_answer":
-          // Note: classifier emits this only for explicit mode phrases.
-          changeAgentMode("answer");
-          break;
-        case "control_mute":
-          setMuted(true);
-          mutedRef.current = true;
-          try { realtimeRef.current?.cancel(); } catch { /* ignore */ }
-          break;
-        case "control_resume":
-          setMuted(false);
-          mutedRef.current = false;
-          break;
-        default:
-          break;
-      }
-
-      // Log every fast classification (silent or not) for evaluation.
-      const logFast = async (text: string | null, intentName: FastIntent) => {
-        try {
-          await logIntv({
-            data: {
-              sessionId: segment.sessionId,
-              segmentId: segment.segmentId,
-              decision: text ? "voice" : "silent",
-              responseText: text ?? undefined,
-              lane: "fast",
-              intent: intentName,
-            },
-          });
-        } catch (e) { console.warn("logIntervention(fast) failed", e); }
-      };
-
-      if (mutedRef.current && intent !== "control_resume") {
-        void logFast(null, intent);
-        return;
-      }
-
-      const mode = agentModeRef.current;
-
-      // Decide whether the fast lane should speak for this intent.
-      const shouldSpeak = (() => {
-        switch (intent) {
-          case "control_mute": return false;
-          case "control_listen":
-          case "control_guide":
-          case "control_resume":
-            return true; // always ack
-          case "greeting":
-            return mode !== "listen";
-          case "simple_direct_question":
-            return mode === "answer" || mode === "guide";
-          case "light_guidance_request":
-            return mode !== "listen";
-          case "request_summary":
-          case "structural_deep_question":
-            // Brief verbal ack only — background owns the real reply.
-            return mode !== "listen";
-          default:
-            return false;
-        }
-      })();
-
-      if (!shouldSpeak) {
-        void logFast(null, intent);
-        return;
-      }
-
-      // Compose the reply. Canned where possible; LLM only for direct questions.
-      let text = fastCannedReply(intent, segment.rawText);
-      if (!text && intent === "simple_direct_question") {
-        try {
-          const r = await fastReplyFn({
-            data: { question: segment.rawText, language: "auto" },
-          });
-          text = (r.text ?? "").trim() || null;
-        } catch (e) {
-          console.warn("fastReply failed", e);
-        }
-      }
-      if (!text) {
-        void logFast(null, intent);
-        return;
-      }
-
-      // Speak via Realtime if connected; else surface as a text card.
-      if (realtimeRef.current) {
-        // Cancel any in-flight speech to keep the fast lane snappy.
-        try { realtimeRef.current.cancel(); } catch { /* ignore */ }
-        setAgentStatus("speaking");
-        realtimeRef.current.speak(text);
-      } else {
-        suggestionInterventionId.current = null;
-        setSuggestion({ id: crypto.randomUUID(), text, state: intent });
-      }
-      policyRef.current.recordFast();
-      void logFast(text, intent);
-    },
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [changeAgentMode, fastReplyFn, logIntv],
-  );
-
-  // ---- BACKGROUND LANE ----
-  // Owns Live Brief reasoning, suggestion cards, canvas ghost patches.
-  const runBackgroundLane = useCallback(
-    async (segment: TranscriptSegment) => {
-      if (!agentEnabledRef.current) return;
-      if (mutedRef.current) return;
-
-      // Skip background reasoning entirely when the fast lane already
-      // classified this segment as a control or pure greeting.
-      const { intent } = classifyFastIntent(segment.rawText);
-      if (
-        intent === "greeting" ||
-        intent === "control_listen" ||
-        intent === "control_guide" ||
-        intent === "control_answer" ||
-        intent === "control_mute" ||
-        intent === "control_resume" ||
-        intent === "simple_direct_question"
-      ) {
-        return;
-      }
+      if (!listeningRef.current) return;
+      if (!policyRef.current.shouldEmitCanvas()) return;
 
       recentTextsRef.current = [...recentTextsRef.current, segment.rawText].slice(-6);
 
@@ -516,136 +384,78 @@ function Workbench() {
         .map((b) => ({ heading: b.heading, level: b.level, body: b.body }));
 
       setAgentStatus((s) => (s === "speaking" ? s : "thinking"));
-      let detected: { state: ThinkingState; confidence: number; evidence: string };
+
+      let result:
+        | { emit: true; patch: { heading: string; body: string; rationale: string }; insight?: string }
+        | { emit: false; insight?: string; error?: string };
       try {
-        const res = await detectState({
+        result = (await generateNudge({
           data: {
             latestText: segment.rawText,
             recentTexts: recentTextsRef.current.slice(0, -1),
             snapshot,
+            model: modelRef.current,
           },
-        });
-        detected = { state: res.state, confidence: res.confidence, evidence: res.evidence ?? "" };
+        })) as typeof result;
       } catch (e) {
-        console.warn("detectThinkingState failed", e);
-        setAgentStatus((s) => (s === "speaking" ? s : "listening"));
+        console.warn("generateIntervention failed", e);
+        setAgentStatus((s) => (s === "speaking" ? s : realtimeRef.current ? "listening" : "off"));
         return;
       }
 
-      let decision = policyRef.current.decideStructural(detected.state, detected.confidence);
-
-      // Mutex with fast lane: if fast just spoke / is speaking, downgrade voice → text.
-      const fastBusy =
-        policyRef.current.isFastRecent(3_000) ||
-        realtimeRef.current?.isAgentSpeaking() === true;
-      if (decision === "voice" && fastBusy) decision = "text_suggestion";
-
-      // Listen mode: never voice. Demote to text.
-      if (agentModeRef.current === "listen" && decision === "voice") {
-        decision = "text_suggestion";
+      // Inject background insight into the Realtime voice session, if any.
+      if (result.insight && realtimeRef.current) {
+        try { realtimeRef.current.injectContext(result.insight); } catch { /* ignore */ }
       }
 
-      // Log decision (silent included).
-      let interventionId: string | null = null;
+      if (!result.emit) {
+        try {
+          await logIntv({
+            data: { sessionId: segment.sessionId, segmentId: segment.segmentId, decision: "silent" },
+          });
+        } catch { /* best effort */ }
+        setAgentStatus((s) => (s === "speaking" ? s : realtimeRef.current ? "listening" : "off"));
+        return;
+      }
+
+      const patch = result.patch;
+      const sid = segment.sessionId;
+      const keys = Object.values(docRef.current).map((b) => b.orderKey).sort();
+      const newBlock: BriefBlock = {
+        id: crypto.randomUUID(),
+        sessionId: sid,
+        orderKey: between(keys.length ? keys[keys.length - 1] : null, null),
+        heading: patch.heading,
+        level: 3,
+        body: patch.body,
+        lastEditedBy: "ai",
+        locked: true,
+        sourceChunkIds: [],
+      };
+      const map = { ...docRef.current, [newBlock.id]: newBlock };
+      setDoc(map);
+      docRef.current = map;
+      await persistBlock(newBlock);
+      policyRef.current.recordCanvas();
+
       try {
-        const logged = await logIntv({
+        await logIntv({
           data: {
             sessionId: segment.sessionId,
             segmentId: segment.segmentId,
-            detectedState: detected.state,
-            stateConfidence: detected.confidence,
-            decision,
-            lane: "structural",
+            decision: "canvas",
+            responseText: patch.body,
           },
         });
-        interventionId = logged.id;
-      } catch (e) {
-        console.warn("logIntervention failed", e);
-      }
+      } catch { /* best effort */ }
 
-      if (decision === "silent") {
-        setAgentStatus((s) => (s === "speaking" ? s : "listening"));
-        return;
-      }
-
-      const genLevel: "text" | "voice" | "canvas" =
-        decision === "canvas_suggestion" ? "canvas" :
-        decision === "voice" ? "voice" : "text";
-
-      let text = "";
-      let patch: { heading: string; body: string; rationale: string } | undefined;
-      try {
-        const r = await generateNudge({
-          data: {
-            state: detected.state,
-            evidence: detected.evidence,
-            latestText: segment.rawText,
-            recentTexts: recentTextsRef.current.slice(0, -1),
-            snapshot,
-            level: genLevel,
-          },
-        });
-        text = r.text ?? "";
-        patch = (r as { patch?: typeof patch }).patch;
-      } catch (e) {
-        console.warn("generateIntervention failed", e);
-      }
-
-      if (!text.trim() && !patch) {
-        setAgentStatus((s) => (s === "speaking" ? s : "listening"));
-        return;
-      }
-
-      policyRef.current.recordStructural(decision);
-
-      if (interventionId) {
-        try {
-          await logIntv({
-            data: {
-              sessionId: segment.sessionId,
-              segmentId: segment.segmentId,
-              detectedState: detected.state,
-              stateConfidence: detected.confidence,
-              decision,
-              responseText: text,
-              lane: "structural",
-            },
-          });
-        } catch { /* best effort */ }
-      }
-
-      if (decision === "canvas_suggestion" && patch) {
-        ghostInterventionId.current = interventionId;
-        setGhostPatch({
-          id: interventionId ?? crypto.randomUUID(),
-          heading: patch.heading ?? "",
-          body: patch.body,
-          rationale: patch.rationale ?? "",
-        });
-        setAgentStatus((s) => (s === "speaking" ? s : "listening"));
-        return;
-      }
-
-      if (decision === "text_suggestion") {
-        suggestionInterventionId.current = interventionId;
-        setSuggestion({ id: interventionId ?? crypto.randomUUID(), text, state: detected.state });
-        setAgentStatus((s) => (s === "speaking" ? s : "listening"));
-        return;
-      }
-
-      // voice (only reached when fast lane is idle and mode allows it)
-      if (realtimeRef.current && !realtimeRef.current.isAgentSpeaking()) {
-        setAgentStatus("speaking");
-        realtimeRef.current.speak(text);
-      } else {
-        suggestionInterventionId.current = interventionId;
-        setSuggestion({ id: interventionId ?? crypto.randomUUID(), text, state: detected.state });
-        setAgentStatus("listening");
-      }
+      setAgentStatus((s) => (s === "speaking" ? s : realtimeRef.current ? "listening" : "off"));
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [detectState, generateNudge, logIntv],
+    [generateNudge, logIntv, persistBlock],
   );
+
+
 
 
   const startListening = async () => {
