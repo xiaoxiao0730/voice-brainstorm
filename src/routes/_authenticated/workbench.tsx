@@ -94,12 +94,9 @@ function Workbench() {
   const saveChunks = useServerFn(persistChunks);
   const saveSegment = useServerFn(persistSegment);
   const orchestrate = useServerFn(orchestrateSegment);
-  const detectState = useServerFn(detectThinkingState);
   const generateNudge = useServerFn(generateIntervention);
   const logIntv = useServerFn(logIntervention);
-  const recordFb = useServerFn(recordInterventionFeedback);
   const mintRealtime = useServerFn(getRealtimeSession);
-  const fastReplyFn = useServerFn(fastReply);
 
   // UI state
   const [sessions, setSessions] = useState<SessionRow[]>([]);
@@ -115,15 +112,10 @@ function Workbench() {
   const [aiLoading, setAiLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Agent state
+  // Agent state — Realtime voice lane only. Background canvas lane runs
+  // whenever `listening` is true, independent of `agentEnabled`.
   const [agentEnabled, setAgentEnabled] = useState(false);
   const [agentStatus, setAgentStatus] = useState<AgentStatus>("off");
-  const [suggestion, setSuggestion] = useState<AgentSuggestion | null>(null);
-  const [ghostPatch, setGhostPatch] = useState<CanvasGhostPatch | null>(null);
-  const [agentMode, setAgentMode] = useState<AgentMode>("guide");
-  const [muted, setMuted] = useState(false);
-  const suggestionInterventionId = useRef<string | null>(null);
-  const ghostInterventionId = useRef<string | null>(null);
 
   const [userEmail, setUserEmail] = useState<string | null>(null);
 
@@ -151,28 +143,17 @@ function Workbench() {
   const realtimeRef = useRef<RealtimeClient | null>(null);
   const policyRef = useRef(createPolicyEngine(null));
   const recentTextsRef = useRef<string[]>([]);
-  const agentEnabledRef = useRef(agentEnabled);
+  const listeningRef = useRef(listening);
   const agentConnectedAtRef = useRef(Date.now());
-  const agentModeRef = useRef<AgentMode>(agentMode);
-  const mutedRef = useRef(muted);
 
   useEffect(() => { docRef.current = doc; }, [doc]);
   useEffect(() => {
     activeSessionRef.current = activeSessionId;
     policyRef.current = createPolicyEngine(activeSessionId);
-    const next = loadAgentMode(activeSessionId);
-    setAgentMode(next);
-    agentModeRef.current = next;
+    recentTextsRef.current = [];
   }, [activeSessionId]);
-  useEffect(() => { agentEnabledRef.current = agentEnabled; }, [agentEnabled]);
-  useEffect(() => { agentModeRef.current = agentMode; }, [agentMode]);
-  useEffect(() => { mutedRef.current = muted; }, [muted]);
+  useEffect(() => { listeningRef.current = listening; }, [listening]);
 
-  const changeAgentMode = useCallback((m: AgentMode) => {
-    setAgentMode(m);
-    agentModeRef.current = m;
-    saveAgentMode(activeSessionRef.current, m);
-  }, []);
 
   // Fetch user email
   useEffect(() => {
