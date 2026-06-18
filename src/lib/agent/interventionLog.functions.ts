@@ -2,17 +2,12 @@ import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
 
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
-import { THINKING_STATES } from "./thinkingState.functions";
 
 const LogInput = z.object({
   sessionId: z.string().uuid(),
   segmentId: z.string().uuid().optional(),
-  detectedState: z.enum(THINKING_STATES).optional(),
-  stateConfidence: z.number().min(0).max(1).optional(),
-  decision: z.enum(["silent", "text", "voice", "text_suggestion", "canvas_suggestion"]),
+  decision: z.enum(["silent", "canvas"]),
   responseText: z.string().optional(),
-  lane: z.enum(["fast", "structural"]).default("structural"),
-  intent: z.string().max(64).optional(),
 });
 
 const FeedbackInput = z.object({
@@ -32,22 +27,17 @@ export const logIntervention = createServerFn({ method: "POST" })
   .inputValidator((input: unknown) => LogInput.parse(input))
   .handler(async ({ data, context }) => {
     const { supabase } = context;
-    // Normalize new decision names down to legacy enum values stored in the DB.
-    const decision =
-      data.decision === "text_suggestion" ? "text" :
-      data.decision === "canvas_suggestion" ? "text" :
-      data.decision;
+    // DB enum still expects legacy values; map "canvas" → "text" for storage.
+    const decision = data.decision === "canvas" ? "text" : data.decision;
     const { data: row, error } = await supabase
       .from("agent_interventions")
       .insert({
         session_id: data.sessionId,
         segment_id: data.segmentId ?? null,
-        detected_state: data.detectedState ?? "thinking_continuing",
-        state_confidence: data.stateConfidence ?? null,
+        detected_state: "thinking_continuing",
         decision,
         response_text: data.responseText ?? null,
-        lane: data.lane,
-        intent: data.intent ?? null,
+        lane: "structural",
       })
       .select("id")
       .single();

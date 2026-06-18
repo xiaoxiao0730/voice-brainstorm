@@ -1,10 +1,17 @@
+// Background Canvas Lane generator.
+//
+// Stage 3 architecture: this server fn is invoked unconditionally on every
+// committed STT segment. It runs a deeper model in parallel with the Realtime
+// voice lane and produces a structural Ghost Patch for the Live Brief.
+// Optionally returns a short `insight` string the client may inject into the
+// active Realtime session as silent system context.
+
 import { createServerFn } from "@tanstack/react-start";
 import { Output, generateText } from "ai";
 import { z } from "zod";
 
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
 import { createLovableAiGatewayProvider } from "@/lib/ai-gateway.server";
-import { THINKING_STATES } from "./thinkingState.functions";
 
 const SnapshotBlock = z.object({
   heading: z.string().default(""),
@@ -13,46 +20,36 @@ const SnapshotBlock = z.object({
 });
 
 const InputSchema = z.object({
-  state: z.enum(THINKING_STATES),
-  evidence: z.string().default(""),
   latestText: z.string().default(""),
   recentTexts: z.array(z.string()).max(8).default([]),
   snapshot: z.array(SnapshotBlock).max(60).default([]),
-  // text = card, voice = spoken, canvas = ghost block proposal.
-  level: z.enum(["text", "voice", "canvas"]),
+  model: z.string().default("google/gemini-2.5-pro"),
 });
-
-const SYSTEM_TEXT_VOICE = `You are a co-thinking partner for the BACKGROUND structural lane. A separate fast lane handles greetings, direct questions, and chit-chat — you NEVER do those. You only speak when the user is stuck, contradicting themselves, missing structure, or explicitly asking for deeper help.
-
-HARD RULES:
-- Maximum 1–2 sentences. No paragraphs, no lists.
-- Either ask ONE useful question OR offer ONE structural reframing — never both.
-- Reference something concrete from the Live Brief or the user's latest segment.
-- Match the user's language.
-- Voice responses must sound natural when spoken aloud — no markdown.
-
-Per state:
-- stuck: name what you hear and offer one direction.
-- contradiction_detected: point to the specific tension, ask which holds.
-- missing_structure: name the single most-needed structural element.
-- explicit_request: answer with one concrete suggestion grounded in the brief.
-- thinking_continuing / pause_but_not_done: return an empty string.
-
-Output ONLY the response text.`;
 
 const CanvasPatchSchema = z.object({
+  emit: z
+    .boolean()
+    .describe("False when the latest segment is filler/greeting/control with nothing structural to add."),
   heading: z.string().max(80).default(""),
-  body: z.string().min(1).max(400),
+  body: z.string().max(400).default(""),
   rationale: z.string().max(200).default(""),
+  insight: z
+    .string()
+    .max(180)
+    .default("")
+    .describe("Optional one-sentence deep insight to inject into the live voice agent. Empty when not useful."),
 });
 
-const SYSTEM_CANVAS = `You propose ONE small structural addition to a Live Brief — the kind a co-thinker would jot at the side as a ghost suggestion. The user will see it as a dashed-outline block they can accept, edit, or dismiss.
+const SYSTEM_CANVAS = `You are the BACKGROUND CANVAS LANE of a dual-pipeline co-thinking system. A separate native voice agent handles all spoken interaction. You NEVER produce spoken replies — only structured written notes for the user's Live Brief.
+
+Your job: silently watch the user's stream of thought and the existing brief, then propose ONE small structural addition that captures what the user just said or fills a clear structural gap.
 
 HARD RULES:
-- Propose exactly one block. It must fill a clear structural gap (e.g. missing problem statement, missing assumption, missing target user, missing next step).
-- Heading: short (2–6 words). Body: 1–3 sentences, plain text, matches user's language.
-- Ground every claim in the user's own words or the existing brief. Do NOT invent new facts.
-- Rationale: one short phrase explaining why this is missing (shown as a hover tip).
+- Propose at most one block. Heading 2–6 words, body 1–3 sentences. Plain text. Match the user's language.
+- Ground every claim in the user's own words or the existing brief. Do NOT invent facts.
+- If the latest segment is a greeting / filler / control phrase ("好的", "stop", "let me think") or adds nothing structural, set emit=false and leave the other fields empty.
+- rationale: one short phrase (≤ 1 line) shown as a hover tip.
+- insight: only when you have a non-obvious cross-cutting observation worth whispering into the voice agent's ear (contradiction, missing assumption, surprising connection). One sentence, ≤ 30 words. Otherwise empty.
 
 Return strict JSON matching the schema.`;
 
@@ -76,41 +73,33 @@ export const generateIntervention = createServerFn({ method: "POST" })
     const recentStr = data.recentTexts.length ? data.recentTexts.join(" / ") : "(none)";
     const gateway = createLovableAiGatewayProvider(apiKey);
 
-    if (data.level === "canvas") {
-      const userPrompt = `LIVE BRIEF:\n${briefStr}\n\nRECENT USER SPEECH: ${recentStr}\nLATEST USER SEGMENT: ${data.latestText}\n\nDETECTED STATE: ${data.state}\nWHY: ${data.evidence}\n\nPropose one ghost block now.`;
-      try {
-        const { experimental_output } = await generateText({
-          model: gateway("google/gemini-3-flash-preview"),
-          system: SYSTEM_CANVAS,
-          prompt: userPrompt,
-          experimental_output: Output.object({ schema: CanvasPatchSchema }),
-        });
-        return {
-          text: experimental_output.body,
-          patch: {
-            heading: experimental_output.heading,
-            body: experimental_output.body,
-            rationale: experimental_output.rationale,
-          },
-        };
-      } catch (e) {
-        const message = e instanceof Error ? e.message : String(e);
-        return { text: "", error: message };
-      }
-    }
-
-    const userPrompt = `LIVE BRIEF:\n${briefStr}\n\nRECENT USER SPEECH: ${recentStr}\nLATEST USER SEGMENT: ${data.latestText}\n\nDETECTED STATE: ${data.state}\nWHY: ${data.evidence}\nDELIVERY: ${data.level === "voice" ? "spoken aloud" : "shown as a small suggestion card"}\n\nWrite the response now. 1–2 sentences max.`;
+    const userPrompt = `LIVE BRIEF:\n${briefStr}\n\nRECENT USER SPEECH: ${recentStr}\nLATEST USER SEGMENT: ${data.latestText}\n\nPropose one ghost block now (or set emit=false).`;
 
     try {
-      const { text } = await generateText({
-        model: gateway("google/gemini-3-flash-preview"),
-        system: SYSTEM_TEXT_VOICE,
+      const { experimental_output } = await generateText({
+        model: gateway(data.model),
+        system: SYSTEM_CANVAS,
         prompt: userPrompt,
+        experimental_output: Output.object({ schema: CanvasPatchSchema }),
       });
-      const clean = text.trim().replace(/^["'"「『]+|["'"」』]+$/g, "").trim();
-      return { text: clean };
+      const out = experimental_output;
+      if (!out.emit || !out.body.trim()) {
+        return {
+          emit: false as const,
+          insight: out.insight?.trim() || undefined,
+        };
+      }
+      return {
+        emit: true as const,
+        patch: {
+          heading: out.heading,
+          body: out.body,
+          rationale: out.rationale,
+        },
+        insight: out.insight?.trim() || undefined,
+      };
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
-      return { text: "", error: message };
+      return { emit: false as const, error: message };
     }
   });
