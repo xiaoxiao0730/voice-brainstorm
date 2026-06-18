@@ -645,7 +645,6 @@ function Workbench() {
       }
       setAgentEnabled(false);
       setAgentStatus("off");
-      setSuggestion(null);
       return;
     }
     // Auto-start mic if not already listening — Talk with Agent implies
@@ -663,85 +662,8 @@ function Workbench() {
   }, [agentEnabled, listening, connectAgent]);
 
   // Note: no auto-connect effect — toggleAgent owns connection lifecycle.
-  // A duplicate connect here caused two peer connections / double audio.
 
 
-  const handleSuggestionAccept = useCallback(() => {
-    const id = suggestionInterventionId.current;
-    policyRef.current.recordFeedback("accepted");
-    if (id) void recordFb({ data: { interventionId: id, feedback: "accepted" } }).catch(() => {});
-    setSuggestion(null);
-    suggestionInterventionId.current = null;
-  }, [recordFb]);
-
-  const handleSuggestionDismiss = useCallback(() => {
-    const id = suggestionInterventionId.current;
-    policyRef.current.recordFeedback("dismissed");
-    if (id) void recordFb({ data: { interventionId: id, feedback: "dismissed" } }).catch(() => {});
-    setSuggestion(null);
-    suggestionInterventionId.current = null;
-  }, [recordFb]);
-
-  const handleAskOutLoud = useCallback(() => {
-    const text = suggestion?.text ?? "";
-    const id = suggestionInterventionId.current;
-    if (text && realtimeRef.current) {
-      policyRef.current.recordStructural("voice");
-      realtimeRef.current.speak(text);
-    }
-    policyRef.current.recordFeedback("requested_more");
-    if (id) void recordFb({ data: { interventionId: id, feedback: "requested_more" } }).catch(() => {});
-    setSuggestion(null);
-    suggestionInterventionId.current = null;
-  }, [recordFb, suggestion]);
-
-  // ---- Ghost canvas patch handlers ----
-  const handleGhostAccept = useCallback(async () => {
-    const patch = ghostPatch;
-    const id = ghostInterventionId.current;
-    const sid = activeSessionRef.current;
-    if (!patch || !sid) {
-      setGhostPatch(null);
-      ghostInterventionId.current = null;
-      return;
-    }
-    const keys = Object.values(docRef.current).map((b) => b.orderKey).sort();
-    const newBlock: BriefBlock = {
-      id: crypto.randomUUID(),
-      sessionId: sid,
-      orderKey: between(keys.length ? keys[keys.length - 1] : null, null),
-      heading: patch.heading,
-      level: 3,
-      body: patch.body,
-      // The user accepted an AI-proposed block; treat it as AI-written but
-      // locked so future AI passes won't rewrite it.
-      lastEditedBy: "ai",
-      locked: true,
-      sourceChunkIds: [],
-    };
-    const map = { ...docRef.current, [newBlock.id]: newBlock };
-    setDoc(map);
-    docRef.current = map;
-    await persistBlock(newBlock);
-    policyRef.current.recordFeedback("accepted");
-    if (id) void recordFb({ data: { interventionId: id, feedback: "accepted" } }).catch(() => {});
-    setGhostPatch(null);
-    ghostInterventionId.current = null;
-  }, [ghostPatch, persistBlock, recordFb]);
-
-  const handleGhostDismiss = useCallback(() => {
-    const id = ghostInterventionId.current;
-    policyRef.current.recordFeedback("dismissed");
-    if (id) void recordFb({ data: { interventionId: id, feedback: "dismissed" } }).catch(() => {});
-    setGhostPatch(null);
-    ghostInterventionId.current = null;
-  }, [recordFb]);
-
-  const handleGhostEdit = useCallback(() => {
-    // For now, "edit" promotes the ghost to a regular new block then accepts.
-    // Inline editing happens in the canvas after acceptance.
-    void handleGhostAccept();
-  }, [handleGhostAccept]);
 
 
 
