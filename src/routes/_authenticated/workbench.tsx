@@ -39,23 +39,10 @@ import { exportBriefToDocx } from "@/lib/exportDocx";
 
 import { getRealtimeSession } from "@/lib/agent/realtime.functions";
 import { connectRealtime, type RealtimeClient } from "@/lib/agent/realtimeClient";
-import { detectThinkingState, type ThinkingState } from "@/lib/agent/thinkingState.functions";
 import { generateIntervention } from "@/lib/agent/responseGenerator.functions";
-import { fastReply } from "@/lib/agent/fastReply.functions";
-import {
-  logIntervention,
-  recordInterventionFeedback,
-} from "@/lib/agent/interventionLog.functions";
-import { createPolicyEngine, type BackgroundDecision } from "@/lib/agent/interventionPolicy";
-import { classifyFastIntent, fastCannedReply, type FastIntent } from "@/lib/agent/fastIntent";
-import { loadAgentMode, saveAgentMode, type AgentMode } from "@/lib/agent/agentMode";
-import {
-  AgentSuggestionCard,
-  CanvasGhostPatchCard,
-  type AgentStatus,
-  type AgentSuggestion,
-  type CanvasGhostPatch,
-} from "@/components/agent/AgentPanel";
+import { logIntervention } from "@/lib/agent/interventionLog.functions";
+import { createPolicyEngine } from "@/lib/agent/interventionPolicy";
+import { type AgentStatus } from "@/components/agent/AgentPanel";
 
 export const Route = createFileRoute("/_authenticated/workbench")({
   validateSearch: (search: Record<string, unknown>) => ({
