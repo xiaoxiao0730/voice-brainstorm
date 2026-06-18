@@ -690,7 +690,7 @@ function Workbench() {
       // "a": start agent conversation
       (async () => {
         if (!listening) await startListening();
-        if (!agentEnabledRef.current) await toggleAgent();
+        if (!realtimeRef.current) await toggleAgent();
       })();
     };
     window.addEventListener("keydown", onKey);
@@ -965,15 +965,6 @@ function Workbench() {
                 : "Stop Agent"}
             </button>
 
-            {muted && (
-              <button
-                onClick={() => setMuted(false)}
-                className="px-2.5 py-1 rounded-full border border-rose-500/40 bg-rose-500/10 text-rose-500 text-[11px]"
-                title="Agent muted — click to resume"
-              >
-                Muted
-              </button>
-            )}
           </div>
           <div className="px-5 pb-3 flex items-center justify-center shrink-0">
             <span className="text-[11px] text-secondary">
@@ -1076,18 +1067,6 @@ function Workbench() {
         </section>
       </main>
 
-      <AgentSuggestionCard
-        suggestion={suggestion}
-        onAccept={handleSuggestionAccept}
-        onDismiss={handleSuggestionDismiss}
-        onAskOutLoud={handleAskOutLoud}
-      />
-      <CanvasGhostPatchCard
-        patch={ghostPatch}
-        onAccept={handleGhostAccept}
-        onEdit={handleGhostEdit}
-        onDismiss={handleGhostDismiss}
-      />
     </div>
   );
 }
