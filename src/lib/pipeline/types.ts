@@ -36,6 +36,10 @@ export type BriefBlock = {
   lastEditedBy: "ai" | "user";
   locked: boolean;          // true once user has touched it
   sourceChunkIds: string[];
+  // Stage 3: schema-driven canvas
+  slotId?: string;          // template slot binding
+  isPending?: boolean;      // true → pending_approval (sandbox staging)
+  rationale?: string;       // short LLM justification shown on pending cards
 };
 
 export type BriefDoc = Record<string, BriefBlock>;
