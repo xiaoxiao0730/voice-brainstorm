@@ -1121,9 +1121,12 @@ function Workbench() {
           <div className="flex-1 overflow-y-auto p-8 min-h-0">
             <BriefDocument
               doc={doc}
+              template={template}
               onEditBlock={onEditBlock}
               onDeleteBlock={onDeleteBlock}
-              onAddBlock={onAddBlock}
+              onAcceptPending={onAcceptPending}
+              onRejectPending={onRejectPending}
+              onFocusBlock={onFocusBlock}
               aiLoading={aiLoading}
             />
           </div>
