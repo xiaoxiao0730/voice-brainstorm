@@ -5,7 +5,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { BriefDocument } from "@/components/brief/BriefDocument";
 import { supabase } from "@/integrations/supabase/client";
 
-import { applyBriefPatch } from "@/lib/pipeline/applyBriefPatch";
+
 import { between } from "@/lib/pipeline/orderKey";
 import { createTranscriptBuffer } from "@/lib/pipeline/transcriptBuffer";
 import {
