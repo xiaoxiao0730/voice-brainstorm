@@ -75,15 +75,13 @@ export type BriefNode = {
   sourceChunkIds: string[];
   confidence: number | null;
   tag: string | null;
+  // Stage 3 columns
+  slotId?: string | null;
+  isPending?: boolean;
+  rationale?: string | null;
 };
 
 // ===== DB row <-> BriefBlock mapping =====
-// We persist a BriefBlock as a brief_nodes row:
-//   level: 1->h1, 2->h2, 3->bullet
-//   text: body markdown
-//   tag: heading text (or null when empty)
-//   last_edited_by: "user" implies locked
-//   parent_id: always null in document model
 
 export function blockLevelToDbLevel(level: BriefBlockLevel): BriefLevel {
   if (level === 1) return "h1";
@@ -108,6 +106,9 @@ export function nodeToBlock(n: BriefNode): BriefBlock {
     lastEditedBy: n.lastEditedBy,
     locked: n.lastEditedBy === "user" || n.status === "user_confirmed",
     sourceChunkIds: n.sourceChunkIds,
+    slotId: n.slotId ?? undefined,
+    isPending: !!n.isPending,
+    rationale: n.rationale ?? undefined,
   };
 }
 
@@ -123,6 +124,9 @@ export function blockToNodeUpsert(b: BriefBlock): {
   sourceChunkIds: string[];
   confidence: number | null;
   tag: string | null;
+  slotId: string | null;
+  isPending: boolean;
+  rationale: string | null;
 } {
   return {
     id: b.id,
@@ -136,6 +140,9 @@ export function blockToNodeUpsert(b: BriefBlock): {
     sourceChunkIds: b.sourceChunkIds,
     confidence: null,
     tag: b.heading ? b.heading : null,
+    slotId: b.slotId ?? null,
+    isPending: !!b.isPending,
+    rationale: b.rationale ?? null,
   };
 }
 
