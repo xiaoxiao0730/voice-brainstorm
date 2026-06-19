@@ -132,6 +132,12 @@ function Workbench() {
   const modelRef = useRef(model);
   useEffect(() => { modelRef.current = model; }, [model]);
 
+  // Thinking template
+  const [templateId, setTemplateId] = useState<string>(DEFAULT_TEMPLATE_ID);
+  const template = useMemo(() => getTemplate(templateId), [templateId]);
+  const templateRef = useRef(template);
+  useEffect(() => { templateRef.current = template; }, [template]);
+
   // Refs
   const recognizerRef = useRef<SpeechRecognizerHandle | null>(null);
   const bufferRef = useRef<ReturnType<typeof createTranscriptBuffer> | null>(null);
@@ -148,6 +154,9 @@ function Workbench() {
   const recentTextsRef = useRef<string[]>([]);
   const listeningRef = useRef(listening);
   const agentConnectedAtRef = useRef(Date.now());
+  const focusedBlockRef = useRef<string | null>(null);
+  const injectDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pendingInjectRef = useRef<string | null>(null);
 
   useEffect(() => { docRef.current = doc; }, [doc]);
   useEffect(() => {
@@ -156,6 +165,33 @@ function Workbench() {
     recentTextsRef.current = [];
   }, [activeSessionId]);
   useEffect(() => { listeningRef.current = listening; }, [listening]);
+
+  // Persist template per session
+  useEffect(() => {
+    if (!activeSessionId || typeof window === "undefined") return;
+    const saved = window.localStorage.getItem(`murmur.template.${activeSessionId}`);
+    if (saved && TEMPLATES[saved]?.available) setTemplateId(saved);
+    else setTemplateId(DEFAULT_TEMPLATE_ID);
+  }, [activeSessionId]);
+  useEffect(() => {
+    if (!activeSessionId || typeof window === "undefined") return;
+    window.localStorage.setItem(`murmur.template.${activeSessionId}`, templateId);
+  }, [templateId, activeSessionId]);
+
+  // Debounced injectContext: only fire after 3s of canvas/edit quiet.
+  const scheduleInject = useCallback((note: string) => {
+    pendingInjectRef.current = note;
+    if (injectDebounceRef.current) clearTimeout(injectDebounceRef.current);
+    injectDebounceRef.current = setTimeout(() => {
+      const n = pendingInjectRef.current;
+      pendingInjectRef.current = null;
+      injectDebounceRef.current = null;
+      if (n && realtimeRef.current) {
+        try { realtimeRef.current.injectContext(n); } catch { /* ignore */ }
+      }
+    }, 3000);
+  }, []);
+
 
 
   // Fetch user email
