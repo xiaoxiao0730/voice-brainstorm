@@ -351,81 +351,58 @@ function Workbench() {
         console.warn("persistSegment failed", e);
       }
 
-      // Snapshot of the current document (sorted) for the AI.
-      const snapshot = Object.values(docRef.current)
-        .sort((a, b) => a.orderKey.localeCompare(b.orderKey))
-        .map((b) => ({
-          id: b.id,
-          heading: b.heading,
-          level: b.level,
-          body: b.body,
-          locked: b.locked,
-          lastEditedBy: b.lastEditedBy,
-        }));
-
-      setAiLoading(true);
-      try {
-        const { patches, error: aiErr } = await orchestrate({
-          data: {
-            segment: {
-              segmentId: segment.segmentId,
-              sessionId: segment.sessionId,
-              rawText: segment.rawText,
-              chunkIds: segment.chunkIds,
-            },
-            snapshot,
-            model: modelRef.current,
-          },
-        });
-        if (aiErr) setError(aiErr);
-
-        let current = docRef.current;
-        const toPersist: BriefBlock[] = [];
-        for (const p of patches) {
-          const { doc: next, result } = applyBriefPatch(current, p, {
-            sessionId: segment.sessionId,
-          });
-          current = next;
-          if (result.ok) toPersist.push(result.block);
-        }
-        setDoc(current);
-        docRef.current = current;
-        await Promise.all(toPersist.map(persistBlock));
-      } catch (e: any) {
-        setError(e.message);
-      } finally {
-        setAiLoading(false);
-      }
-
-      // ============= Background Canvas Lane =============
-      // Runs unconditionally on every committed segment. Independent of the
-      // Realtime voice lane — never gated on whether the agent is speaking.
+      // Background Canvas Lane (parallel, schema-driven).
       void runBackgroundCanvas(segment).catch((e) => console.warn("canvas lane failed", e));
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [orchestrate, saveSegment, persistBlock],
+    [saveSegment],
   );
 
   // ---- BACKGROUND CANVAS LANE ----
-  // Reads the committed STT segment, asks a deep model for a structural
-  // addition to the Live Brief, and (when emitted) inserts it inline as a
-  // locked AI-authored block. Optionally whispers a one-line insight into the
-  // active Realtime voice session as silent system context.
+  // Density-gated. Asks the deep model for one pending_approval block bound
+  // to a template slot. User Accept/Reject/Edit signals feed the next call.
   const runBackgroundCanvas = useCallback(
     async (segment: TranscriptSegment) => {
       if (!listeningRef.current) return;
+      // Edit-mode protection: if the user is mid-edit on a block, pause.
+      if (focusedBlockRef.current) return;
       if (!policyRef.current.shouldEmitCanvas()) return;
+
+      // Density gate
+      const verdict = assessDensity(segment.rawText, recentTextsRef.current);
+      if (!verdict.substantive) {
+        try {
+          await logIntv({
+            data: { sessionId: segment.sessionId, segmentId: segment.segmentId, decision: "silent", responseText: verdict.reason },
+          });
+        } catch { /* best effort */ }
+        return;
+      }
 
       recentTextsRef.current = [...recentTextsRef.current, segment.rawText].slice(-6);
 
+      const tpl = templateRef.current;
       const snapshot = Object.values(docRef.current)
         .sort((a, b) => a.orderKey.localeCompare(b.orderKey))
-        .map((b) => ({ heading: b.heading, level: b.level, body: b.body }));
+        .map((b) => ({
+          slotId: b.slotId ?? "",
+          heading: b.heading,
+          body: b.body,
+          isPending: !!b.isPending,
+          locked: b.locked,
+        }));
+
+      const userSignals = signalSnapshot().map((s) => ({
+        type: s.type,
+        slotId: s.slotId,
+        heading: s.heading,
+      }));
 
       setAgentStatus((s) => (s === "speaking" ? s : "thinking"));
+      setAiLoading(true);
 
       let result:
-        | { emit: true; patch: { heading: string; body: string; rationale: string }; insight?: string }
+        | { emit: true; patch: { slotId: string; heading: string; body: string; rationale: string }; insight?: string }
         | { emit: false; insight?: string; error?: string };
       try {
         result = (await generateNudge({
@@ -433,19 +410,22 @@ function Workbench() {
             latestText: segment.rawText,
             recentTexts: recentTextsRef.current.slice(0, -1),
             snapshot,
+            slots: tpl.slots.map((s) => ({ id: s.id, title: s.title, prompt: s.prompt, multi: s.multi })),
+            userSignals,
             model: modelRef.current,
           },
         })) as typeof result;
       } catch (e) {
         console.warn("generateIntervention failed", e);
         setAgentStatus((s) => (s === "speaking" ? s : realtimeRef.current ? "listening" : "off"));
+        setAiLoading(false);
         return;
+      } finally {
+        // aiLoading false on emit happens below
       }
 
-      // Inject background insight into the Realtime voice session, if any.
-      if (result.insight && realtimeRef.current) {
-        try { realtimeRef.current.injectContext(result.insight); } catch { /* ignore */ }
-      }
+      // Whisper background insight (debounced).
+      if (result.insight) scheduleInject(`[background insight] ${result.insight}`);
 
       if (!result.emit) {
         try {
@@ -454,22 +434,30 @@ function Workbench() {
           });
         } catch { /* best effort */ }
         setAgentStatus((s) => (s === "speaking" ? s : realtimeRef.current ? "listening" : "off"));
+        setAiLoading(false);
         return;
       }
 
       const patch = result.patch;
       const sid = segment.sessionId;
-      const keys = Object.values(docRef.current).map((b) => b.orderKey).sort();
+      // Append within slot: order by max orderKey of blocks in that slot.
+      const slotKeys = Object.values(docRef.current)
+        .filter((b) => b.slotId === patch.slotId)
+        .map((b) => b.orderKey)
+        .sort();
       const newBlock: BriefBlock = {
         id: crypto.randomUUID(),
         sessionId: sid,
-        orderKey: between(keys.length ? keys[keys.length - 1] : null, null),
+        orderKey: between(slotKeys.length ? slotKeys[slotKeys.length - 1] : null, null),
         heading: patch.heading,
         level: 3,
         body: patch.body,
         lastEditedBy: "ai",
-        locked: true,
+        locked: false,
         sourceChunkIds: [],
+        slotId: patch.slotId,
+        isPending: true,
+        rationale: patch.rationale,
       };
       const map = { ...docRef.current, [newBlock.id]: newBlock };
       setDoc(map);
@@ -477,22 +465,29 @@ function Workbench() {
       await persistBlock(newBlock);
       policyRef.current.recordCanvas();
 
+      // Cross-lane signal
+      publishSignal({ type: "pending_appear", slotId: patch.slotId, heading: patch.heading, body: patch.body });
+      scheduleInject(summarizeForInject({ type: "pending_appear", slotId: patch.slotId, heading: patch.heading, body: patch.body, ts: Date.now() }));
+
       try {
         await logIntv({
           data: {
             sessionId: segment.sessionId,
             segmentId: segment.segmentId,
-            decision: "canvas",
+            decision: "pending",
             responseText: patch.body,
+            slotId: patch.slotId,
           },
         });
       } catch { /* best effort */ }
 
       setAgentStatus((s) => (s === "speaking" ? s : realtimeRef.current ? "listening" : "off"));
+      setAiLoading(false);
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [generateNudge, logIntv, persistBlock],
+    [generateNudge, logIntv, persistBlock, scheduleInject],
   );
+
 
 
 
