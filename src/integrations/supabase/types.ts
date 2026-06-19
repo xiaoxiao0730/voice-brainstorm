@@ -26,6 +26,7 @@ export type Database = {
           response_text: string | null
           segment_id: string | null
           session_id: string
+          slot_id: string | null
           state_confidence: number | null
         }
         Insert: {
@@ -39,6 +40,7 @@ export type Database = {
           response_text?: string | null
           segment_id?: string | null
           session_id: string
+          slot_id?: string | null
           state_confidence?: number | null
         }
         Update: {
@@ -52,6 +54,7 @@ export type Database = {
           response_text?: string | null
           segment_id?: string | null
           session_id?: string
+          slot_id?: string | null
           state_confidence?: number | null
         }
         Relationships: [
@@ -69,11 +72,14 @@ export type Database = {
           confidence: number | null
           created_at: string
           id: string
+          is_pending: boolean
           last_edited_by: Database["public"]["Enums"]["brief_editor"]
           level: Database["public"]["Enums"]["brief_node_level"]
           order_key: string
           parent_id: string | null
+          rationale: string | null
           session_id: string
+          slot_id: string | null
           source_chunk_ids: string[]
           status: Database["public"]["Enums"]["brief_node_status"]
           tag: string | null
@@ -84,11 +90,14 @@ export type Database = {
           confidence?: number | null
           created_at?: string
           id?: string
+          is_pending?: boolean
           last_edited_by?: Database["public"]["Enums"]["brief_editor"]
           level?: Database["public"]["Enums"]["brief_node_level"]
           order_key: string
           parent_id?: string | null
+          rationale?: string | null
           session_id: string
+          slot_id?: string | null
           source_chunk_ids?: string[]
           status?: Database["public"]["Enums"]["brief_node_status"]
           tag?: string | null
@@ -99,11 +108,14 @@ export type Database = {
           confidence?: number | null
           created_at?: string
           id?: string
+          is_pending?: boolean
           last_edited_by?: Database["public"]["Enums"]["brief_editor"]
           level?: Database["public"]["Enums"]["brief_node_level"]
           order_key?: string
           parent_id?: string | null
+          rationale?: string | null
           session_id?: string
+          slot_id?: string | null
           source_chunk_ids?: string[]
           status?: Database["public"]["Enums"]["brief_node_status"]
           tag?: string | null
