@@ -6,8 +6,9 @@ import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
 const LogInput = z.object({
   sessionId: z.string().uuid(),
   segmentId: z.string().uuid().optional(),
-  decision: z.enum(["silent", "canvas"]),
+  decision: z.enum(["silent", "canvas", "pending", "accept", "reject", "edit"]),
   responseText: z.string().optional(),
+  slotId: z.string().optional(),
 });
 
 const FeedbackInput = z.object({
@@ -27,18 +28,20 @@ export const logIntervention = createServerFn({ method: "POST" })
   .inputValidator((input: unknown) => LogInput.parse(input))
   .handler(async ({ data, context }) => {
     const { supabase } = context;
-    // DB enum still expects legacy values; map "canvas" → "text" for storage.
-    const decision = data.decision === "canvas" ? "text" : data.decision;
+    // DB enum still expects legacy values; map new decisions → "text".
+    const dbDecision = data.decision === "silent" ? "silent" : "text";
     const { data: row, error } = await supabase
       .from("agent_interventions")
       .insert({
         session_id: data.sessionId,
         segment_id: data.segmentId ?? null,
         detected_state: "thinking_continuing",
-        decision,
+        decision: dbDecision,
         response_text: data.responseText ?? null,
         lane: "structural",
-      })
+        slot_id: data.slotId ?? null,
+        intent: data.decision,
+      } as any)
       .select("id")
       .single();
     if (error) throw new Error(error.message);
