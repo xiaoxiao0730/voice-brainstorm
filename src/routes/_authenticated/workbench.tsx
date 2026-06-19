@@ -1074,6 +1074,22 @@ function Workbench() {
             <span className="text-xs uppercase tracking-[0.18em] text-secondary">Live Brief</span>
             <div className="flex items-center gap-2">
               <select
+                value={templateId}
+                onChange={(e) => {
+                  const id = e.target.value;
+                  if (TEMPLATES[id]?.available) setTemplateId(id);
+                }}
+                className="px-3 py-1 bg-surface rounded-full text-xs text-primary border border-auralis hover:bg-surface-variant cursor-pointer focus:outline-none focus:ring-1 focus:ring-primary"
+                aria-label="Thinking template"
+                title="Select thinking template"
+              >
+                {Object.values(TEMPLATES).map((t) => (
+                  <option key={t.id} value={t.id} disabled={!t.available}>
+                    {t.name}
+                  </option>
+                ))}
+              </select>
+              <select
                 value={model}
                 onChange={(e) => setModel(e.target.value as typeof model)}
                 className="px-3 py-1 bg-surface rounded-full text-xs text-primary border border-auralis hover:bg-surface-variant cursor-pointer focus:outline-none focus:ring-1 focus:ring-primary"
