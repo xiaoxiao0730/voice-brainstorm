@@ -21,7 +21,7 @@ export const loadBrief = createServerFn({ method: "GET" })
       .eq("session_id", data.sessionId)
       .order("order_key", { ascending: true });
     if (error) throw new Error(error.message);
-    const nodes: BriefNode[] = (rows ?? []).map((r) => ({
+    const nodes: BriefNode[] = (rows ?? []).map((r: any) => ({
       id: r.id,
       sessionId: r.session_id,
       parentId: r.parent_id,
@@ -33,6 +33,9 @@ export const loadBrief = createServerFn({ method: "GET" })
       sourceChunkIds: r.source_chunk_ids ?? [],
       confidence: r.confidence,
       tag: r.tag,
+      slotId: r.slot_id ?? null,
+      isPending: !!r.is_pending,
+      rationale: r.rationale ?? null,
     }));
     return nodes;
   });
@@ -53,6 +56,9 @@ export const upsertBriefNode = createServerFn({ method: "POST" })
         sourceChunkIds: z.array(z.string()).default([]),
         confidence: z.number().nullable().optional(),
         tag: z.string().nullable().optional(),
+        slotId: z.string().nullable().optional(),
+        isPending: z.boolean().optional(),
+        rationale: z.string().nullable().optional(),
       })
       .parse(input),
   )
@@ -69,7 +75,10 @@ export const upsertBriefNode = createServerFn({ method: "POST" })
       source_chunk_ids: data.sourceChunkIds,
       confidence: data.confidence ?? null,
       tag: data.tag ?? null,
-    });
+      slot_id: data.slotId ?? null,
+      is_pending: data.isPending ?? false,
+      rationale: data.rationale ?? null,
+    } as any);
     if (error) throw new Error(error.message);
     return { ok: true };
   });
@@ -81,6 +90,20 @@ export const deleteBriefNode = createServerFn({ method: "POST" })
   )
   .handler(async ({ data, context }) => {
     const { error } = await context.supabase.from("brief_nodes").delete().eq("id", data.id);
+    if (error) throw new Error(error.message);
+    return { ok: true };
+  });
+
+export const acceptPendingBlock = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((input: unknown) =>
+    z.object({ id: z.string().uuid() }).parse(input),
+  )
+  .handler(async ({ data, context }) => {
+    const { error } = await context.supabase
+      .from("brief_nodes")
+      .update({ is_pending: false, status: "user_confirmed", last_edited_by: "user" } as any)
+      .eq("id", data.id);
     if (error) throw new Error(error.message);
     return { ok: true };
   });
