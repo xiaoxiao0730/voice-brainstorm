@@ -5,7 +5,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { BriefDocument } from "@/components/brief/BriefDocument";
 import { supabase } from "@/integrations/supabase/client";
 
-import { applyBriefPatch } from "@/lib/pipeline/applyBriefPatch";
+
 import { between } from "@/lib/pipeline/orderKey";
 import { createTranscriptBuffer } from "@/lib/pipeline/transcriptBuffer";
 import {
@@ -33,8 +33,8 @@ import {
   persistChunks,
   persistSegment,
   upsertBriefNode,
+  acceptPendingBlock,
 } from "@/lib/brief.functions";
-import { orchestrateSegment } from "@/lib/orchestrate.functions";
 import { exportBriefToDocx } from "@/lib/exportDocx";
 
 import { getRealtimeSession } from "@/lib/agent/realtime.functions";
@@ -42,6 +42,9 @@ import { connectRealtime, type RealtimeClient } from "@/lib/agent/realtimeClient
 import { generateIntervention } from "@/lib/agent/responseGenerator.functions";
 import { logIntervention } from "@/lib/agent/interventionLog.functions";
 import { createPolicyEngine } from "@/lib/agent/interventionPolicy";
+import { assessDensity } from "@/lib/agent/segmentGate";
+import { publish as publishSignal, snapshot as signalSnapshot, summarizeForInject } from "@/lib/agent/signalBus";
+import { DEFAULT_TEMPLATE_ID, getTemplate, TEMPLATES } from "@/lib/pipeline/thinkingTemplate";
 import { type AgentStatus } from "@/components/agent/AgentPanel";
 
 export const Route = createFileRoute("/_authenticated/workbench")({
@@ -91,9 +94,9 @@ function Workbench() {
   const loadB = useServerFn(loadBrief);
   const upsertN = useServerFn(upsertBriefNode);
   const deleteN = useServerFn(deleteBriefNode);
+  const acceptN = useServerFn(acceptPendingBlock);
   const saveChunks = useServerFn(persistChunks);
   const saveSegment = useServerFn(persistSegment);
-  const orchestrate = useServerFn(orchestrateSegment);
   const generateNudge = useServerFn(generateIntervention);
   const logIntv = useServerFn(logIntervention);
   const mintRealtime = useServerFn(getRealtimeSession);
@@ -129,6 +132,12 @@ function Workbench() {
   const modelRef = useRef(model);
   useEffect(() => { modelRef.current = model; }, [model]);
 
+  // Thinking template
+  const [templateId, setTemplateId] = useState<string>(DEFAULT_TEMPLATE_ID);
+  const template = useMemo(() => getTemplate(templateId), [templateId]);
+  const templateRef = useRef(template);
+  useEffect(() => { templateRef.current = template; }, [template]);
+
   // Refs
   const recognizerRef = useRef<SpeechRecognizerHandle | null>(null);
   const bufferRef = useRef<ReturnType<typeof createTranscriptBuffer> | null>(null);
@@ -145,6 +154,9 @@ function Workbench() {
   const recentTextsRef = useRef<string[]>([]);
   const listeningRef = useRef(listening);
   const agentConnectedAtRef = useRef(Date.now());
+  const focusedBlockRef = useRef<string | null>(null);
+  const injectDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pendingInjectRef = useRef<string | null>(null);
 
   useEffect(() => { docRef.current = doc; }, [doc]);
   useEffect(() => {
@@ -153,6 +165,33 @@ function Workbench() {
     recentTextsRef.current = [];
   }, [activeSessionId]);
   useEffect(() => { listeningRef.current = listening; }, [listening]);
+
+  // Persist template per session
+  useEffect(() => {
+    if (!activeSessionId || typeof window === "undefined") return;
+    const saved = window.localStorage.getItem(`murmur.template.${activeSessionId}`);
+    if (saved && TEMPLATES[saved]?.available) setTemplateId(saved);
+    else setTemplateId(DEFAULT_TEMPLATE_ID);
+  }, [activeSessionId]);
+  useEffect(() => {
+    if (!activeSessionId || typeof window === "undefined") return;
+    window.localStorage.setItem(`murmur.template.${activeSessionId}`, templateId);
+  }, [templateId, activeSessionId]);
+
+  // Debounced injectContext: only fire after 3s of canvas/edit quiet.
+  const scheduleInject = useCallback((note: string) => {
+    pendingInjectRef.current = note;
+    if (injectDebounceRef.current) clearTimeout(injectDebounceRef.current);
+    injectDebounceRef.current = setTimeout(() => {
+      const n = pendingInjectRef.current;
+      pendingInjectRef.current = null;
+      injectDebounceRef.current = null;
+      if (n && realtimeRef.current) {
+        try { realtimeRef.current.injectContext(n); } catch { /* ignore */ }
+      }
+    }, 3000);
+  }, []);
+
 
 
   // Fetch user email
@@ -312,81 +351,58 @@ function Workbench() {
         console.warn("persistSegment failed", e);
       }
 
-      // Snapshot of the current document (sorted) for the AI.
-      const snapshot = Object.values(docRef.current)
-        .sort((a, b) => a.orderKey.localeCompare(b.orderKey))
-        .map((b) => ({
-          id: b.id,
-          heading: b.heading,
-          level: b.level,
-          body: b.body,
-          locked: b.locked,
-          lastEditedBy: b.lastEditedBy,
-        }));
-
-      setAiLoading(true);
-      try {
-        const { patches, error: aiErr } = await orchestrate({
-          data: {
-            segment: {
-              segmentId: segment.segmentId,
-              sessionId: segment.sessionId,
-              rawText: segment.rawText,
-              chunkIds: segment.chunkIds,
-            },
-            snapshot,
-            model: modelRef.current,
-          },
-        });
-        if (aiErr) setError(aiErr);
-
-        let current = docRef.current;
-        const toPersist: BriefBlock[] = [];
-        for (const p of patches) {
-          const { doc: next, result } = applyBriefPatch(current, p, {
-            sessionId: segment.sessionId,
-          });
-          current = next;
-          if (result.ok) toPersist.push(result.block);
-        }
-        setDoc(current);
-        docRef.current = current;
-        await Promise.all(toPersist.map(persistBlock));
-      } catch (e: any) {
-        setError(e.message);
-      } finally {
-        setAiLoading(false);
-      }
-
-      // ============= Background Canvas Lane =============
-      // Runs unconditionally on every committed segment. Independent of the
-      // Realtime voice lane — never gated on whether the agent is speaking.
+      // Background Canvas Lane (parallel, schema-driven).
       void runBackgroundCanvas(segment).catch((e) => console.warn("canvas lane failed", e));
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [orchestrate, saveSegment, persistBlock],
+    [saveSegment],
   );
 
   // ---- BACKGROUND CANVAS LANE ----
-  // Reads the committed STT segment, asks a deep model for a structural
-  // addition to the Live Brief, and (when emitted) inserts it inline as a
-  // locked AI-authored block. Optionally whispers a one-line insight into the
-  // active Realtime voice session as silent system context.
+  // Density-gated. Asks the deep model for one pending_approval block bound
+  // to a template slot. User Accept/Reject/Edit signals feed the next call.
   const runBackgroundCanvas = useCallback(
     async (segment: TranscriptSegment) => {
       if (!listeningRef.current) return;
+      // Edit-mode protection: if the user is mid-edit on a block, pause.
+      if (focusedBlockRef.current) return;
       if (!policyRef.current.shouldEmitCanvas()) return;
+
+      // Density gate
+      const verdict = assessDensity(segment.rawText, recentTextsRef.current);
+      if (!verdict.substantive) {
+        try {
+          await logIntv({
+            data: { sessionId: segment.sessionId, segmentId: segment.segmentId, decision: "silent", responseText: verdict.reason },
+          });
+        } catch { /* best effort */ }
+        return;
+      }
 
       recentTextsRef.current = [...recentTextsRef.current, segment.rawText].slice(-6);
 
+      const tpl = templateRef.current;
       const snapshot = Object.values(docRef.current)
         .sort((a, b) => a.orderKey.localeCompare(b.orderKey))
-        .map((b) => ({ heading: b.heading, level: b.level, body: b.body }));
+        .map((b) => ({
+          slotId: b.slotId ?? "",
+          heading: b.heading,
+          body: b.body,
+          isPending: !!b.isPending,
+          locked: b.locked,
+        }));
+
+      const userSignals = signalSnapshot().map((s) => ({
+        type: s.type,
+        slotId: s.slotId,
+        heading: s.heading,
+      }));
 
       setAgentStatus((s) => (s === "speaking" ? s : "thinking"));
+      setAiLoading(true);
 
       let result:
-        | { emit: true; patch: { heading: string; body: string; rationale: string }; insight?: string }
+        | { emit: true; patch: { slotId: string; heading: string; body: string; rationale: string }; insight?: string }
         | { emit: false; insight?: string; error?: string };
       try {
         result = (await generateNudge({
@@ -394,19 +410,22 @@ function Workbench() {
             latestText: segment.rawText,
             recentTexts: recentTextsRef.current.slice(0, -1),
             snapshot,
+            slots: tpl.slots.map((s) => ({ id: s.id, title: s.title, prompt: s.prompt, multi: s.multi })),
+            userSignals,
             model: modelRef.current,
           },
         })) as typeof result;
       } catch (e) {
         console.warn("generateIntervention failed", e);
         setAgentStatus((s) => (s === "speaking" ? s : realtimeRef.current ? "listening" : "off"));
+        setAiLoading(false);
         return;
+      } finally {
+        // aiLoading false on emit happens below
       }
 
-      // Inject background insight into the Realtime voice session, if any.
-      if (result.insight && realtimeRef.current) {
-        try { realtimeRef.current.injectContext(result.insight); } catch { /* ignore */ }
-      }
+      // Whisper background insight (debounced).
+      if (result.insight) scheduleInject(`[background insight] ${result.insight}`);
 
       if (!result.emit) {
         try {
@@ -415,22 +434,30 @@ function Workbench() {
           });
         } catch { /* best effort */ }
         setAgentStatus((s) => (s === "speaking" ? s : realtimeRef.current ? "listening" : "off"));
+        setAiLoading(false);
         return;
       }
 
       const patch = result.patch;
       const sid = segment.sessionId;
-      const keys = Object.values(docRef.current).map((b) => b.orderKey).sort();
+      // Append within slot: order by max orderKey of blocks in that slot.
+      const slotKeys = Object.values(docRef.current)
+        .filter((b) => b.slotId === patch.slotId)
+        .map((b) => b.orderKey)
+        .sort();
       const newBlock: BriefBlock = {
         id: crypto.randomUUID(),
         sessionId: sid,
-        orderKey: between(keys.length ? keys[keys.length - 1] : null, null),
+        orderKey: between(slotKeys.length ? slotKeys[slotKeys.length - 1] : null, null),
         heading: patch.heading,
         level: 3,
         body: patch.body,
         lastEditedBy: "ai",
-        locked: true,
+        locked: false,
         sourceChunkIds: [],
+        slotId: patch.slotId,
+        isPending: true,
+        rationale: patch.rationale,
       };
       const map = { ...docRef.current, [newBlock.id]: newBlock };
       setDoc(map);
@@ -438,22 +465,29 @@ function Workbench() {
       await persistBlock(newBlock);
       policyRef.current.recordCanvas();
 
+      // Cross-lane signal
+      publishSignal({ type: "pending_appear", slotId: patch.slotId, heading: patch.heading, body: patch.body });
+      scheduleInject(summarizeForInject({ type: "pending_appear", slotId: patch.slotId, heading: patch.heading, body: patch.body, ts: Date.now() }));
+
       try {
         await logIntv({
           data: {
             sessionId: segment.sessionId,
             segmentId: segment.segmentId,
-            decision: "canvas",
+            decision: "pending",
             responseText: patch.body,
+            slotId: patch.slotId,
           },
         });
       } catch { /* best effort */ }
 
       setAgentStatus((s) => (s === "speaking" ? s : realtimeRef.current ? "listening" : "off"));
+      setAiLoading(false);
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [generateNudge, logIntv, persistBlock],
+    [generateNudge, logIntv, persistBlock, scheduleInject],
   );
+
 
 
 
@@ -713,6 +747,7 @@ function Workbench() {
         body: patch.body !== undefined ? patch.body : existing.body,
         lastEditedBy: "user",
         locked: true,
+        isPending: false,
       };
       const map = { ...docRef.current, [id]: next };
       setDoc(map);
@@ -724,42 +759,74 @@ function Workbench() {
       const t = setTimeout(() => {
         editTimers.current.delete(id);
         void persistBlock(next);
+        publishSignal({ type: "edit", slotId: next.slotId ?? "", heading: next.heading, body: next.body });
+        scheduleInject(summarizeForInject({ type: "edit", slotId: next.slotId ?? "", heading: next.heading, body: next.body, ts: Date.now() }));
+        void logIntv({
+          data: { sessionId: next.sessionId, decision: "edit", slotId: next.slotId, responseText: next.body },
+        }).catch(() => undefined);
       }, 600);
       editTimers.current.set(id, t);
     },
-    [persistBlock],
+    [persistBlock, logIntv, scheduleInject],
   );
 
   const onDeleteBlock = useCallback(
     async (id: string) => {
+      const existing = docRef.current[id];
       const next = { ...docRef.current };
       delete next[id];
       setDoc(next);
       docRef.current = next;
       await deleteN({ data: { id } }).catch((e) => console.warn("delete failed", e));
+      if (existing) {
+        publishSignal({ type: "reject", slotId: existing.slotId ?? "", heading: existing.heading, body: existing.body });
+        scheduleInject(summarizeForInject({ type: "reject", slotId: existing.slotId ?? "", heading: existing.heading, body: existing.body, ts: Date.now() }));
+      }
     },
-    [deleteN],
+    [deleteN, scheduleInject],
   );
 
-  const onAddBlock = useCallback(async () => {
-    if (!activeSessionId) return;
-    const keys = Object.values(docRef.current).map((b) => b.orderKey).sort();
-    const newBlock: BriefBlock = {
-      id: crypto.randomUUID(),
-      sessionId: activeSessionId,
-      orderKey: between(keys.length ? keys[keys.length - 1] : null, null),
-      heading: "",
-      level: 3,
-      body: "",
-      lastEditedBy: "user",
-      locked: true,
-      sourceChunkIds: [],
-    };
-    const map = { ...docRef.current, [newBlock.id]: newBlock };
-    setDoc(map);
-    docRef.current = map;
-    await persistBlock(newBlock);
-  }, [activeSessionId, persistBlock]);
+  const onAcceptPending = useCallback(
+    async (id: string) => {
+      const existing = docRef.current[id];
+      if (!existing) return;
+      const next: BriefBlock = { ...existing, isPending: false, locked: true, lastEditedBy: "user" };
+      const map = { ...docRef.current, [id]: next };
+      setDoc(map);
+      docRef.current = map;
+      await acceptN({ data: { id } }).catch((e) => console.warn("accept failed", e));
+      publishSignal({ type: "accept", slotId: next.slotId ?? "", heading: next.heading, body: next.body });
+      scheduleInject(summarizeForInject({ type: "accept", slotId: next.slotId ?? "", heading: next.heading, body: next.body, ts: Date.now() }));
+      void logIntv({
+        data: { sessionId: next.sessionId, decision: "accept", slotId: next.slotId, responseText: next.body },
+      }).catch(() => undefined);
+    },
+    [acceptN, logIntv, scheduleInject],
+  );
+
+  const onRejectPending = useCallback(
+    async (id: string) => {
+      const existing = docRef.current[id];
+      const next = { ...docRef.current };
+      delete next[id];
+      setDoc(next);
+      docRef.current = next;
+      await deleteN({ data: { id } }).catch((e) => console.warn("reject failed", e));
+      if (existing) {
+        publishSignal({ type: "reject", slotId: existing.slotId ?? "", heading: existing.heading, body: existing.body });
+        scheduleInject(summarizeForInject({ type: "reject", slotId: existing.slotId ?? "", heading: existing.heading, body: existing.body, ts: Date.now() }));
+        void logIntv({
+          data: { sessionId: existing.sessionId, decision: "reject", slotId: existing.slotId, responseText: existing.body },
+        }).catch(() => undefined);
+      }
+    },
+    [deleteN, logIntv, scheduleInject],
+  );
+
+  const onFocusBlock = useCallback((id: string | null) => {
+    focusedBlockRef.current = id;
+  }, []);
+
 
   const liveText = useMemo(
     () => (finals.map((f) => f.text).join(" ") + " " + partial).trim(),
@@ -1007,6 +1074,22 @@ function Workbench() {
             <span className="text-xs uppercase tracking-[0.18em] text-secondary">Live Brief</span>
             <div className="flex items-center gap-2">
               <select
+                value={templateId}
+                onChange={(e) => {
+                  const id = e.target.value;
+                  if (TEMPLATES[id]?.available) setTemplateId(id);
+                }}
+                className="px-3 py-1 bg-surface rounded-full text-xs text-primary border border-auralis hover:bg-surface-variant cursor-pointer focus:outline-none focus:ring-1 focus:ring-primary"
+                aria-label="Thinking template"
+                title="Select thinking template"
+              >
+                {Object.values(TEMPLATES).map((t) => (
+                  <option key={t.id} value={t.id} disabled={!t.available}>
+                    {t.name}
+                  </option>
+                ))}
+              </select>
+              <select
                 value={model}
                 onChange={(e) => setModel(e.target.value as typeof model)}
                 className="px-3 py-1 bg-surface rounded-full text-xs text-primary border border-auralis hover:bg-surface-variant cursor-pointer focus:outline-none focus:ring-1 focus:ring-primary"
@@ -1054,9 +1137,12 @@ function Workbench() {
           <div className="flex-1 overflow-y-auto p-8 min-h-0">
             <BriefDocument
               doc={doc}
+              template={template}
               onEditBlock={onEditBlock}
               onDeleteBlock={onDeleteBlock}
-              onAddBlock={onAddBlock}
+              onAcceptPending={onAcceptPending}
+              onRejectPending={onRejectPending}
+              onFocusBlock={onFocusBlock}
               aiLoading={aiLoading}
             />
           </div>

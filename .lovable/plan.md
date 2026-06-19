@@ -1,76 +1,145 @@
-## Goal
+## 目标
 
-Replace the current regex-routed, mutex-gated two-lane setup with a **真正并行的双流水线**:
+将当前的 "Background Lane 直接写入 Locked Block" 模型升级为：选择模板后生成**Schema 驱动的 7 卡片画布 + Inline Pending Approval + Edit-as-Signal + Cross-Lane Shadow Sync**。Realtime Lane 严格只读且语音克制（≤20 字），慢模型只产出结构化补丁注入到固定容器内的"沙盒暂存区"，用户的 Accept/Delete/Edit 全部作为高权重信号反哺。
 
-- **Realtime Lane** — OpenAI Realtime 用原生 server_vad + create_response，担任实时引导启发的语音陪伴者；只负责语音，不碰画布。
-- **Background Canvas Lane** — 每条 committed STT 文本无条件触发后台慢模型，直接产出 Ghost Patch 流式渲染到 Live Brief 不弹出卡片而是直接在live brief上生成总结和Agent回复；不再被"Realtime 在说话"或"Fast Lane 刚说过"降级/阻塞。
-- **可选反哺** — 后台得到重大洞察时，通过 Realtime data channel 把简短结论作为 system 增量上下文注入当前 session，让后续语音回答自然带上深度知识。
+---
 
-## Changes
+## 1. Schema 驱动的画布容器（新增）
 
-### 1. `src/lib/agent/realtimeClient.ts` — 启用原生 Realtime 对谈
+新建 `src/lib/pipeline/thinkingTemplate.ts`：
 
-- `session.update` 改为：
-  - `instructions`：换成"苏格拉底式头脑风暴引导教练"提示词 — 简短自然语音回应；倾听完整想法时保持沉默；只在用户停顿/出现关键缺口时抛出一句轻量启发式提问；**明确禁止修改 Live Brief 或调用任何 patch**。
-  - `audio.input.turn_detection`: `type: "server_vad"`, `create_response: true`, `interrupt_response: true`（阈值/padding 保留现值）。
-- 移除"silent by default / never start a turn"那段约束。
-- 新增 `injectContext(note: string)` 方法：通过 data channel 发送 `conversation.item.create`（role: system，简短上下文），不触发 response，仅作为后续 turn 的隐式知识。
-- 保留 `speak()` / `cancel()` / `isAgentSpeaking()` API（speak 仍可用于把后台洞察作为正式开口的兜底）。
+- 新增一个选项供用户选择模板：定义 `ThinkingTemplate` 类型与默认模板 `productThinkingArtifact`，包含 7 个固定 slot：  
+`current_question`  / `user journey` / `hypothesis` / `info & observation`/ `solution` / `open_questions` / `next_actions`
+- 每个 slot 含 `id`, `title`, `prompt`（给 LLM 的填充提示）, `multi`（是否允许多条目）。
+- 导出 `TEMPLATES: Record<string, ThinkingTemplate>`，预留未来扩展（Research / Writing / Decision 等）。
 
-### 2. 删除前端正则抢答链路
+扩展 `src/lib/pipeline/types.ts` 中的 `BriefBlock`：
 
-- 删除文件：
-  - `src/lib/agent/fastIntent.ts`
-  - `src/lib/agent/fastReply.functions.ts`
-- 从 `src/routes/_authenticated/workbench.tsx` 移除所有相关 import、`runFastLane`、`fastReplyFn`、`classifyFastIntent` 调用、`agentMode`/`muted`/control 分支、`AgentSuggestionCard` 文本卡的 fast-lane 用法。
-- 不再需要时也清理 `loadAgentMode/saveAgentMode` 的引用（`agentMode.ts` 文件本身可保留为 no-op 或一并删除——见下方"待定"）。
+- 新增 `slotId?: string`（绑定到模板 slot）
+- 新增 `status: 'committed' | 'pending_approval'`（默认 `committed`，旧数据兼容）
+- 新增 `rationale?: string`（慢模型给出的简短依据，展示在 pending 卡片上）
 
-### 3. `src/lib/agent/interventionPolicy.ts` — 大幅瘦身
+数据库迁移：`brief_nodes` 表追加 `slot_id text`, `status text default 'committed'`, `rationale text`；对应 RLS 策略保持不变。
 
-彻底删除互斥状态机，只保留极小的"反复提议防抖"以避免画布被刷屏：
+---
 
-- 移除 `fast` lane 状态、`isFastRecent`、`recordFast`、`MIN_VOICE_GAP_MS`、voice 降级逻辑、`BackgroundDecision` 中的 voice/text_suggestion 分支。
-- 新 API：
-  - `shouldEmitCanvas(): boolean` — 仅基于"距上次 ghost patch ≥ N 秒 且 当前没有未消费的 ghost"做节流，默认放行。
-  - `recordCanvas()` / `recordFeedback()` 仍保留，用于轻量节流和负反馈惩罚。
-- 不再读"Realtime 是否在说话"。
+## 2. 画布渲染重构（`BriefDocument` / `BriefCanvas`）
 
-### 4. `src/lib/agent/responseGenerator.functions.ts` — 只保留 canvas 路径
+将原本的扁平 block 列表改为 **按 slot 分组** 的 7 个稳定容器卡片：
 
-- 删除 `SYSTEM_TEXT_VOICE`、`level` 入参中的 `text` / `voice` 分支与对应代码路径。
-- `InputSchema` 移除 `level`；handler 永远走 canvas/Ghost Patch 流程。
-- 返回结构增加可选 `insight?: string`（≤120 字的核心洞察短句，供 Realtime 注入；模型在 schema 中 optional 输出）。
-- 升级默认模型到更深推理档（如 `google/gemini-2.5-pro`），保持 prompt 强调"基于用户原话和现有 brief，不要编造"。
+```text
+┌─ Current Question ──────────┐
+│ committed item ...          │
+│ ┌─ pending (dashed green) ─┐│
+│ │ AI proposal              ││
+│ │ rationale: ...           ││
+│ │ [✓ Accept] [✕ Delete]    ││
+│ └──────────────────────────┘│
+└─────────────────────────────┘
+```
 
-### 5. `src/routes/_authenticated/workbench.tsx` — 简化触发链
+- 每个 slot 卡片显示 `title`，其下按 `orderKey` 排列归属该 slot 的 blocks。
+- `status === 'pending_approval'` 的 block 渲染为浅绿背景 + 虚线边框 + Accept/Delete 按钮；committed block 渲染为普通行内文本，仍可直接编辑。
+- 空 slot 显示淡色 placeholder（来自 `slot.prompt`），不显示空白卡片骨架。
+- 在慢模型流式输出（Streaming）未完成前，行内绿框应处于 Loading 或禁用点击状态，右上角的工具栏 `[✓ Accept] [✕ Delete]` 必须在流式生成完全结束后（`done: true`）再淡入显现，防止用户误触
 
-- `onSegment` 中：移除 `runFastLane` 调用；**无条件** `void runBackgroundLane(segment)`，不再依赖 `agentEnabledRef`（只要 `listening` 就跑画布）。
-- 重写 `runBackgroundLane`：
-  - 不再调 `classifyFastIntent` 跳过控制语；不再调 `detectThinkingState`（或保留作为节流信号，但不影响是否触发）。
-  - 直接调用 `generateNudge`（canvas 模式），拿到 patch → `setGhostPatch(...)`。
-  - 若返回 `insight` 且 `realtimeRef.current` 在线 → `realtimeRef.current.injectContext(insight)`（best-effort，失败仅 warn）。
-  - 不再因 `realtimeRef.current?.isAgentSpeaking()` 阻塞或降级。
-- 删除：`runFastLane`、所有 `AgentMode`/`muted`/`changeAgentMode`/`fastCannedReply` 相关 state、`AgentSuggestionCard` 文本悬浮卡（保留 `CanvasGhostPatchCard`）。
-- `agentEnabled` 现在只控制 **Realtime 语音**（即"Talk with Agent"按钮）；画布 lane 跟随 `listening` 自动开。
-- 顺手清理 `lane`/`intent`/`fast` 相关字段的 `logIntervention` 入参，统一 `lane: "structural"`（或重命名为 `canvas`，二选一保持一致）。
+新增 props/回调：`onAcceptPending(blockId)`, `onRejectPending(blockId)`, `onEditCommitted(blockId, body)`（已有的 edit 逻辑复用），并把这些操作通过新的 `signalBus` 转发（见第 5 节）。
 
-### 6. 类型 & 清理
+---
 
-- `interventionLog.functions.ts`：若 `intent` 列只剩 fast lane 在用，去掉对应入参 schema 字段，避免无效字段污染。
-- `agentMode.ts`：若 UI 上 mode 切换被移除，文件一并删除并移除 import。
-- `BackgroundDecision` 类型仅保留 `"silent" | "canvas"`，全项目 grep 替换。
-- 跑 `bun run typecheck`（由 harness 自动执行）确认无残留引用。
+## 3. Background Canvas Lane 重做
 
-7.重做Live Brief 画布交互形式，取消ghost patch card 改为“行内暂存与二次确认”机制（Inline Diff / Staging Mode）
+### 3.1 智能门控（Segment Sender）
 
-不要使用分离的悬浮提示卡片，而是采用类似 Cursor/Copilot 等 Coding 平台的 **“行内 Diff 暂存”** 逻辑：
+新建 `src/lib/agent/segmentGate.ts`：
 
-## Out of scope
+- 纯函数 `assessDensity(segment, recentTexts): { substantive: boolean; reason: string }`。
+- 启发式 + 关键字过滤：丢弃 <8 字 / 纯填充词 / 与最近 segment 重复度高的片段。
+- `onSegment` 中若 `substantive === false`，跳过慢模型调用（仍写入 transcript），并 `logIntervention({ decision: 'silent', reason })`。
+- 当且仅当前端某个卡片处于激活编辑状态（Active Edit Mode）时，`segment sender` 必须暂停触发后台慢模型，优先保护用户的现场输入。
 
-- 不动 STT (`azureRecognizer.ts`)、`transcriptBuffer.ts`、`applyBriefPatch.ts`、`orchestrate.functions.ts` 的核心逻辑。
-- 不改 DB schema；只清理写入字段。
+### 3.2 慢模型产出 Slot Patch
 
-## 待定（一个小决定，可在实现时直接选）
+重写 `src/lib/agent/responseGenerator.functions.ts` 的输出契约：
 
-`agentMode.ts`（listen/guide/answer 三档）随 Fast Lane 一起删除？  
-默认：**删除** —— 新架构下 Realtime 永远是"guide"风格，由 prompt 控制；mode 切换没有承载组件。如果你想保留作为未来"静音/激进度"开关，告诉我，我会留文件但移除当前 UI 引用。
+- 输入新增：`template: ThinkingTemplate`、`snapshot` 按 slot 分组、`userSignals`（最近的 accept/reject/edit 事件，见 5.2）。
+- 系统提示：明确告知模型 "只能产生对 7 个 slot 之一的增量补丁，且作为 pending_approval 注入；用户的拒绝/编辑是强信号，禁止重复被拒绝的提案"。
+- 输出 schema：
+  ```ts
+  { emit: boolean;
+    patch?: { slotId: SlotId; heading: string; body: string; rationale: string };
+    insight?: string; // ≤120 字，供 Realtime 影子同步
+  }
+  ```
+- 移除当前默认追加到末尾、`level: 3` 写死的逻辑。
+
+### 3.3 注入为 Pending Block
+
+`workbench.tsx` 中 `runBackgroundCanvas`：
+
+- 当 `result.emit` 时，构造 block 时设置 `slotId = result.patch.slotId`, `status = 'pending_approval'`, `locked = false`, `lastEditedBy = 'ai'`, `rationale = result.patch.rationale`。
+- 持久化到 DB（带 status='pending_approval'）。
+- 不再自动 commit；等待用户 Accept。
+
+---
+
+## 4. Accept / Delete / Edit 行为
+
+新增 server fn（或复用 `upsertBriefNode` + 状态字段）：
+
+- `acceptPendingBlock(blockId)`：将 `status` 改为 `committed`，写一条 `user_signal` 日志。
+- `rejectPendingBlock(blockId)`：从 doc 中移除（DB 行删除），写 `user_signal` 日志。
+- `editCommittedBlock`（沿用现有 upsert 路径，但额外写 `user_signal` 日志）。
+
+`signalBus`（见下节）将这些事件累积到 `recentSignals` 里，下一次慢模型调用时随 input 一起发送。
+
+---
+
+## 5. Cross-Lane Shadow Sync（影子同步回路）
+
+### 5.1 `src/lib/agent/signalBus.ts`（新增轻量内存总线）
+
+- 维护 `recentSignals: Array<{ type: 'accept' | 'reject' | 'edit' | 'pending_appear'; slotId; heading; ts }>`（环形，最近 12 条）。
+- 暴露 `publish(signal)` 和 `snapshot()`，被 workbench 的 Accept/Reject/Edit handler 与 `runBackgroundCanvas`（产生 pending 时）调用。
+
+### 5.2 Realtime 注入
+
+- 任何 `publish` 调用后，提炼出一条极简文本（如 `"[background insight] Pending hypothesis in slot=pain: 用户怕踩坑"`），通过 `realtimeRef.current?.injectContext(...)` 异步推给 Realtime Session。
+- Realtime system prompt 强化（在 `realtimeClient.ts`）：
+  - 角色：头脑风暴合作伙伴
+  - 硬约束："每次开口 ≤20 个字；右侧画布不是你的领地，禁止复述其内容；只在用户明显停顿或直接发问时才说话；优先识别用户的困惑，进行启发性追问或总结。"
+  - 头脑风暴合作伙伴处理 `[background insight]`：仅作为"知识更新"吸收，不主动播报。
+  - `injectContext` 的触发必须加上至少 3 秒的防抖（Debounce），只有当画布停止流式更新、且用户停止手动编辑 3 秒后，再将最终状态一次性反哺给语音 Agent。
+
+---
+
+## 6. 顶部导航 + 模板选择器
+
+`workbench.tsx`：
+
+- 在侧边栏顶部（或主区头部）加 `<select>` "思维模板"，默认 `Product Thinking Artifact`。
+- 当前阶段只暴露默认模板（其他模板灰显 "Coming soon"），但读取/写入路径完全打通，所有 slot ID 由 `ThinkingTemplate` 驱动。
+- 模板选择持久化到 `localStorage` (`murmur.template.${sessionId}`)，loadBrief 后用所选模板分组渲染。
+
+---
+
+## 7. 清理与简化
+
+- `interventionPolicy.ts`：保留 `shouldEmitCanvas` 节流（4s 防抖），但语义改为"两次 pending 提案之间的最小间隔"。
+- 移除当前 `responseGenerator` 中关于 `level: 3` / 直接追加末尾的所有遗留逻辑。
+- `AgentPanel.tsx`：状态指示器保留（off / listening / thinking / speaking），不再渲染任何 suggestion 卡片。
+- 日志 `interventionLog`：`decision` 扩展 `'pending'`（取代之前的 `'canvas'`），新增 `slotId` 列。
+
+---
+
+## 技术细节附录
+
+**文件改动清单**
+
+- 新增：`src/lib/pipeline/thinkingTemplate.ts`, `src/lib/agent/segmentGate.ts`, `src/lib/agent/signalBus.ts`
+- 编辑：`src/lib/pipeline/types.ts`, `src/lib/pipeline/applyBriefPatch.ts`（处理 slotId/status）, `src/lib/brief.functions.ts`（增删字段 + accept/reject server fn）, `src/lib/agent/responseGenerator.functions.ts`, `src/lib/agent/realtimeClient.ts`, `src/lib/agent/interventionPolicy.ts`, `src/lib/agent/interventionLog.functions.ts`, `src/components/brief/BriefDocument.tsx`, `src/components/brief/BriefCanvas.tsx`, `src/components/agent/AgentPanel.tsx`, `src/routes/_authenticated/workbench.tsx`
+- 迁移：新增 supabase migration 给 `brief_nodes` 加 `slot_id` / `status` / `rationale` 列 + 索引
+
+**类型清洁**：所有新增字段在 `BriefBlock` 上都标注可选并提供默认值（DB 端 default `'committed'`），保证现有 session 加载不破坏。
+
+**Out of scope**：STT/transcriptBuffer 不动；多模板（除默认）暂不实现。
