@@ -94,9 +94,9 @@ function Workbench() {
   const loadB = useServerFn(loadBrief);
   const upsertN = useServerFn(upsertBriefNode);
   const deleteN = useServerFn(deleteBriefNode);
+  const acceptN = useServerFn(acceptPendingBlock);
   const saveChunks = useServerFn(persistChunks);
   const saveSegment = useServerFn(persistSegment);
-  const orchestrate = useServerFn(orchestrateSegment);
   const generateNudge = useServerFn(generateIntervention);
   const logIntv = useServerFn(logIntervention);
   const mintRealtime = useServerFn(getRealtimeSession);
