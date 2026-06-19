@@ -747,6 +747,7 @@ function Workbench() {
         body: patch.body !== undefined ? patch.body : existing.body,
         lastEditedBy: "user",
         locked: true,
+        isPending: false,
       };
       const map = { ...docRef.current, [id]: next };
       setDoc(map);
@@ -758,42 +759,74 @@ function Workbench() {
       const t = setTimeout(() => {
         editTimers.current.delete(id);
         void persistBlock(next);
+        publishSignal({ type: "edit", slotId: next.slotId ?? "", heading: next.heading, body: next.body });
+        scheduleInject(summarizeForInject({ type: "edit", slotId: next.slotId ?? "", heading: next.heading, body: next.body, ts: Date.now() }));
+        void logIntv({
+          data: { sessionId: next.sessionId, decision: "edit", slotId: next.slotId, responseText: next.body },
+        }).catch(() => undefined);
       }, 600);
       editTimers.current.set(id, t);
     },
-    [persistBlock],
+    [persistBlock, logIntv, scheduleInject],
   );
 
   const onDeleteBlock = useCallback(
     async (id: string) => {
+      const existing = docRef.current[id];
       const next = { ...docRef.current };
       delete next[id];
       setDoc(next);
       docRef.current = next;
       await deleteN({ data: { id } }).catch((e) => console.warn("delete failed", e));
+      if (existing) {
+        publishSignal({ type: "reject", slotId: existing.slotId ?? "", heading: existing.heading, body: existing.body });
+        scheduleInject(summarizeForInject({ type: "reject", slotId: existing.slotId ?? "", heading: existing.heading, body: existing.body, ts: Date.now() }));
+      }
     },
-    [deleteN],
+    [deleteN, scheduleInject],
   );
 
-  const onAddBlock = useCallback(async () => {
-    if (!activeSessionId) return;
-    const keys = Object.values(docRef.current).map((b) => b.orderKey).sort();
-    const newBlock: BriefBlock = {
-      id: crypto.randomUUID(),
-      sessionId: activeSessionId,
-      orderKey: between(keys.length ? keys[keys.length - 1] : null, null),
-      heading: "",
-      level: 3,
-      body: "",
-      lastEditedBy: "user",
-      locked: true,
-      sourceChunkIds: [],
-    };
-    const map = { ...docRef.current, [newBlock.id]: newBlock };
-    setDoc(map);
-    docRef.current = map;
-    await persistBlock(newBlock);
-  }, [activeSessionId, persistBlock]);
+  const onAcceptPending = useCallback(
+    async (id: string) => {
+      const existing = docRef.current[id];
+      if (!existing) return;
+      const next: BriefBlock = { ...existing, isPending: false, locked: true, lastEditedBy: "user" };
+      const map = { ...docRef.current, [id]: next };
+      setDoc(map);
+      docRef.current = map;
+      await acceptN({ data: { id } }).catch((e) => console.warn("accept failed", e));
+      publishSignal({ type: "accept", slotId: next.slotId ?? "", heading: next.heading, body: next.body });
+      scheduleInject(summarizeForInject({ type: "accept", slotId: next.slotId ?? "", heading: next.heading, body: next.body, ts: Date.now() }));
+      void logIntv({
+        data: { sessionId: next.sessionId, decision: "accept", slotId: next.slotId, responseText: next.body },
+      }).catch(() => undefined);
+    },
+    [acceptN, logIntv, scheduleInject],
+  );
+
+  const onRejectPending = useCallback(
+    async (id: string) => {
+      const existing = docRef.current[id];
+      const next = { ...docRef.current };
+      delete next[id];
+      setDoc(next);
+      docRef.current = next;
+      await deleteN({ data: { id } }).catch((e) => console.warn("reject failed", e));
+      if (existing) {
+        publishSignal({ type: "reject", slotId: existing.slotId ?? "", heading: existing.heading, body: existing.body });
+        scheduleInject(summarizeForInject({ type: "reject", slotId: existing.slotId ?? "", heading: existing.heading, body: existing.body, ts: Date.now() }));
+        void logIntv({
+          data: { sessionId: existing.sessionId, decision: "reject", slotId: existing.slotId, responseText: existing.body },
+        }).catch(() => undefined);
+      }
+    },
+    [deleteN, logIntv, scheduleInject],
+  );
+
+  const onFocusBlock = useCallback((id: string | null) => {
+    focusedBlockRef.current = id;
+  }, []);
+
 
   const liveText = useMemo(
     () => (finals.map((f) => f.text).join(" ") + " " + partial).trim(),
