@@ -33,8 +33,8 @@ import {
   persistChunks,
   persistSegment,
   upsertBriefNode,
+  acceptPendingBlock,
 } from "@/lib/brief.functions";
-import { orchestrateSegment } from "@/lib/orchestrate.functions";
 import { exportBriefToDocx } from "@/lib/exportDocx";
 
 import { getRealtimeSession } from "@/lib/agent/realtime.functions";
@@ -42,6 +42,9 @@ import { connectRealtime, type RealtimeClient } from "@/lib/agent/realtimeClient
 import { generateIntervention } from "@/lib/agent/responseGenerator.functions";
 import { logIntervention } from "@/lib/agent/interventionLog.functions";
 import { createPolicyEngine } from "@/lib/agent/interventionPolicy";
+import { assessDensity } from "@/lib/agent/segmentGate";
+import { publish as publishSignal, snapshot as signalSnapshot, summarizeForInject } from "@/lib/agent/signalBus";
+import { DEFAULT_TEMPLATE_ID, getTemplate, TEMPLATES } from "@/lib/pipeline/thinkingTemplate";
 import { type AgentStatus } from "@/components/agent/AgentPanel";
 
 export const Route = createFileRoute("/_authenticated/workbench")({
