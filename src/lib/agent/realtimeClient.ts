@@ -24,6 +24,7 @@ export type RealtimeEvents = {
 
 export type RealtimeClient = {
   speak: (text: string) => void;
+  promptResponse: () => void;
   cancel: () => void;
   injectContext: (note: string) => void;
   isAgentSpeaking: () => boolean;
