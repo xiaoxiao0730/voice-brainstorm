@@ -189,6 +189,10 @@ export async function connectRealtime(opts: ConnectOptions): Promise<RealtimeCli
       if (disposed) return;
       send({ type: "response.cancel" });
     },
+    promptResponse() {
+      if (disposed) return;
+      send({ type: "response.create", response: { output_modalities: ["audio"] } });
+    },
     injectContext(note: string) {
       if (disposed) return;
       const trimmed = note.trim();
