@@ -1034,17 +1034,10 @@ function Workbench() {
               {listening ? "Stop" : "Start"}
             </button>
 
-            {/* Talk with Agent toggle */}
-            <button
-              onClick={() => void toggleAgent()}
-              disabled={!activeSessionId}
-              className={`px-5 py-2.5 rounded-full text-sm font-medium disabled:opacity-40 hover:opacity-90 flex items-center gap-2 ${
-                agentEnabled
-                  ? "border border-auralis bg-surface text-primary hover:bg-surface-variant"
-                  : "bg-primary text-on-primary"
-              }`}
-              title={agentEnabled ? "Stop talking with agent" : "Talk with agent"}
-            >
+          </div>
+          {/* Agent status line — replaces the old Talk with Agent button. */}
+          <div className="px-5 pb-2 flex items-center justify-center shrink-0">
+            <span className="text-xs text-secondary flex items-center gap-1.5">
               <span
                 className={`w-1.5 h-1.5 rounded-full ${
                   agentStatus === "connecting"
@@ -1060,26 +1053,26 @@ function Workbench() {
                     : "bg-secondary"
                 }`}
               />
-              {!agentEnabled
-                ? "Talk with Agent"
-                : agentStatus === "connecting"
-                ? "Connecting…"
+              {agentStatus === "connecting"
+                ? "Agent connecting…"
                 : agentStatus === "thinking"
-                ? "Agent Thinking…"
+                ? "Agent thinking…"
                 : agentStatus === "speaking"
-                ? "Agent Speaking…"
+                ? "Agent speaking…"
+                : agentStatus === "listening"
+                ? "Agent listening"
                 : agentStatus === "error"
-                ? "Agent Error"
-                : "Stop Agent"}
-            </button>
-
+                ? "Agent error"
+                : "Agent idle"}
+            </span>
           </div>
           <div className="px-5 pb-3 flex items-center justify-center shrink-0">
             <span className="text-[11px] text-secondary">
-              Press <kbd className="px-1.5 py-0.5 rounded border border-auralis bg-surface text-[10px] font-mono">T</kbd> to {listening ? "stop" : "start"} talking ·{" "}
-              <kbd className="px-1.5 py-0.5 rounded border border-auralis bg-surface text-[10px] font-mono">A</kbd> to talk with agent
+              <kbd className="px-1.5 py-0.5 rounded border border-auralis bg-surface text-[10px] font-mono">T</kbd> {listening ? "stop" : "start"} ·{" "}
+              <kbd className="px-1.5 py-0.5 rounded border border-auralis bg-surface text-[10px] font-mono">S</kbd> {agentStatus === "speaking" ? "silence agent" : "ask agent to speak"}
             </span>
           </div>
+
 
 
           {/* Transcript */}
