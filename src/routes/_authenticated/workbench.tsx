@@ -168,17 +168,23 @@ function Workbench() {
   }, [activeSessionId]);
   useEffect(() => { listeningRef.current = listening; }, [listening]);
 
-  // Persist template per session
+  // Persist template + applied-template per session.
   useEffect(() => {
     if (!activeSessionId || typeof window === "undefined") return;
     const saved = window.localStorage.getItem(`murmur.template.${activeSessionId}`);
     if (saved && TEMPLATES[saved]?.available) setTemplateId(saved);
     else setTemplateId(DEFAULT_TEMPLATE_ID);
+    const applied = window.localStorage.getItem(`murmur.template.applied.${activeSessionId}`);
+    setAppliedTemplateId(applied && TEMPLATES[applied] ? applied : DEFAULT_TEMPLATE_ID);
   }, [activeSessionId]);
   useEffect(() => {
     if (!activeSessionId || typeof window === "undefined") return;
     window.localStorage.setItem(`murmur.template.${activeSessionId}`, templateId);
   }, [templateId, activeSessionId]);
+  useEffect(() => {
+    if (!activeSessionId || typeof window === "undefined") return;
+    window.localStorage.setItem(`murmur.template.applied.${activeSessionId}`, appliedTemplateId);
+  }, [appliedTemplateId, activeSessionId]);
 
   // Debounced injectContext: only fire after 3s of canvas/edit quiet.
   const scheduleInject = useCallback((note: string) => {
