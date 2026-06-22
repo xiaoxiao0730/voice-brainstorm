@@ -14,6 +14,7 @@
 // The brief/canvas is owned by the slow lane. Voice never writes the brief.
 
 import { sessionStore } from "@/lib/orchestrator/sessionStore";
+import type { SessionEvent } from "@/lib/pipeline/types";
 
 export type RealtimeEvents = {
   onConnected?: () => void;
