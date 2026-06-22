@@ -205,6 +205,13 @@ export async function connectRealtime(opts: ConnectOptions): Promise<RealtimeCli
         },
       });
     },
+    promptResponse() {
+      if (disposed) return;
+      send({
+        type: "response.create",
+        response: { output_modalities: ["audio"] },
+      });
+    },
     cancel() {
       if (disposed) return;
       send({ type: "response.cancel" });
