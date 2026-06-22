@@ -154,9 +154,11 @@ function Workbench() {
   const recentTextsRef = useRef<string[]>([]);
   const listeningRef = useRef(listening);
   const agentConnectedAtRef = useRef(Date.now());
-  const focusedBlockRef = useRef<string | null>(null);
+  const isEditingRef = useRef(false);
   const injectDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendingInjectRef = useRef<string | null>(null);
+  const briefDocRef = useRef<BriefDocumentHandle | null>(null);
+  const [appliedTemplateId, setAppliedTemplateId] = useState<string>(DEFAULT_TEMPLATE_ID);
 
   useEffect(() => { docRef.current = doc; }, [doc]);
   useEffect(() => {
