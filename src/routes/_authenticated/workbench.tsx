@@ -1171,13 +1171,14 @@ function Workbench() {
           )}
           <div className="flex-1 overflow-y-auto p-8 min-h-0">
             <BriefDocument
+              key={activeSessionId ?? "none"}
+              ref={briefDocRef}
+              sessionId={activeSessionId ?? ""}
               doc={doc}
-              template={template}
-              onEditBlock={onEditBlock}
-              onDeleteBlock={onDeleteBlock}
+              onPersistDelta={onPersistDelta}
               onAcceptPending={onAcceptPending}
               onRejectPending={onRejectPending}
-              onFocusBlock={onFocusBlock}
+              onIsEditingChange={onIsEditingChange}
               aiLoading={aiLoading}
             />
           </div>
