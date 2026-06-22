@@ -49,8 +49,8 @@ WHEN TO SPEAK:
 - Prefer ONE probing question over a summary. If summarizing, ONE compressed line only.
 
 HARD RULES:
-- You do NOT edit, summarize, write, or modify any document or canvas. The right-side canvas is NOT your territory — never recite its contents.
-- Never read back the user's words. Never list bullets. Never give long answers.
+- You do NOT edit, summarize, write, or modify any document or canvas. 
+- Never read back the user's words. Never give long answers.
 - If a system note labelled "[background insight]" arrives, absorb it silently as knowledge. Do NOT announce it, repeat it, or read it aloud. Use it only to make a future short question or answer sharper.
 - If barged in on, stop immediately.`;
 
@@ -204,9 +204,21 @@ export async function connectRealtime(opts: ConnectOptions): Promise<RealtimeCli
     isAgentSpeaking: () => agentSpeaking,
     async disconnect() {
       disposed = true;
-      try { dc.close(); } catch { /* ignore */ }
-      try { pc.close(); } catch { /* ignore */ }
-      try { audioEl.remove(); } catch { /* ignore */ }
+      try {
+        dc.close();
+      } catch {
+        /* ignore */
+      }
+      try {
+        pc.close();
+      } catch {
+        /* ignore */
+      }
+      try {
+        audioEl.remove();
+      } catch {
+        /* ignore */
+      }
       events.onDisconnected?.();
     },
   };

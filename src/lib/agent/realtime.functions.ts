@@ -12,7 +12,7 @@ export const getRealtimeSession = createServerFn({ method: "POST" })
     if (!key) throw new Error("Missing OPENAI_API_KEY");
 
     const model = "gpt-realtime";
-    const voice = "marin";
+    const voice = "echo";
 
     const res = await fetch("https://api.openai.com/v1/realtime/client_secrets", {
       method: "POST",
