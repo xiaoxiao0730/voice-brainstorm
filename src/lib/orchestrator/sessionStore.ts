@@ -91,6 +91,7 @@ export const sessionStore = {
   dispose(sessionId: string) {
     const slot = sessions.get(sessionId);
     if (!slot) return;
+    slot.thoughtTurnBuffer.dispose();
     slot.bus.dispose();
     slot.researchTasks.clear();
     sessions.delete(sessionId);
