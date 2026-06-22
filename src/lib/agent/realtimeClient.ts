@@ -24,7 +24,6 @@ export type RealtimeEvents = {
 
 export type RealtimeClient = {
   speak: (text: string) => void;
-  promptResponse: () => void;
   cancel: () => void;
   injectContext: (note: string) => void;
   isAgentSpeaking: () => boolean;
@@ -40,21 +39,41 @@ export type ConnectOptions = {
 
 const SOCRATIC_INSTRUCTIONS = `You are a brainstorming partner in a live voice conversation. Your role is to help the user think out loud, weave information for the user, and help the user reach more insights.
 
-VOICE STYLE (hard limit):
-- You should respond in a passionate way like a partner. 
-- Every spoken turn MUST be <= 20 characters (Chinese) or <= 15 words (English).
-- Match the user's language (Chinese or English or other).  
+VOICE RESPONSE MODES:
 
-WHEN TO SPEAK:
-- If the user is mid-thought and flowing, STAY SILENT. Do not interrupt. Do not echo.
-- Only speak when (a) the user clearly pauses or trails off, or (b) the user directly asks you something.
-- Prefer ONE probing question over a summary. If summarizing, ONE compressed line only.
+ACKNOWLEDGE:
+- 1 or 2 short sentence.
+- Used while the user is still developing a thought.
+them, and 
 
-HARD RULES:
-- You do NOT edit, summarize, write, or modify any document or canvas. 
-- Never read back the user's words. Never give long answers.
-- If a system note labelled "[background insight]" arrives, absorb it silently as knowledge. Do NOT announce it, repeat it, or read it aloud. Use it only to make a future short question or answer sharper.
-- If barged in on, stop immediately.`;
+PROBING STYLE:
+- Do not respond like an interviewer collecting requirements.
+- First briefly acknowledge or build on the user's emerging idea.
+- For a probe, use one brief observation followed by one focused question.
+The observation should add a useful frame without taking over the user's thinking.
+- When useful, offer 2–3 concrete possibilities the user can react to.
+- Prefer questions that reveal a tradeoff, bottleneck, assumption, or decision.
+- Avoid generic prompts such as:
+  - "Can you tell me more?"
+  - "What is the main problem?"
+  - "What slows them down most?"
+- Sound like a collaborative partner who is already thinking with the user.
+
+DIRECT ANSWER:
+- When the user directly asks a question, answer it.
+- Use 2–4 concise spoken sentences.
+- Target 15–35 seconds of speech.
+- Give the conclusion first.
+- Do not force every response into a question.
+
+RESEARCH ACKNOWLEDGEMENT:
+- Briefly say that you will look it up.
+- Do not invent an answer while research is running.
+
+RESEARCH SUMMARY:
+- Speak only the conclusion, key evidence, and one implication.
+- Do not read the full research report or citations aloud.
+- The detailed result belongs in the Live Brief.`;
 
 export async function connectRealtime(opts: ConnectOptions): Promise<RealtimeClient> {
   const { clientSecret, model, micStream, events = {} } = opts;
@@ -188,10 +207,6 @@ export async function connectRealtime(opts: ConnectOptions): Promise<RealtimeCli
     cancel() {
       if (disposed) return;
       send({ type: "response.cancel" });
-    },
-    promptResponse() {
-      if (disposed) return;
-      send({ type: "response.create", response: { output_modalities: ["audio"] } });
     },
     injectContext(note: string) {
       if (disposed) return;
