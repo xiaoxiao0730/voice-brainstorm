@@ -110,7 +110,7 @@ export async function connectRealtime(opts: ConnectOptions): Promise<RealtimeCli
   // Buffer function-call arguments by call_id; the Realtime API streams them.
   const pendingToolArgs = new Map<string, { name: string; args: string }>();
 
-  const emit = (event: Parameters<typeof sessionStore.getOrCreate>[0] extends never ? never : Parameters<ReturnType<typeof sessionStore.getOrCreate>["bus"]["emit"]>[0]) => {
+  const emit = (event: SessionEvent) => {
     try {
       sessionStore.getOrCreate(sessionId).bus.emit(event);
     } catch (err) {
