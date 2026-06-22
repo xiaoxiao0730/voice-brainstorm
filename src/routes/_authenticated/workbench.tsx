@@ -5,7 +5,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { BriefDocument, type BriefDocumentHandle } from "@/components/brief/BriefDocument";
 import { supabase } from "@/integrations/supabase/client";
 
-
 import { between } from "@/lib/pipeline/orderKey";
 import { createTranscriptBuffer } from "@/lib/pipeline/transcriptBuffer";
 import {
@@ -19,13 +18,7 @@ import {
 import { getSpeechToken } from "@/lib/speech.functions";
 import { startAzureRecognizer, type SpeechRecognizerHandle } from "@/lib/speech/azureRecognizer";
 
-import {
-  createSession,
-  deleteSession,
-  endSession,
-  getSessionContext,
-  listSessions,
-} from "@/lib/session.functions";
+import { createSession, deleteSession, endSession, getSessionContext, listSessions } from "@/lib/session.functions";
 
 import {
   deleteBriefNode,
@@ -59,13 +52,15 @@ export const Route = createFileRoute("/_authenticated/workbench")({
     links: [
       { rel: "preconnect", href: "https://fonts.googleapis.com" },
       { rel: "preconnect", href: "https://fonts.gstatic.com", crossOrigin: "anonymous" },
-      { rel: "stylesheet", href: "https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Inter:wght@400;500;600&display=swap" },
+      {
+        rel: "stylesheet",
+        href: "https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Inter:wght@400;500;600&display=swap",
+      },
       { rel: "stylesheet", href: "https://fonts.googleapis.com/icon?family=Material+Symbols+Outlined" },
     ],
   }),
   component: Workbench,
 });
-
 
 type SessionRow = { id: string; title: string; status: string; started_at: string; ended_at: string | null };
 
@@ -130,13 +125,17 @@ function Workbench() {
   ] as const;
   const [model, setModel] = useState<(typeof MODEL_OPTIONS)[number]["id"]>("google/gemini-3-flash-preview");
   const modelRef = useRef(model);
-  useEffect(() => { modelRef.current = model; }, [model]);
+  useEffect(() => {
+    modelRef.current = model;
+  }, [model]);
 
   // Thinking template
   const [templateId, setTemplateId] = useState<string>(DEFAULT_TEMPLATE_ID);
   const template = useMemo(() => getTemplate(templateId), [templateId]);
   const templateRef = useRef(template);
-  useEffect(() => { templateRef.current = template; }, [template]);
+  useEffect(() => {
+    templateRef.current = template;
+  }, [template]);
 
   // Refs
   const recognizerRef = useRef<SpeechRecognizerHandle | null>(null);
@@ -160,13 +159,17 @@ function Workbench() {
   const briefDocRef = useRef<BriefDocumentHandle | null>(null);
   const [appliedTemplateId, setAppliedTemplateId] = useState<string>(DEFAULT_TEMPLATE_ID);
 
-  useEffect(() => { docRef.current = doc; }, [doc]);
+  useEffect(() => {
+    docRef.current = doc;
+  }, [doc]);
   useEffect(() => {
     activeSessionRef.current = activeSessionId;
     policyRef.current = createPolicyEngine(activeSessionId);
     recentTextsRef.current = [];
   }, [activeSessionId]);
-  useEffect(() => { listeningRef.current = listening; }, [listening]);
+  useEffect(() => {
+    listeningRef.current = listening;
+  }, [listening]);
 
   // Persist template + applied-template per session.
   useEffect(() => {
@@ -195,12 +198,14 @@ function Workbench() {
       pendingInjectRef.current = null;
       injectDebounceRef.current = null;
       if (n && realtimeRef.current) {
-        try { realtimeRef.current.injectContext(n); } catch { /* ignore */ }
+        try {
+          realtimeRef.current.injectContext(n);
+        } catch {
+          /* ignore */
+        }
       }
     }, 3000);
   }, []);
-
-
 
   // Fetch user email
   useEffect(() => {
@@ -211,7 +216,11 @@ function Workbench() {
 
   // Sign out
   const signOut = async () => {
-    try { await stopListening(); } catch { /* ignore */ }
+    try {
+      await stopListening();
+    } catch {
+      /* ignore */
+    }
     await supabase.auth.signOut();
     navigate({ to: "/auth" });
   };
@@ -245,10 +254,13 @@ function Workbench() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-
   const openSession = useCallback(
     async (id: string) => {
-      try { await stopListening(); } catch { /* ignore */ }
+      try {
+        await stopListening();
+      } catch {
+        /* ignore */
+      }
       setActiveSessionId(id);
       setFinals([]);
       setPartial("");
@@ -298,9 +310,7 @@ function Workbench() {
                 sourceChunkIds: [],
               };
               map[seeded.id] = seeded;
-              void upsertN({ data: blockToNodeUpsert(seeded) }).catch((e) =>
-                console.warn("seed upsert failed", e),
-              );
+              void upsertN({ data: blockToNodeUpsert(seeded) }).catch((e) => console.warn("seed upsert failed", e));
             }
           } catch (e) {
             console.warn("getCtx failed", e);
@@ -314,7 +324,6 @@ function Workbench() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [loadB, getCtx, upsertN],
   );
-
 
   const newSession = async () => {
     const created = await createS({ data: {} });
@@ -351,14 +360,11 @@ function Workbench() {
     [deleteS, sessions, activeSessionId, refreshSessions, openSession],
   );
 
-
   // ============= Recording =============
 
   const persistBlock = useCallback(
     async (block: BriefBlock) => {
-      await upsertN({ data: blockToNodeUpsert(block) }).catch((e) =>
-        console.warn("upsert failed", e),
-      );
+      await upsertN({ data: blockToNodeUpsert(block) }).catch((e) => console.warn("upsert failed", e));
     },
     [upsertN],
   );
@@ -403,9 +409,16 @@ function Workbench() {
       if (!verdict.substantive) {
         try {
           await logIntv({
-            data: { sessionId: segment.sessionId, segmentId: segment.segmentId, decision: "silent", responseText: verdict.reason },
+            data: {
+              sessionId: segment.sessionId,
+              segmentId: segment.segmentId,
+              decision: "silent",
+              responseText: verdict.reason,
+            },
           });
-        } catch { /* best effort */ }
+        } catch {
+          /* best effort */
+        }
         return;
       }
 
@@ -466,7 +479,9 @@ function Workbench() {
           await logIntv({
             data: { sessionId: segment.sessionId, segmentId: segment.segmentId, decision: "silent" },
           });
-        } catch { /* best effort */ }
+        } catch {
+          /* best effort */
+        }
         setAgentStatus((s) => (s === "speaking" ? s : realtimeRef.current ? "listening" : "off"));
         setAiLoading(false);
         return;
@@ -474,7 +489,9 @@ function Workbench() {
 
       const line = result.line;
       const sid = segment.sessionId;
-      const allKeys = Object.values(docRef.current).map((b) => b.orderKey).sort();
+      const allKeys = Object.values(docRef.current)
+        .map((b) => b.orderKey)
+        .sort();
       const newBlock: BriefBlock = {
         id: crypto.randomUUID(),
         sessionId: sid,
@@ -497,7 +514,15 @@ function Workbench() {
       policyRef.current.recordCanvas();
 
       publishSignal({ type: "pending_appear", slotId: "", heading: newBlock.heading, body: newBlock.body });
-      scheduleInject(summarizeForInject({ type: "pending_appear", slotId: "", heading: newBlock.heading, body: newBlock.body, ts: Date.now() }));
+      scheduleInject(
+        summarizeForInject({
+          type: "pending_appear",
+          slotId: "",
+          heading: newBlock.heading,
+          body: newBlock.body,
+          ts: Date.now(),
+        }),
+      );
 
       try {
         await logIntv({
@@ -508,7 +533,9 @@ function Workbench() {
             responseText: newBlock.body || newBlock.heading,
           },
         });
-      } catch { /* best effort */ }
+      } catch {
+        /* best effort */
+      }
 
       setAgentStatus((s) => (s === "speaking" ? s : realtimeRef.current ? "listening" : "off"));
       setAiLoading(false);
@@ -516,10 +543,6 @@ function Workbench() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [generateNudge, logIntv, persistBlock, scheduleInject],
   );
-
-
-
-
 
   const startListening = async () => {
     if (listening || !activeSessionId) return;
@@ -576,14 +599,16 @@ function Workbench() {
             saveChunks({
               data: {
                 sessionId,
-                chunks: [{
-                  id: chunkId,
-                  text: e.text,
-                  isFinal: true,
-                  startMs: Math.round(e.offsetMs),
-                  endMs,
-                  lang: e.lang,
-                }],
+                chunks: [
+                  {
+                    id: chunkId,
+                    text: e.text,
+                    isFinal: true,
+                    startMs: Math.round(e.offsetMs),
+                    endMs,
+                    lang: e.lang,
+                  },
+                ],
               },
             }).catch((err) => console.warn("persistChunks failed", err));
             buf.pushFinal({
@@ -616,13 +641,21 @@ function Workbench() {
     streamRef.current?.getTracks().forEach((t) => t.stop());
     streamRef.current = null;
     if (audioCtxRef.current) {
-      try { await audioCtxRef.current.close(); } catch { /* ignore */ }
+      try {
+        await audioCtxRef.current.close();
+      } catch {
+        /* ignore */
+      }
       audioCtxRef.current = null;
     }
     analyserRef.current = null;
     setLevel(0);
     if (recognizerRef.current) {
-      try { await recognizerRef.current.stop(); } catch { /* ignore */ }
+      try {
+        await recognizerRef.current.stop();
+      } catch {
+        /* ignore */
+      }
       recognizerRef.current = null;
     }
     if (bufferRef.current) {
@@ -632,14 +665,23 @@ function Workbench() {
     }
     // Disconnect the agent too — its mic track is cloned from the now-stopped stream.
     if (realtimeRef.current) {
-      try { await realtimeRef.current.disconnect(); } catch { /* ignore */ }
+      try {
+        await realtimeRef.current.disconnect();
+      } catch {
+        /* ignore */
+      }
       realtimeRef.current = null;
     }
     setAgentEnabled(false);
     setAgentStatus("off");
   }, []);
 
-  useEffect(() => () => { void stopListening(); }, [stopListening]);
+  useEffect(
+    () => () => {
+      void stopListening();
+    },
+    [stopListening],
+  );
 
   // ============= Agent connect / toggle / feedback =============
 
@@ -671,7 +713,7 @@ function Workbench() {
             // Surface the agent's spoken line in the transcript list and
             // persist it as a chunk so it shows up alongside user speech.
             const chunkId = crypto.randomUUID();
-            const labeled = `🤖 ${text}`;
+            const labeled = `Agent: ${text}`;
             setFinals((f) => [...f, { id: chunkId, text: labeled }]);
             // Use a small offset relative to agent-connect time — the DB
             // column is a 32-bit integer, so raw Date.now() overflows.
@@ -679,14 +721,16 @@ function Workbench() {
             saveChunks({
               data: {
                 sessionId,
-                chunks: [{
-                  id: chunkId,
-                  text: labeled,
-                  isFinal: true,
-                  startMs: offset,
-                  endMs: offset,
-                  lang: "agent",
-                }],
+                chunks: [
+                  {
+                    id: chunkId,
+                    text: labeled,
+                    isFinal: true,
+                    startMs: offset,
+                    endMs: offset,
+                    lang: "agent",
+                  },
+                ],
               },
             }).catch((err) => console.warn("persist agent chunk failed", err));
           },
@@ -704,11 +748,6 @@ function Workbench() {
   }, [mintRealtime, saveChunks]);
 
   // Note: agent lifecycle is owned by startListening / stopListening.
-
-
-
-
-
 
   // Hotkeys (outside text inputs):
   //   T → toggle voice listening (also brings the agent in/out via startListening)
@@ -741,7 +780,6 @@ function Workbench() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [listening, stopListening, activeSessionId]);
 
-
   // ============= Document handlers =============
 
   // Single delta callback from the continuous editor. Diffed against the
@@ -757,7 +795,9 @@ function Workbench() {
       for (const b of upserts) {
         void persistBlock(b);
         publishSignal({ type: "edit", slotId: "", heading: b.heading, body: b.body });
-        scheduleInject(summarizeForInject({ type: "edit", slotId: "", heading: b.heading, body: b.body, ts: Date.now() }));
+        scheduleInject(
+          summarizeForInject({ type: "edit", slotId: "", heading: b.heading, body: b.body, ts: Date.now() }),
+        );
       }
       for (const id of deletedIds) {
         void deleteN({ data: { id } }).catch((e) => console.warn("delete failed", e));
@@ -776,7 +816,9 @@ function Workbench() {
       docRef.current = map;
       await acceptN({ data: { id } }).catch((e) => console.warn("accept failed", e));
       publishSignal({ type: "accept", slotId: "", heading: next.heading, body: next.body });
-      scheduleInject(summarizeForInject({ type: "accept", slotId: "", heading: next.heading, body: next.body, ts: Date.now() }));
+      scheduleInject(
+        summarizeForInject({ type: "accept", slotId: "", heading: next.heading, body: next.body, ts: Date.now() }),
+      );
       void logIntv({
         data: { sessionId: next.sessionId, decision: "accept", responseText: next.body || next.heading },
       }).catch(() => undefined);
@@ -794,7 +836,15 @@ function Workbench() {
       await deleteN({ data: { id } }).catch((e) => console.warn("reject failed", e));
       if (existing) {
         publishSignal({ type: "reject", slotId: "", heading: existing.heading, body: existing.body });
-        scheduleInject(summarizeForInject({ type: "reject", slotId: "", heading: existing.heading, body: existing.body, ts: Date.now() }));
+        scheduleInject(
+          summarizeForInject({
+            type: "reject",
+            slotId: "",
+            heading: existing.heading,
+            body: existing.body,
+            ts: Date.now(),
+          }),
+        );
         void logIntv({
           data: { sessionId: existing.sessionId, decision: "reject", responseText: existing.body || existing.heading },
         }).catch(() => undefined);
@@ -817,7 +867,9 @@ function Workbench() {
       setAppliedTemplateId(id);
       if (tpl.headings.length === 0 || !activeSessionId) return;
       const sid = activeSessionId;
-      const existingKeys = Object.values(docRef.current).map((b) => b.orderKey).sort();
+      const existingKeys = Object.values(docRef.current)
+        .map((b) => b.orderKey)
+        .sort();
       let lastKey: string | null = existingKeys.length ? existingKeys[existingKeys.length - 1] : null;
       const newBlocks: BriefBlock[] = [];
       for (const h of tpl.headings) {
@@ -845,11 +897,7 @@ function Workbench() {
     [appliedTemplateId, activeSessionId, persistBlock],
   );
 
-
-  const liveText = useMemo(
-    () => (finals.map((f) => f.text).join(" ") + " " + partial).trim(),
-    [finals, partial],
-  );
+  const liveText = useMemo(() => (finals.map((f) => f.text).join(" ") + " " + partial).trim(), [finals, partial]);
 
   const blockCount = Object.keys(doc).length;
 
@@ -897,10 +945,7 @@ function Workbench() {
                       : "text-secondary hover:bg-surface-variant/60 hover:text-primary"
                   }`}
                 >
-                  <button
-                    onClick={() => openSession(s.id)}
-                    className="w-full text-left px-3 py-2 pr-9"
-                  >
+                  <button onClick={() => openSession(s.id)} className="w-full text-left px-3 py-2 pr-9">
                     <div className="text-sm font-medium truncate">{s.title}</div>
                     <div className="text-[11px] text-secondary mt-0.5">{relative(s.started_at)}</div>
                   </button>
@@ -920,11 +965,7 @@ function Workbench() {
                   </button>
                   {menuOpenFor === s.id && (
                     <>
-                      <div
-                        className="fixed inset-0 z-10"
-                        onClick={() => setMenuOpenFor(null)}
-                        aria-hidden="true"
-                      />
+                      <div className="fixed inset-0 z-10" onClick={() => setMenuOpenFor(null)} aria-hidden="true" />
                       <div
                         role="menu"
                         className="absolute z-20 top-9 right-1.5 min-w-[140px] rounded-md border border-auralis bg-surface shadow-lg py-1"
@@ -951,11 +992,7 @@ function Workbench() {
                 <div className="w-7 h-7 rounded-full bg-gradient-to-tr from-rose-400 via-indigo-300 to-emerald-300" />
                 <span className="text-xs text-primary font-medium truncate max-w-[140px]">{userEmail ?? "Murmur"}</span>
               </div>
-              <button
-                onClick={signOut}
-                className="text-[11px] text-secondary hover:text-primary"
-                title="Sign out"
-              >
+              <button onClick={signOut} className="text-[11px] text-secondary hover:text-primary" title="Sign out">
                 Sign out
               </button>
             </div>
@@ -970,7 +1007,9 @@ function Workbench() {
           <header className="h-14 px-5 flex items-center justify-between border-b border-auralis shrink-0">
             <span className="text-xs uppercase tracking-[0.18em] text-secondary">Audio Interaction</span>
             <span className={`text-xs flex items-center gap-2 ${listening ? "text-emerald-600" : "text-secondary"}`}>
-              <span className={`w-1.5 h-1.5 rounded-full ${listening ? "bg-emerald-500 animate-pulse" : "bg-secondary"}`} />
+              <span
+                className={`w-1.5 h-1.5 rounded-full ${listening ? "bg-emerald-500 animate-pulse" : "bg-secondary"}`}
+              />
               {listening ? "Listening" : "Idle"}
             </span>
           </header>
@@ -978,8 +1017,12 @@ function Workbench() {
           {/* Waveform */}
           <div className="flex-1 flex items-center justify-center p-6 min-h-0 relative">
             <div className="relative w-[260px] h-[260px] flex items-center justify-center">
-              <div className={`absolute inset-0 rounded-full border border-auralis/25 blur-[2px] ${listening ? "animate-[ring-pulse_3.2s_ease-out_infinite]" : ""}`} />
-              <div className={`absolute inset-8 rounded-full border border-auralis/40 ${listening ? "animate-[ring-pulse_4.1s_ease-out_infinite_0.6s]" : ""}`} />
+              <div
+                className={`absolute inset-0 rounded-full border border-auralis/25 blur-[2px] ${listening ? "animate-[ring-pulse_3.2s_ease-out_infinite]" : ""}`}
+              />
+              <div
+                className={`absolute inset-8 rounded-full border border-auralis/40 ${listening ? "animate-[ring-pulse_4.1s_ease-out_infinite_0.6s]" : ""}`}
+              />
               <div
                 className={`absolute left-[50px] top-[80px] w-[50px] h-[100px] rounded-full bg-gradient-to-tr from-rose-400 to-orange-300 opacity-80 mix-blend-multiply blur-[6px] ${listening ? "animate-[orb-a_3s_ease-in-out_infinite]" : ""}`}
                 style={{ transform: `scale(${1 + level * 0.3})` }}
@@ -999,7 +1042,9 @@ function Workbench() {
           <div className="px-5 pb-4 flex items-center justify-center gap-2 shrink-0">
             {/* Start / Stop toggle */}
             <button
-              onClick={() => { listening ? void stopListening() : void startListening(); }}
+              onClick={() => {
+                listening ? void stopListening() : void startListening();
+              }}
               disabled={!activeSessionId}
               className={`px-5 py-2.5 rounded-full text-sm font-medium disabled:opacity-40 hover:opacity-90 flex items-center gap-2 ${
                 listening
@@ -1010,7 +1055,6 @@ function Workbench() {
               <span className="material-symbols-outlined text-base">{listening ? "stop" : "mic"}</span>
               {listening ? "Stop" : "Start"}
             </button>
-
           </div>
           {/* Agent status line — replaces the old Talk with Agent button. */}
           <div className="px-5 pb-2 flex items-center justify-center shrink-0">
@@ -1020,37 +1064,37 @@ function Workbench() {
                   agentStatus === "connecting"
                     ? "bg-amber-400 animate-pulse"
                     : agentStatus === "thinking"
-                    ? "bg-amber-500 animate-pulse"
-                    : agentStatus === "speaking"
-                    ? "bg-indigo-500 animate-pulse"
-                    : agentStatus === "listening"
-                    ? "bg-emerald-500"
-                    : agentStatus === "error"
-                    ? "bg-rose-500"
-                    : "bg-secondary"
+                      ? "bg-amber-500 animate-pulse"
+                      : agentStatus === "speaking"
+                        ? "bg-indigo-500 animate-pulse"
+                        : agentStatus === "listening"
+                          ? "bg-emerald-500"
+                          : agentStatus === "error"
+                            ? "bg-rose-500"
+                            : "bg-secondary"
                 }`}
               />
               {agentStatus === "connecting"
                 ? "Agent connecting…"
                 : agentStatus === "thinking"
-                ? "Agent thinking…"
-                : agentStatus === "speaking"
-                ? "Agent speaking…"
-                : agentStatus === "listening"
-                ? "Agent listening"
-                : agentStatus === "error"
-                ? "Agent error"
-                : "Agent idle"}
+                  ? "Agent thinking…"
+                  : agentStatus === "speaking"
+                    ? "Agent speaking…"
+                    : agentStatus === "listening"
+                      ? "Agent listening"
+                      : agentStatus === "error"
+                        ? "Agent error"
+                        : "Agent idle"}
             </span>
           </div>
           <div className="px-5 pb-3 flex items-center justify-center shrink-0">
             <span className="text-[11px] text-secondary">
-              <kbd className="px-1.5 py-0.5 rounded border border-auralis bg-surface text-[10px] font-mono">T</kbd> {listening ? "stop" : "start"} ·{" "}
-              <kbd className="px-1.5 py-0.5 rounded border border-auralis bg-surface text-[10px] font-mono">S</kbd> {agentStatus === "speaking" ? "silence agent" : "ask agent to speak"}
+              <kbd className="px-1.5 py-0.5 rounded border border-auralis bg-surface text-[10px] font-mono">T</kbd>{" "}
+              {listening ? "stop" : "start"} ·{" "}
+              <kbd className="px-1.5 py-0.5 rounded border border-auralis bg-surface text-[10px] font-mono">S</kbd>{" "}
+              {agentStatus === "speaking" ? "silence agent" : "ask agent to speak"}
             </span>
           </div>
-
-
 
           {/* Transcript */}
           <div className="border-t border-auralis bg-surface/60 shrink-0">
@@ -1063,14 +1107,19 @@ function Workbench() {
                 {expanded ? "expand_more" : "expand_less"}
               </span>
             </button>
-            <div className="grid transition-all duration-300 ease-out" style={{ gridTemplateRows: expanded ? "1fr" : "0fr" }}>
+            <div
+              className="grid transition-all duration-300 ease-out"
+              style={{ gridTemplateRows: expanded ? "1fr" : "0fr" }}
+            >
               <div className="overflow-hidden">
                 <div className="px-5 pb-4 max-h-48 overflow-y-auto text-sm leading-relaxed text-primary">
                   {finals.length === 0 && !partial && (
                     <p className="text-secondary italic">Start speaking to see live transcription here…</p>
                   )}
                   {finals.map((f) => (
-                    <p key={f.id} className="mb-1">{f.text}</p>
+                    <p key={f.id} className="mb-1">
+                      {f.text}
+                    </p>
                   ))}
                   {partial && <p className="text-secondary">{partial}</p>}
                 </div>
@@ -1105,7 +1154,9 @@ function Workbench() {
                 title="Select AI model"
               >
                 {MODEL_OPTIONS.map((m) => (
-                  <option key={m.id} value={m.id}>{m.label}</option>
+                  <option key={m.id} value={m.id}>
+                    {m.label}
+                  </option>
                 ))}
               </select>
               <span className="text-xs text-secondary ml-3 flex items-center gap-1.5">
@@ -1139,7 +1190,9 @@ function Workbench() {
           {error && (
             <div className="px-6 py-2 bg-rose-500/10 border-b border-rose-500/20 text-xs text-rose-500 flex items-center justify-between">
               <span>{error}</span>
-              <button onClick={() => setError(null)} className="text-rose-500/70 hover:text-rose-500">✕</button>
+              <button onClick={() => setError(null)} className="text-rose-500/70 hover:text-rose-500">
+                ✕
+              </button>
             </div>
           )}
           <div className="flex-1 overflow-y-auto p-8 min-h-0">
@@ -1156,12 +1209,18 @@ function Workbench() {
             />
           </div>
           <footer className="h-10 px-6 flex items-center justify-between border-t border-auralis text-xs text-secondary shrink-0">
-            <span>{liveText.length} chars · {finals.length} segments · {blockCount} blocks</span>
-            <span>Murmur · <Link to="/" className="hover:text-primary">Home</Link></span>
+            <span>
+              {liveText.length} chars · {finals.length} segments · {blockCount} blocks
+            </span>
+            <span>
+              Murmur ·{" "}
+              <Link to="/" className="hover:text-primary">
+                Home
+              </Link>
+            </span>
           </footer>
         </section>
       </main>
-
     </div>
   );
 }
