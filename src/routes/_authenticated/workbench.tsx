@@ -1039,7 +1039,39 @@ function Workbench() {
           </div>
 
           {/* Controls */}
-          <div className="px-5 pb-4 flex items-center justify-center gap-2 shrink-0">
+          <div className="px-5 pb-4 flex flex-col items-center justify-center gap-2 shrink-0">
+            {/* Agent status line — replaces the old Talk with Agent button. */}
+            <div className="pb-2 flex items-center justify-center shrink-0">
+              <span className="text-xs text-secondary flex items-center gap-1.5">
+                <span
+                  className={`w-1.5 h-1.5 rounded-full ${
+                    agentStatus === "connecting"
+                      ? "bg-amber-400 animate-pulse"
+                      : agentStatus === "thinking"
+                        ? "bg-amber-500 animate-pulse"
+                        : agentStatus === "speaking"
+                          ? "bg-indigo-500 animate-pulse"
+                          : agentStatus === "listening"
+                            ? "bg-emerald-500"
+                            : agentStatus === "error"
+                              ? "bg-rose-500"
+                              : "bg-secondary"
+                  }`}
+                />
+                {agentStatus === "connecting"
+                  ? "Agent connecting…"
+                  : agentStatus === "thinking"
+                    ? "Agent thinking…"
+                    : agentStatus === "speaking"
+                      ? "Agent speaking…"
+                      : agentStatus === "listening"
+                        ? "Agent listening"
+                        : agentStatus === "error"
+                          ? "Agent error"
+                          : "Agent idle"}
+              </span>
+            </div>
+
             {/* Start / Stop toggle */}
             <button
               onClick={() => {
@@ -1055,37 +1087,6 @@ function Workbench() {
               <span className="material-symbols-outlined text-base">{listening ? "stop" : "mic"}</span>
               {listening ? "Stop" : "Start"}
             </button>
-          </div>
-          {/* Agent status line — replaces the old Talk with Agent button. */}
-          <div className="px-5 pb-2 flex items-center justify-center shrink-0">
-            <span className="text-xs text-secondary flex items-center gap-1.5">
-              <span
-                className={`w-1.5 h-1.5 rounded-full ${
-                  agentStatus === "connecting"
-                    ? "bg-amber-400 animate-pulse"
-                    : agentStatus === "thinking"
-                      ? "bg-amber-500 animate-pulse"
-                      : agentStatus === "speaking"
-                        ? "bg-indigo-500 animate-pulse"
-                        : agentStatus === "listening"
-                          ? "bg-emerald-500"
-                          : agentStatus === "error"
-                            ? "bg-rose-500"
-                            : "bg-secondary"
-                }`}
-              />
-              {agentStatus === "connecting"
-                ? "Agent connecting…"
-                : agentStatus === "thinking"
-                  ? "Agent thinking…"
-                  : agentStatus === "speaking"
-                    ? "Agent speaking…"
-                    : agentStatus === "listening"
-                      ? "Agent listening"
-                      : agentStatus === "error"
-                        ? "Agent error"
-                        : "Agent idle"}
-            </span>
           </div>
           <div className="px-5 pb-3 flex items-center justify-center shrink-0">
             <span className="text-[11px] text-secondary">
