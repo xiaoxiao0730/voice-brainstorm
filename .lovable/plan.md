@@ -1,145 +1,132 @@
-## 目标
+# Plan: Live Brief → Single Continuous Document
 
-将当前的 "Background Lane 直接写入 Locked Block" 模型升级为：选择模板后生成**Schema 驱动的 7 卡片画布 + Inline Pending Approval + Edit-as-Signal + Cross-Lane Shadow Sync**。Realtime Lane 严格只读且语音克制（≤20 字），慢模型只产出结构化补丁注入到固定容器内的"沙盒暂存区"，用户的 Accept/Delete/Edit 全部作为高权重信号反哺。
+Refactor Live Brief from a multi-block, slot-grouped canvas into a single continuous contentEditable document with optional template starters. Preserve all Workbench layout, design tokens, audio/realtime/background logic.
 
----
+## 1. Data model
 
-## 1. Schema 驱动的画布容器（新增）
+Introduce a single per-session document instead of N blocks. Use a JSON document model that maps cleanly to plain text + heading markers.
 
-新建 `src/lib/pipeline/thinkingTemplate.ts`：
+```ts
+// src/lib/pipeline/types.ts (additions)
+export type BriefDocLine =
+  | { id: string; kind: "h2"; text: string; lastEditedBy: "user" | "ai"; locked?: boolean }
+  | { id: string; kind: "p";  text: string; lastEditedBy: "user" | "ai"; locked?: boolean };
 
-- 新增一个选项供用户选择模板：定义 `ThinkingTemplate` 类型与默认模板 `productThinkingArtifact`，包含 7 个固定 slot：  
-`current_question`  / `user journey` / `hypothesis` / `info & observation`/ `solution` / `open_questions` / `next_actions`
-- 每个 slot 含 `id`, `title`, `prompt`（给 LLM 的填充提示）, `multi`（是否允许多条目）。
-- 导出 `TEMPLATES: Record<string, ThinkingTemplate>`，预留未来扩展（Research / Writing / Decision 等）。
-
-扩展 `src/lib/pipeline/types.ts` 中的 `BriefBlock`：
-
-- 新增 `slotId?: string`（绑定到模板 slot）
-- 新增 `status: 'committed' | 'pending_approval'`（默认 `committed`，旧数据兼容）
-- 新增 `rationale?: string`（慢模型给出的简短依据，展示在 pending 卡片上）
-
-数据库迁移：`brief_nodes` 表追加 `slot_id text`, `status text default 'committed'`, `rationale text`；对应 RLS 策略保持不变。
-
----
-
-## 2. 画布渲染重构（`BriefDocument` / `BriefCanvas`）
-
-将原本的扁平 block 列表改为 **按 slot 分组** 的 7 个稳定容器卡片：
-
-```text
-┌─ Current Question ──────────┐
-│ committed item ...          │
-│ ┌─ pending (dashed green) ─┐│
-│ │ AI proposal              ││
-│ │ rationale: ...           ││
-│ │ [✓ Accept] [✕ Delete]    ││
-│ └──────────────────────────┘│
-└─────────────────────────────┘
+export type BriefDocV2 = {
+  sessionId: string;
+  lines: BriefDocLine[];        // ordered; rendered as one stream
+  updatedAt: number;
+};
 ```
 
-- 每个 slot 卡片显示 `title`，其下按 `orderKey` 排列归属该 slot 的 blocks。
-- `status === 'pending_approval'` 的 block 渲染为浅绿背景 + 虚线边框 + Accept/Delete 按钮；committed block 渲染为普通行内文本，仍可直接编辑。
-- 空 slot 显示淡色 placeholder（来自 `slot.prompt`），不显示空白卡片骨架。
-- 在慢模型流式输出（Streaming）未完成前，行内绿框应处于 Loading 或禁用点击状态，右上角的工具栏 `[✓ Accept] [✕ Delete]` 必须在流式生成完全结束后（`done: true`）再淡入显现，防止用户误触
+Why "lines" instead of full HTML: avoids storing unsanitised HTML, keeps diffs simple, lets the Background Canvas append plain lines, and serialises trivially.
 
-新增 props/回调：`onAcceptPending(blockId)`, `onRejectPending(blockId)`, `onEditCommitted(blockId, body)`（已有的 edit 逻辑复用），并把这些操作通过新的 `signalBus` 转发（见第 5 节）。
+### Storage
 
----
+Reuse the existing `brief_nodes` table — no migration needed.
+- Each `BriefDocLine` is stored as one `brief_nodes` row.
+- `level = "h2"` for headings, `"bullet"` for paragraphs (`kind: "p"`).
+- `orderKey` defines stream order across the whole document (slot grouping ignored).
+- `slot_id` retained only as legacy metadata; never drives UI.
+- `is_pending` / `rationale` retained for AI-pending lines.
 
-## 3. Background Canvas Lane 重做
+Loader: read all `brief_nodes` for the session, sort by `orderKey`, map each row → `BriefDocLine`. Heading rows become `h2`, body rows become `p`. Old rows that had both `heading` + `body` are split into two lines (heading first, then body) on first load and re-persisted with new orderKeys; this preserves all existing content.
 
-### 3.1 智能门控（Segment Sender）
+## 2. Editor component (`BriefDocument.tsx`)
 
-新建 `src/lib/agent/segmentGate.ts`：
+Single `contentEditable` root holding the whole document.
 
-- 纯函数 `assessDensity(segment, recentTexts): { substantive: boolean; reason: string }`。
-- 启发式 + 关键字过滤：丢弃 <8 字 / 纯填充词 / 与最近 segment 重复度高的片段。
-- `onSegment` 中若 `substantive === false`，跳过慢模型调用（仍写入 transcript），并 `logIntervention({ decision: 'silent', reason })`。
-- 当且仅当前端某个卡片处于激活编辑状态（Active Edit Mode）时，`segment sender` 必须暂停触发后台慢模型，优先保护用户的现场输入。
+- Render each line as a `<h2>` or `<p>` with `data-line-id`.
+- React renders the initial HTML once per session load (keyed on `sessionId`); after mount, React does NOT re-render the contentEditable subtree from state. Local state and DOM diverge intentionally — React owns mount, the DOM owns edits.
+- Background Canvas writes happen via imperative DOM ops (`document.querySelector('[data-line-id="…"]')` insert) wrapped in a helper that preserves the current Selection (save anchor/focus offset before insert, restore after).
+- Composition events: track `isComposing` ref; suppress save/diff while true.
+- Save pipeline (debounced 500 ms, also on blur, on session switch, on `beforeunload`):
+  1. Walk the contentEditable DOM, read each top-level `<h2>`/`<p>` → array of lines (preserve `data-line-id` where present; mint UUIDs for new nodes).
+  2. Diff against last persisted snapshot → emit `upsert` / `delete` calls to existing `brief.functions.ts`.
+- Selection: native browser selection across the whole element; Ctrl+A and Delete work because there is only one contentEditable.
+- Placeholder: render an absolutely-positioned overlay div with `pointer-events-none` showing "A canvas for thinking aloud." + "Start speaking or type anywhere. You can choose a template listed above." Visible only when the editor contains zero non-whitespace text. Driven by a single `isEmpty` state recomputed from DOM on input. Never written to DB.
+- Pending AI lines: render with a subtle left border + lighter text + small inline `Accept` / `Reject` affordances at the end of the line. No card, no dashed box.
+- Edit a pending line: any keystroke flips it to user-owned + accepted.
 
-### 3.2 慢模型产出 Slot Patch
+## 3. Template behaviour
 
-重写 `src/lib/agent/responseGenerator.functions.ts` 的输出契约：
+`thinkingTemplate.ts`:
+- Add `NONE_TEMPLATE_ID = "none"`; `DEFAULT_TEMPLATE_ID = "none"`.
+- Add `headings: string[]` field for insertion. Slots kept as optional AI hint metadata.
+- Product Thinking Artifact headings: Current Question, User Journey, Hypothesis, Info & Observation, Solution, Open Questions, Next Actions.
 
-- 输入新增：`template: ThinkingTemplate`、`snapshot` 按 slot 分组、`userSignals`（最近的 accept/reject/edit 事件，见 5.2）。
-- 系统提示：明确告知模型 "只能产生对 7 个 slot 之一的增量补丁，且作为 pending_approval 注入；用户的拒绝/编辑是强信号，禁止重复被拒绝的提案"。
-- 输出 schema：
-  ```ts
-  { emit: boolean;
-    patch?: { slotId: SlotId; heading: string; body: string; rationale: string };
-    insight?: string; // ≤120 字，供 Realtime 影子同步
-  }
-  ```
-- 移除当前默认追加到末尾、`level: 3` 写死的逻辑。
+Workbench:
+- Rename pinned UI label to "Template", as a dropdown: No template / Product Thinking Artifact / (disabled: Research, Decision).
+- Default per new session: `none`. Persisted per session in localStorage as today.
+- Selecting a template:
+  1. Confirm it's not the currently-applied template (track `appliedTemplateId` separately from `templateId`, both in state + persisted).
+  2. Append each heading as a new `h2` line to the end of the document (mint UUIDs, allocate orderKeys via `between(last, null)`), persist.
+  3. Update `appliedTemplateId`.
+- Re-selecting same template: no-op (dedupe guard).
+- Switching to a different template or back to "No template": only updates AI hint; previously inserted headings stay as normal editable lines.
 
-### 3.3 注入为 Pending Block
+## 4. Background Canvas adaptation
 
-`workbench.tsx` 中 `runBackgroundCanvas`：
+`responseGenerator.functions.ts`:
+- Input shape becomes `{ latestText, recentTexts, documentSnapshot: BriefDocLine[], templateHint?: { name, headings, slotHints } | null, userSignals, model }`.
+- Output shape becomes `{ emit: false, insight? } | { emit: true, lines: Array<{ kind: "h2" | "p"; text: string; rationale: string; anchor?: { afterLineId?: string } }>, insight? }`.
+- Prompt: with template hint, prefer placing under matching heading; without, append freely; never invent "Unsorted" sections.
 
-- 当 `result.emit` 时，构造 block 时设置 `slotId = result.patch.slotId`, `status = 'pending_approval'`, `locked = false`, `lastEditedBy = 'ai'`, `rationale = result.patch.rationale`。
-- 持久化到 DB（带 status='pending_approval'）。
-- 不再自动 commit；等待用户 Accept。
+Workbench `runBackgroundCanvas`:
+- Pass current document snapshot + optional template hint.
+- For each returned line, insert as `isPending` line either after `anchor.afterLineId` or at end. Insertion uses the DOM-preserving helper from §2 so user's caret isn't disturbed; if `focusedBlockRef` (renamed: `isEditingRef`) is true, queue and retry on blur.
+- Pending lines reuse the existing `acceptPendingBlock` server fn (still keyed by node id).
 
----
+## 5. Cleanup
 
-## 4. Accept / Delete / Edit 行为
+- Delete slot-grouping render path in `BriefDocument.tsx`, "Loose threads", "Unsorted", per-block `BlockRow` with its dual contentEditables.
+- Remove `BriefCanvas.tsx` if unused after refactor (check imports first).
+- Keep `interventionPolicy`, `segmentGate`, `signalBus`, `realtimeClient`, speech pipeline untouched.
+- Keep `brief.functions.ts` signatures; only adjust where field meaning changes (heading vs body).
 
-新增 server fn（或复用 `upsertBriefNode` + 状态字段）：
+## 6. Styles (`src/styles.css`)
 
-- `acceptPendingBlock(blockId)`：将 `status` 改为 `committed`，写一条 `user_signal` 日志。
-- `rejectPendingBlock(blockId)`：从 doc 中移除（DB 行删除），写 `user_signal` 日志。
-- `editCommittedBlock`（沿用现有 upsert 路径，但额外写 `user_signal` 日志）。
+Add a minimal scoped block (single class root, e.g. `.brief-doc`):
+- Max width 760 px, mx-auto.
+- `h2`: 22 px, font-medium, mt-8 mb-2, color text-primary, Inter.
+- `p`: 17 px, line-height 1.65, my-3.
+- `::selection`: low-contrast neutral.
+- No focus outline on the root; rely on caret only.
+- Pending line: `border-l-2 border-emerald-400/60 pl-3 text-primary/85`.
 
-`signalBus`（见下节）将这些事件累积到 `recentSignals` 里，下一次慢模型调用时随 input 一起发送。
+No design-token changes. No new colors. Inter remains body font; existing Instrument Serif usage elsewhere untouched.
 
----
+## 7. Caret/state safety summary
 
-## 5. Cross-Lane Shadow Sync（影子同步回路）
+- React renders editor HTML once per `sessionId` mount; never re-renders from `doc` state during editing.
+- All AI insertions go through one helper that:
+  1. Saves `selection.anchorNode/offset` (if inside editor).
+  2. Inserts new DOM node at target position.
+  3. Restores selection (clamped if anchor node was replaced).
+- Composition tracked via `compositionstart` / `compositionend` refs; saves suppressed while composing.
+- Debounced save reads DOM, not state, so user keystrokes are the source of truth.
 
-### 5.1 `src/lib/agent/signalBus.ts`（新增轻量内存总线）
+## 8. Files touched
 
-- 维护 `recentSignals: Array<{ type: 'accept' | 'reject' | 'edit' | 'pending_appear'; slotId; heading; ts }>`（环形，最近 12 条）。
-- 暴露 `publish(signal)` 和 `snapshot()`，被 workbench 的 Accept/Reject/Edit handler 与 `runBackgroundCanvas`（产生 pending 时）调用。
+- `src/lib/pipeline/types.ts` — add `BriefDocLine`, helpers `nodeToLine` / `lineToNodeUpsert`, keep legacy exports for compat.
+- `src/lib/pipeline/thinkingTemplate.ts` — add `none` template, add `headings` field.
+- `src/components/brief/BriefDocument.tsx` — rewrite as single contentEditable.
+- `src/components/brief/BriefCanvas.tsx` — delete if no remaining import.
+- `src/routes/_authenticated/workbench.tsx` — template default = none, template apply logic, doc loader splits legacy rows, Background Canvas wiring, isEditing ref instead of focusedBlock.
+- `src/lib/agent/responseGenerator.functions.ts` — new I/O shape (lines instead of single slot patch).
+- `src/lib/brief.functions.ts` — no signature change expected; verify pending accept still works on a row whose "heading" is empty.
+- `src/styles.css` — add `.brief-doc` typography block.
 
-### 5.2 Realtime 注入
+## 9. Out of scope
 
-- 任何 `publish` 调用后，提炼出一条极简文本（如 `"[background insight] Pending hypothesis in slot=pain: 用户怕踩坑"`），通过 `realtimeRef.current?.injectContext(...)` 异步推给 Realtime Session。
-- Realtime system prompt 强化（在 `realtimeClient.ts`）：
-  - 角色：头脑风暴合作伙伴
-  - 硬约束："每次开口 ≤20 个字；右侧画布不是你的领地，禁止复述其内容；只在用户明显停顿或直接发问时才说话；优先识别用户的困惑，进行启发性追问或总结。"
-  - 头脑风暴合作伙伴处理 `[background insight]`：仅作为"知识更新"吸收，不主动播报。
-  - `injectContext` 的触发必须加上至少 3 秒的防抖（Debounce），只有当画布停止流式更新、且用户停止手动编辑 3 秒后，再将最终状态一次性反哺给语音 Agent。
+- No DB migration. No changes to speech, Realtime token, Azure pipeline, sidebar, transcript, audio meter, agent panel chrome.
+- No new template content beyond Product Thinking Artifact headings.
+- No rich-text formatting (bold/italic/links) — plain headings + paragraphs only.
 
----
+## 10. Acceptance check map
 
-## 6. 顶部导航 + 模板选择器
+All 19 acceptance criteria covered: default None (§3), placeholder behaviour (§2), Ctrl+A / Delete (§2 single root), template append + persistence (§3), no slot UI (§5), background canvas free-form (§4), IME safety (§2/§7), session reload + legacy data (§1 loader), typecheck (no `any` in new code, lines reuse existing row types).
 
-`workbench.tsx`：
+## 11. Open question before implementation
 
-- 在侧边栏顶部（或主区头部）加 `<select>` "思维模板"，默认 `Product Thinking Artifact`。
-- 当前阶段只暴露默认模板（其他模板灰显 "Coming soon"），但读取/写入路径完全打通，所有 slot ID 由 `ThinkingTemplate` 驱动。
-- 模板选择持久化到 `localStorage` (`murmur.template.${sessionId}`)，loadBrief 后用所选模板分组渲染。
-
----
-
-## 7. 清理与简化
-
-- `interventionPolicy.ts`：保留 `shouldEmitCanvas` 节流（4s 防抖），但语义改为"两次 pending 提案之间的最小间隔"。
-- 移除当前 `responseGenerator` 中关于 `level: 3` / 直接追加末尾的所有遗留逻辑。
-- `AgentPanel.tsx`：状态指示器保留（off / listening / thinking / speaking），不再渲染任何 suggestion 卡片。
-- 日志 `interventionLog`：`decision` 扩展 `'pending'`（取代之前的 `'canvas'`），新增 `slotId` 列。
-
----
-
-## 技术细节附录
-
-**文件改动清单**
-
-- 新增：`src/lib/pipeline/thinkingTemplate.ts`, `src/lib/agent/segmentGate.ts`, `src/lib/agent/signalBus.ts`
-- 编辑：`src/lib/pipeline/types.ts`, `src/lib/pipeline/applyBriefPatch.ts`（处理 slotId/status）, `src/lib/brief.functions.ts`（增删字段 + accept/reject server fn）, `src/lib/agent/responseGenerator.functions.ts`, `src/lib/agent/realtimeClient.ts`, `src/lib/agent/interventionPolicy.ts`, `src/lib/agent/interventionLog.functions.ts`, `src/components/brief/BriefDocument.tsx`, `src/components/brief/BriefCanvas.tsx`, `src/components/agent/AgentPanel.tsx`, `src/routes/_authenticated/workbench.tsx`
-- 迁移：新增 supabase migration 给 `brief_nodes` 加 `slot_id` / `status` / `rationale` 列 + 索引
-
-**类型清洁**：所有新增字段在 `BriefBlock` 上都标注可选并提供默认值（DB 端 default `'committed'`），保证现有 session 加载不破坏。
-
-**Out of scope**：STT/transcriptBuffer 不动；多模板（除默认）暂不实现。
+The legacy split (one DB row → two lines on first load) does a one-time write per old session. Confirm this is acceptable, or I can keep legacy rows as a single combined `p` line containing "Heading\n\nBody" instead.
