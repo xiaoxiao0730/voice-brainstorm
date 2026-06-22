@@ -39,6 +39,8 @@ import { assessDensity } from "@/lib/agent/segmentGate";
 import { publish as publishSignal, snapshot as signalSnapshot, summarizeForInject } from "@/lib/agent/signalBus";
 import { DEFAULT_TEMPLATE_ID, getTemplate, TEMPLATES } from "@/lib/pipeline/thinkingTemplate";
 import { type AgentStatus } from "@/components/agent/AgentPanel";
+import { sessionStore } from "@/lib/orchestrator/sessionStore";
+import { attachCoordinator } from "@/lib/orchestrator/coordinator";
 
 export const Route = createFileRoute("/_authenticated/workbench")({
   validateSearch: (search: Record<string, unknown>) => ({
@@ -254,6 +256,20 @@ function Workbench() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Stage 4: sync sessionStore + attach slow-lane coordinator to the active session.
+  useEffect(() => {
+    if (!activeSessionId) {
+      sessionStore.setActive(null);
+      return;
+    }
+    sessionStore.setActive(activeSessionId);
+    const detach = attachCoordinator(activeSessionId);
+    return () => {
+      detach();
+    };
+  }, [activeSessionId]);
+
+
   const openSession = useCallback(
     async (id: string) => {
       try {
@@ -387,7 +403,15 @@ function Workbench() {
         console.warn("persistSegment failed", e);
       }
 
-      // Background Canvas Lane (parallel, schema-driven).
+      // Stage 4: feed long-form ThoughtTurn buffer (slow-lane coordinator).
+      try {
+        sessionStore.getOrCreate(segment.sessionId).thoughtTurnBuffer.ingest(segment);
+      } catch (e) {
+        console.warn("thoughtTurnBuffer.ingest failed", e);
+      }
+
+      // Background Canvas Lane (parallel, schema-driven). Kept until the
+      // coordinator-driven brief writer ships in a later PR.
       void runBackgroundCanvas(segment).catch((e) => console.warn("canvas lane failed", e));
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps

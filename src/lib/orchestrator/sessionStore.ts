@@ -12,6 +12,7 @@
 // flashing onto the new canvas.
 
 import { createSessionEventBus, type SessionEventBus } from "./sessionEvents";
+import { createThoughtTurnBuffer, type ThoughtTurnBuffer } from "@/lib/pipeline/thoughtTurnBuffer";
 
 type Mutex = {
   run: <T>(fn: () => Promise<T>) => Promise<T>;
@@ -34,6 +35,7 @@ export type SessionSlot = {
   sessionId: string;
   bus: SessionEventBus;
   briefQueue: Mutex;
+  thoughtTurnBuffer: ThoughtTurnBuffer;
   researchTasks: Map<string, ResearchTaskStatus>;
 };
 
@@ -44,16 +46,17 @@ let activeSessionId: string | null = null;
 const activeListeners = new Set<Listener>();
 
 function ensure(sessionId: string): SessionSlot {
-  let slot = sessions.get(sessionId);
-  if (!slot) {
-    slot = {
-      sessionId,
-      bus: createSessionEventBus(),
-      briefQueue: createMutex(),
-      researchTasks: new Map(),
-    };
-    sessions.set(sessionId, slot);
-  }
+  const existing = sessions.get(sessionId);
+  if (existing) return existing;
+  const bus = createSessionEventBus();
+  const slot: SessionSlot = {
+    sessionId,
+    bus,
+    briefQueue: createMutex(),
+    thoughtTurnBuffer: createThoughtTurnBuffer(sessionId, bus),
+    researchTasks: new Map(),
+  };
+  sessions.set(sessionId, slot);
   return slot;
 }
 
@@ -88,6 +91,7 @@ export const sessionStore = {
   dispose(sessionId: string) {
     const slot = sessions.get(sessionId);
     if (!slot) return;
+    slot.thoughtTurnBuffer.dispose();
     slot.bus.dispose();
     slot.researchTasks.clear();
     sessions.delete(sessionId);
