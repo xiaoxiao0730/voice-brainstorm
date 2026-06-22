@@ -257,17 +257,55 @@ function Workbench() {
   }, []);
 
   // Stage 4: sync sessionStore + attach slow-lane coordinator to the active session.
+  // Also subscribe to brief.proposed / research.requested / research.completed.
   useEffect(() => {
     if (!activeSessionId) {
       sessionStore.setActive(null);
       return;
     }
     sessionStore.setActive(activeSessionId);
-    const detach = attachCoordinator(activeSessionId);
+    const slot = sessionStore.getOrCreate(activeSessionId);
+
+    const detach = attachCoordinator(activeSessionId, {
+      getSnapshot: () =>
+        Object.values(docRef.current)
+          .sort((a, b) => a.orderKey.localeCompare(b.orderKey))
+          .map((b) => ({
+            id: b.id,
+            kind: (b.level === 2 ? "h2" : "p") as "h2" | "p",
+            text: (b.level === 2 ? b.heading : b.body) ?? "",
+            locked: b.locked,
+          })),
+      getModel: () => modelRef.current,
+    });
+
+    const offProposed = slot.bus.on("brief.proposed", (e) => {
+      if (e.sessionId !== activeSessionRef.current) return;
+      applyProposedPatches(e.sessionId, e.operationId, e.patches);
+    });
+    const offResearchReq = slot.bus.on("research.requested", (e) => {
+      if (e.sessionId !== activeSessionRef.current) return;
+      setResearchRunning((m) => ({ ...m, [e.taskId]: e.query }));
+    });
+    const offResearchDone = slot.bus.on("research.completed", (e) => {
+      setResearchRunning((m) => {
+        const next = { ...m };
+        delete next[e.taskId];
+        return next;
+      });
+      if (e.sessionId !== activeSessionRef.current) return;
+      applyResearchResult(e.sessionId, e.operationId, e.result);
+    });
+
     return () => {
       detach();
+      offProposed();
+      offResearchReq();
+      offResearchDone();
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeSessionId]);
+
 
 
   const openSession = useCallback(
