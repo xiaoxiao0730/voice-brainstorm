@@ -12,6 +12,7 @@
 // flashing onto the new canvas.
 
 import { createSessionEventBus, type SessionEventBus } from "./sessionEvents";
+import { createThoughtTurnBuffer, type ThoughtTurnBuffer } from "@/lib/pipeline/thoughtTurnBuffer";
 
 type Mutex = {
   run: <T>(fn: () => Promise<T>) => Promise<T>;
