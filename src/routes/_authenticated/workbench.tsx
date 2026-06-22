@@ -722,6 +722,7 @@ function Workbench() {
         clientSecret,
         model: rtModel,
         micStream: streamRef.current,
+        sessionId: activeSessionRef.current,
         events: {
           onConnected: () => {
             agentConnectedAtRef.current = Date.now();

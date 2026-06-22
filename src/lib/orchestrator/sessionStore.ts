@@ -49,11 +49,14 @@ function ensure(sessionId: string): SessionSlot {
   const existing = sessions.get(sessionId);
   if (existing) return existing;
   const bus = createSessionEventBus();
+  const thoughtTurnBuffer = createThoughtTurnBuffer(sessionId, bus);
+  // Voice grabbing the turn = user yielded → early-finalize the current ThoughtTurn.
+  bus.on("voice.response_started", () => thoughtTurnBuffer.onVoiceResponseStarted());
   const slot: SessionSlot = {
     sessionId,
     bus,
     briefQueue: createMutex(),
-    thoughtTurnBuffer: createThoughtTurnBuffer(sessionId, bus),
+    thoughtTurnBuffer,
     researchTasks: new Map(),
   };
   sessions.set(sessionId, slot);
