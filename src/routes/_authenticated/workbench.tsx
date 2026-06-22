@@ -1113,10 +1113,7 @@ function Workbench() {
             <div className="flex items-center gap-2">
               <select
                 value={templateId}
-                onChange={(e) => {
-                  const id = e.target.value;
-                  if (TEMPLATES[id]?.available) setTemplateId(id);
-                }}
+                onChange={(e) => applyTemplate(e.target.value)}
                 className="px-3 py-1 bg-surface rounded-full text-xs text-primary border border-auralis hover:bg-surface-variant cursor-pointer focus:outline-none focus:ring-1 focus:ring-primary"
                 aria-label="Thinking template"
                 title="Select thinking template"
