@@ -191,7 +191,9 @@ export async function connectRealtime(opts: ConnectOptions): Promise<RealtimeCli
           type: "conversation.item.create",
           item: { type: "function_call_output", call_id: callId, output: JSON.stringify({ ok: false, error: "missing query" }) },
         });
-        send({ type: "response.create", response: { output_modalities: ["audio"] } });
+        // Do NOT call response.create here — the in-flight response that
+        // emitted this tool call is still active. A second response.create
+        // would spawn a concurrent audio reply (two overlapping voices).
         return;
       }
       const taskId = crypto.randomUUID();
@@ -205,8 +207,10 @@ export async function connectRealtime(opts: ConnectOptions): Promise<RealtimeCli
           output: JSON.stringify({ ok: true, taskId, note: "Research queued. Result will appear in the Live Brief." }),
         },
       });
-      // Let the model say its short acknowledgment.
-      send({ type: "response.create", response: { output_modalities: ["audio"] } });
+      // The model already spoke its short acknowledgment in the same
+      // response that emitted this tool call. Do NOT call response.create —
+      // it would start a second concurrent audio response and the user
+      // would hear two voices replying at once.
       return;
     }
 
