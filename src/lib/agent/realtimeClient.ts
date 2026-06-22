@@ -1,16 +1,19 @@
 // Browser-side wrapper around the OpenAI Realtime WebRTC API.
 //
-// Realtime Lane responsibility (Stage 3 architecture):
-//   * Native low-latency voice co-thinking. Server VAD owns turn-taking and
-//     auto-creates responses so the agent can chat / barge in naturally.
-//   * Acts as a Socratic brainstorming coach — short, conversational replies,
-//     listens during connected speech, asks one light probe at pauses.
-//   * NEVER touches the Live Brief or applyBriefPatch. The Background Canvas
-//     Lane owns all structural updates in parallel.
+// Stage 4 — Fast voice lane (Lane A).
+//   * Long-form peer voice: 3–6 sentence replies (~30s), no interviewer fillers.
+//   * Server VAD owns turn-taking. create_response stays ON.
+//   * Registers two tools the agent can invoke mid-conversation:
+//       - stay_silent({ reason })          → cancel in-flight response, emit event
+//       - request_research({ query, reason }) → emit research.requested event;
+//         the researchQueue (PR5) actually runs the search.
+//   * Emits SessionEvents (voice.response_started, voice.spoke, …) on the
+//     active session bus so the slow-lane coordinator and ThoughtTurn buffer
+//     can react (e.g. early-finalize a turn when the agent starts speaking).
 //
-// Cross-lane bridge: injectContext(note) sneaks a system-role conversation
-// item into the live session so the next user turn benefits from background
-// insights — without forcing the agent to speak.
+// The brief/canvas is owned by the slow lane. Voice never writes the brief.
+
+import { sessionStore } from "@/lib/orchestrator/sessionStore";
 
 export type RealtimeEvents = {
   onConnected?: () => void;
@@ -20,6 +23,10 @@ export type RealtimeEvents = {
   onAgentTranscript?: (text: string) => void;
   onUserBargeIn?: () => void;
   onError?: (err: Error) => void;
+  /** Fired when the agent invokes the request_research tool. */
+  onResearchRequested?: (args: { query: string; reason?: string; callId: string }) => void;
+  /** Fired when the agent invokes the stay_silent tool. */
+  onStaySilent?: (reason: string) => void;
 };
 
 export type RealtimeClient = {
@@ -35,53 +42,80 @@ export type ConnectOptions = {
   clientSecret: string;
   model: string;
   micStream: MediaStream;
+  /** Session this voice connection belongs to. Required for SessionEvent emission. */
+  sessionId: string;
   events?: RealtimeEvents;
 };
 
-const SOCRATIC_INSTRUCTIONS = `You are a brainstorming partner in a live voice conversation. Your role is to help the user think out loud, weave information for the user, and help the user reach more insights.
+const SOCRATIC_INSTRUCTIONS = `You are a thinking partner in a live voice conversation. Talk like a sharp colleague who is genuinely engaged — not an interviewer collecting requirements, not a coach with a script.
 
-VOICE RESPONSE MODES:
+CADENCE
+- Default reply: 3 to 6 sentences, roughly 15–30 seconds of speech. No hard word caps.
+- When directly asked a factual question, answer it directly. Conclusion first, then one sentence of reasoning or context.
+- It's fine to stay quiet by calling the stay_silent tool when the user is clearly mid-thought.
 
-ACKNOWLEDGE:
-- 1 to 2 short sentence.
-- Used while the user is still developing a thought.
-them.
+VOICE
+- Sound like a peer thinking out loud with the user.
+- Build on what they just said before you push back or probe.
+- Offer a frame, a concrete possibility, a tradeoff, or a missing assumption. Then maybe one focused question.
+- Never use generic filler probes like "Can you tell me more?", "What's the main problem?", "What slows them down most?".
+- Don't restate the user's idea back to them as a question.
 
-PROBING STYLE:
-- Do not respond like an interviewer collecting requirements.
-- First briefly acknowledge or build on the user's emerging idea.
-- For a probe, use one brief observation followed by one focused question.
-The observation should add a useful frame without taking over the user's thinking.
-- When useful, offer 2–3 concrete possibilities the user can react to.
-- Prefer questions that reveal a tradeoff, bottleneck, assumption, or decision.
-- Avoid generic prompts such as:
-  - "Can you tell me more?"
-  - "What is the main problem?"
-  - "What slows them down most?"
-- Sound like a collaborative partner who is already thinking with the user.
+TOOLS
+- stay_silent({ reason }): call this when you detect the user is still developing their thought and you would otherwise interrupt. Pass a short reason ("mid-list", "trailing off", etc.).
+- request_research({ query, reason }): call this when answering well requires fresh external facts (specific numbers, recent events, current pricing, named sources, technical details you're not confident about). Say a brief acknowledgment out loud like "Let me look that up" — then stop. The research result will appear in the Live Brief; you do not need to read it aloud unless the user asks.
 
-DIRECT ANSWER:
-- When the user directly asks a question, answer it.
-- Use 1-2 concise spoken sentences. Output less than 64 tokens.
-- Target 15–25 seconds of speech.
-- Give the conclusion first.
-- Do not force every response into a question.
+WHEN A RESEARCH RESULT COMES BACK
+- Speak only the conclusion, the key piece of evidence, and one implication.
+- Never read sources or full report aloud — that lives in the Live Brief.`;
 
-RESEARCH ACKNOWLEDGEMENT:
-- Briefly say that you will look it up.
-- Do not invent an answer while research is running.
-
-RESEARCH SUMMARY:
-- Speak only the conclusion, key evidence, and one implication.
-- Do not read the full research report or citations aloud.
-- The detailed result belongs in the Live Brief.`;
+const TOOLS = [
+  {
+    type: "function" as const,
+    name: "stay_silent",
+    description:
+      "Suppress your own voice response because the user is still in the middle of their thought. Use sparingly.",
+    parameters: {
+      type: "object",
+      properties: {
+        reason: { type: "string", description: "Short reason you're staying silent." },
+      },
+      required: ["reason"],
+    },
+  },
+  {
+    type: "function" as const,
+    name: "request_research",
+    description:
+      "Trigger an asynchronous web research task. Use when answering needs fresh external facts you don't reliably know. Acknowledge briefly out loud, then stop speaking.",
+    parameters: {
+      type: "object",
+      properties: {
+        query: { type: "string", description: "Focused search query." },
+        reason: { type: "string", description: "Why this needs external research." },
+      },
+      required: ["query"],
+    },
+  },
+];
 
 export async function connectRealtime(opts: ConnectOptions): Promise<RealtimeClient> {
-  const { clientSecret, model, micStream, events = {} } = opts;
+  const { clientSecret, model, micStream, sessionId, events = {} } = opts;
 
   const pc = new RTCPeerConnection();
   let agentSpeaking = false;
   let disposed = false;
+
+  // Buffer function-call arguments by call_id; the Realtime API streams them.
+  const pendingToolArgs = new Map<string, { name: string; args: string }>();
+
+  const emit = (event: Parameters<typeof sessionStore.getOrCreate>[0] extends never ? never : Parameters<ReturnType<typeof sessionStore.getOrCreate>["bus"]["emit"]>[0]) => {
+    try {
+      sessionStore.getOrCreate(sessionId).bus.emit(event);
+    } catch (err) {
+      console.warn("[realtime] emit failed", err);
+    }
+  };
 
   const audioEl = document.createElement("audio");
   audioEl.autoplay = true;
@@ -104,12 +138,12 @@ export async function connectRealtime(opts: ConnectOptions): Promise<RealtimeCli
   };
 
   dc.onopen = () => {
-    // Native server-VAD + auto-create_response: OpenAI Realtime owns turn-taking.
     send({
       type: "session.update",
       session: {
         type: "realtime",
         instructions: SOCRATIC_INSTRUCTIONS,
+        tools: TOOLS,
         audio: {
           input: {
             turn_detection: {
@@ -127,6 +161,61 @@ export async function connectRealtime(opts: ConnectOptions): Promise<RealtimeCli
     events.onConnected?.();
   };
 
+  const handleToolCall = (name: string, rawArgs: string, callId: string) => {
+    let args: Record<string, unknown> = {};
+    try {
+      args = rawArgs ? (JSON.parse(rawArgs) as Record<string, unknown>) : {};
+    } catch {
+      args = {};
+    }
+
+    if (name === "stay_silent") {
+      const reason = typeof args.reason === "string" ? args.reason : "user mid-thought";
+      try { dc.readyState === "open" && send({ type: "response.cancel" }); } catch { /* ignore */ }
+      emit({ type: "voice.stayed_silent", sessionId, reason });
+      events.onStaySilent?.(reason);
+      // Return a noop tool output so the model doesn't hang on it.
+      send({
+        type: "conversation.item.create",
+        item: { type: "function_call_output", call_id: callId, output: JSON.stringify({ ok: true }) },
+      });
+      return;
+    }
+
+    if (name === "request_research") {
+      const query = typeof args.query === "string" ? args.query.trim() : "";
+      const reason = typeof args.reason === "string" ? args.reason : undefined;
+      if (!query) {
+        send({
+          type: "conversation.item.create",
+          item: { type: "function_call_output", call_id: callId, output: JSON.stringify({ ok: false, error: "missing query" }) },
+        });
+        send({ type: "response.create", response: { output_modalities: ["audio"] } });
+        return;
+      }
+      const taskId = crypto.randomUUID();
+      emit({ type: "research.requested", sessionId, taskId, query, ...(reason ? {} : {}) });
+      events.onResearchRequested?.({ query, reason, callId: taskId });
+      send({
+        type: "conversation.item.create",
+        item: {
+          type: "function_call_output",
+          call_id: callId,
+          output: JSON.stringify({ ok: true, taskId, note: "Research queued. Result will appear in the Live Brief." }),
+        },
+      });
+      // Let the model say its short acknowledgment.
+      send({ type: "response.create", response: { output_modalities: ["audio"] } });
+      return;
+    }
+
+    // Unknown tool — return an error output.
+    send({
+      type: "conversation.item.create",
+      item: { type: "function_call_output", call_id: callId, output: JSON.stringify({ ok: false, error: `unknown tool ${name}` }) },
+    });
+  };
+
   dc.onmessage = (e) => {
     let evt: { type?: string; [k: string]: unknown };
     try {
@@ -135,7 +224,10 @@ export async function connectRealtime(opts: ConnectOptions): Promise<RealtimeCli
       return;
     }
     switch (evt.type) {
-      case "response.created":
+      case "response.created": {
+        emit({ type: "voice.response_started", sessionId });
+        break;
+      }
       case "response.output_audio.delta":
         if (!agentSpeaking) {
           agentSpeaking = true;
@@ -145,7 +237,39 @@ export async function connectRealtime(opts: ConnectOptions): Promise<RealtimeCli
       case "response.output_audio_transcript.done":
       case "response.audio_transcript.done": {
         const t = (evt as { transcript?: unknown }).transcript;
-        if (typeof t === "string" && t.trim()) events.onAgentTranscript?.(t.trim());
+        if (typeof t === "string" && t.trim()) {
+          const text = t.trim();
+          events.onAgentTranscript?.(text);
+          emit({ type: "voice.spoke", sessionId, text });
+        }
+        break;
+      }
+      case "response.output_item.added": {
+        const item = (evt as { item?: { type?: string; name?: string; call_id?: string } }).item;
+        if (item?.type === "function_call" && item.name && item.call_id) {
+          pendingToolArgs.set(item.call_id, { name: item.name, args: "" });
+        }
+        break;
+      }
+      case "response.function_call_arguments.delta": {
+        const callId = (evt as { call_id?: string }).call_id;
+        const delta = (evt as { delta?: string }).delta;
+        if (callId && typeof delta === "string") {
+          const cur = pendingToolArgs.get(callId);
+          if (cur) cur.args += delta;
+        }
+        break;
+      }
+      case "response.function_call_arguments.done": {
+        const callId = (evt as { call_id?: string }).call_id;
+        const finalArgs = (evt as { arguments?: string }).arguments;
+        const nameFromEvt = (evt as { name?: string }).name;
+        if (!callId) break;
+        const buf = pendingToolArgs.get(callId);
+        const name = nameFromEvt ?? buf?.name;
+        const argsStr = typeof finalArgs === "string" && finalArgs.length > 0 ? finalArgs : buf?.args ?? "";
+        pendingToolArgs.delete(callId);
+        if (name) handleToolCall(name, argsStr, callId);
         break;
       }
       case "response.done":
@@ -220,7 +344,6 @@ export async function connectRealtime(opts: ConnectOptions): Promise<RealtimeCli
       if (disposed) return;
       const trimmed = note.trim();
       if (!trimmed) return;
-      // Silent system note — does not trigger a response, only enriches future turns.
       send({
         type: "conversation.item.create",
         item: {
@@ -233,21 +356,9 @@ export async function connectRealtime(opts: ConnectOptions): Promise<RealtimeCli
     isAgentSpeaking: () => agentSpeaking,
     async disconnect() {
       disposed = true;
-      try {
-        dc.close();
-      } catch {
-        /* ignore */
-      }
-      try {
-        pc.close();
-      } catch {
-        /* ignore */
-      }
-      try {
-        audioEl.remove();
-      } catch {
-        /* ignore */
-      }
+      try { dc.close(); } catch { /* ignore */ }
+      try { pc.close(); } catch { /* ignore */ }
+      try { audioEl.remove(); } catch { /* ignore */ }
       events.onDisconnected?.();
     },
   };
