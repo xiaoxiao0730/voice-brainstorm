@@ -234,7 +234,7 @@ export const BriefDocument = forwardRef<BriefDocumentHandle, Props>(function Bri
   );
 
   // Delegated click for pending controls
-  const onClick = (e: React.MouseEvent<HTMLDivElement>) => {
+  const onClick = (e: ReactMouseEvent<HTMLDivElement>) => {
     const target = e.target as HTMLElement;
     const acceptBtn = target.closest("[data-accept]") as HTMLElement | null;
     const rejectBtn = target.closest("[data-reject]") as HTMLElement | null;
