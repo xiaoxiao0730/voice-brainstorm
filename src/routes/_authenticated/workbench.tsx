@@ -600,6 +600,9 @@ function Workbench() {
       });
       recognizerRef.current = handle;
       setListening(true);
+      // Auto-join the realtime voice agent — Start owns the full session.
+      setAgentEnabled(true);
+      void connectAgent();
     } catch (e: any) {
       setError(e.message);
       await stopListening();
@@ -700,45 +703,22 @@ function Workbench() {
     }
   }, [mintRealtime, saveChunks]);
 
-  const toggleAgent = useCallback(async () => {
-    if (agentEnabled) {
-      if (realtimeRef.current) {
-        try { await realtimeRef.current.disconnect(); } catch { /* ignore */ }
-        realtimeRef.current = null;
-      }
-      setAgentEnabled(false);
-      setAgentStatus("off");
-      return;
-    }
-    // Auto-start mic if not already listening — Talk with Agent implies
-    // both panels should be live.
-    if (!listening || !streamRef.current) {
-      try {
-        await startListening();
-      } catch {
-        setError("Couldn't access the microphone. Check browser permissions and try again.");
-        return;
-      }
-    }
-    setAgentEnabled(true);
-    void connectAgent();
-  }, [agentEnabled, listening, connectAgent]);
+  // Note: agent lifecycle is owned by startListening / stopListening.
 
-  // Note: no auto-connect effect — toggleAgent owns connection lifecycle.
 
 
 
 
 
   // Hotkeys (outside text inputs):
-  //   T → toggle voice listening (Azure STT only)
-  //   A → start talking with agent mode on (enables agent + starts listening)
+  //   T → toggle voice listening (also brings the agent in/out via startListening)
+  //   S → if agent is speaking, silence it; otherwise prompt it to speak now
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.repeat) return;
       if (e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
       const key = e.key.toLowerCase();
-      if (key !== "t" && key !== "a") return;
+      if (key !== "t" && key !== "s") return;
       const t = e.target as HTMLElement | null;
       if (t) {
         const tag = t.tagName;
@@ -750,16 +730,16 @@ function Workbench() {
         else void startListening();
         return;
       }
-      // "a": start agent conversation
-      (async () => {
-        if (!listening) await startListening();
-        if (!realtimeRef.current) await toggleAgent();
-      })();
+      // "s": toggle agent voice
+      const client = realtimeRef.current;
+      if (!client) return;
+      if (client.isAgentSpeaking()) client.cancel();
+      else client.promptResponse();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [listening, stopListening, activeSessionId, toggleAgent]);
+  }, [listening, stopListening, activeSessionId]);
 
 
   // ============= Document handlers =============
@@ -1031,17 +1011,10 @@ function Workbench() {
               {listening ? "Stop" : "Start"}
             </button>
 
-            {/* Talk with Agent toggle */}
-            <button
-              onClick={() => void toggleAgent()}
-              disabled={!activeSessionId}
-              className={`px-5 py-2.5 rounded-full text-sm font-medium disabled:opacity-40 hover:opacity-90 flex items-center gap-2 ${
-                agentEnabled
-                  ? "border border-auralis bg-surface text-primary hover:bg-surface-variant"
-                  : "bg-primary text-on-primary"
-              }`}
-              title={agentEnabled ? "Stop talking with agent" : "Talk with agent"}
-            >
+          </div>
+          {/* Agent status line — replaces the old Talk with Agent button. */}
+          <div className="px-5 pb-2 flex items-center justify-center shrink-0">
+            <span className="text-xs text-secondary flex items-center gap-1.5">
               <span
                 className={`w-1.5 h-1.5 rounded-full ${
                   agentStatus === "connecting"
@@ -1057,26 +1030,26 @@ function Workbench() {
                     : "bg-secondary"
                 }`}
               />
-              {!agentEnabled
-                ? "Talk with Agent"
-                : agentStatus === "connecting"
-                ? "Connecting…"
+              {agentStatus === "connecting"
+                ? "Agent connecting…"
                 : agentStatus === "thinking"
-                ? "Agent Thinking…"
+                ? "Agent thinking…"
                 : agentStatus === "speaking"
-                ? "Agent Speaking…"
+                ? "Agent speaking…"
+                : agentStatus === "listening"
+                ? "Agent listening"
                 : agentStatus === "error"
-                ? "Agent Error"
-                : "Stop Agent"}
-            </button>
-
+                ? "Agent error"
+                : "Agent idle"}
+            </span>
           </div>
           <div className="px-5 pb-3 flex items-center justify-center shrink-0">
             <span className="text-[11px] text-secondary">
-              Press <kbd className="px-1.5 py-0.5 rounded border border-auralis bg-surface text-[10px] font-mono">T</kbd> to {listening ? "stop" : "start"} talking ·{" "}
-              <kbd className="px-1.5 py-0.5 rounded border border-auralis bg-surface text-[10px] font-mono">A</kbd> to talk with agent
+              <kbd className="px-1.5 py-0.5 rounded border border-auralis bg-surface text-[10px] font-mono">T</kbd> {listening ? "stop" : "start"} ·{" "}
+              <kbd className="px-1.5 py-0.5 rounded border border-auralis bg-surface text-[10px] font-mono">S</kbd> {agentStatus === "speaking" ? "silence agent" : "ask agent to speak"}
             </span>
           </div>
+
 
 
           {/* Transcript */}

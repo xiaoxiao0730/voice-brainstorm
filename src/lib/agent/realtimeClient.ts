@@ -24,6 +24,7 @@ export type RealtimeEvents = {
 
 export type RealtimeClient = {
   speak: (text: string) => void;
+  promptResponse: () => void;
   cancel: () => void;
   injectContext: (note: string) => void;
   isAgentSpeaking: () => boolean;
@@ -187,6 +188,10 @@ export async function connectRealtime(opts: ConnectOptions): Promise<RealtimeCli
     cancel() {
       if (disposed) return;
       send({ type: "response.cancel" });
+    },
+    promptResponse() {
+      if (disposed) return;
+      send({ type: "response.create", response: { output_modalities: ["audio"] } });
     },
     injectContext(note: string) {
       if (disposed) return;
