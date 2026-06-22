@@ -59,6 +59,20 @@ function ensure(sessionId: string): SessionSlot {
     thoughtTurnBuffer,
     researchTasks: new Map(),
   };
+  // Wire research lane: any research.requested on this bus enqueues a task
+  // that will emit research.completed back to the same bus when done.
+  bus.on("research.requested", (e) => {
+    slot.researchTasks.set(e.taskId, "queued");
+    // Dynamic import avoids a static cycle between sessionStore and researchQueue.
+    void import("@/lib/research/researchQueue").then(({ enqueueResearch }) => {
+      enqueueResearch({
+        taskId: e.taskId,
+        sessionId,
+        query: e.query,
+        operationId: e.operationId,
+      });
+    });
+  });
   sessions.set(sessionId, slot);
   return slot;
 }
