@@ -1069,6 +1069,35 @@ function Workbench() {
 
   const blockCount = Object.keys(doc).length;
 
+  // Stage 4: group pending blocks by operationId for the grouped Keep/Undo toolbar.
+  const pendingGroups = useMemo(() => {
+    const groups = new Map<string, BriefBlock[]>();
+    for (const b of Object.values(doc)) {
+      if (!b.isPending || !b.operationId) continue;
+      const arr = groups.get(b.operationId) ?? [];
+      arr.push(b);
+      groups.set(b.operationId, arr);
+    }
+    return Array.from(groups.entries()).map(([operationId, blocks]) => ({
+      operationId,
+      blocks: blocks.sort((a, b) => a.orderKey.localeCompare(b.orderKey)),
+    }));
+  }, [doc]);
+
+  const keepAll = useCallback(
+    async (ids: string[]) => {
+      for (const id of ids) await onAcceptPending(id);
+    },
+    [onAcceptPending],
+  );
+  const undoAll = useCallback(
+    async (ids: string[]) => {
+      for (const id of ids) await onRejectPending(id);
+    },
+    [onRejectPending],
+  );
+
+
   // ============= UI =============
 
   return (
