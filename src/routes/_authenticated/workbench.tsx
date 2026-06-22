@@ -295,7 +295,7 @@ function Workbench() {
     (
       sessionId: string,
       operationId: string | undefined,
-      result: import("@/lib/pipeline/types").ResearchResult,
+      result: ResearchResult,
     ) => {
       const opId = operationId ?? crypto.randomUUID();
       const allKeys = Object.values(docRef.current)
