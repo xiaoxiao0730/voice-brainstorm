@@ -734,14 +734,14 @@ function Workbench() {
 
 
   // Hotkeys (outside text inputs):
-  //   T → toggle voice listening (Azure STT only)
-  //   A → start talking with agent mode on (enables agent + starts listening)
+  //   T → toggle voice listening (also brings the agent in/out via startListening)
+  //   S → if agent is speaking, silence it; otherwise prompt it to speak now
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.repeat) return;
       if (e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
       const key = e.key.toLowerCase();
-      if (key !== "t" && key !== "a") return;
+      if (key !== "t" && key !== "s") return;
       const t = e.target as HTMLElement | null;
       if (t) {
         const tag = t.tagName;
@@ -753,16 +753,16 @@ function Workbench() {
         else void startListening();
         return;
       }
-      // "a": start agent conversation
-      (async () => {
-        if (!listening) await startListening();
-        if (!realtimeRef.current) await toggleAgent();
-      })();
+      // "s": toggle agent voice
+      const client = realtimeRef.current;
+      if (!client) return;
+      if (client.isAgentSpeaking()) client.cancel();
+      else client.promptResponse();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [listening, stopListening, activeSessionId, toggleAgent]);
+  }, [listening, stopListening, activeSessionId]);
 
 
   // ============= Document handlers =============
