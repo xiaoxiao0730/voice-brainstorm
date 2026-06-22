@@ -2,7 +2,7 @@ import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useServerFn } from "@tanstack/react-start";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import { BriefDocument } from "@/components/brief/BriefDocument";
+import { BriefDocument, type BriefDocumentHandle } from "@/components/brief/BriefDocument";
 import { supabase } from "@/integrations/supabase/client";
 
 
