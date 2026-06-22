@@ -600,6 +600,9 @@ function Workbench() {
       });
       recognizerRef.current = handle;
       setListening(true);
+      // Auto-join the realtime voice agent — Start owns the full session.
+      setAgentEnabled(true);
+      void connectAgent();
     } catch (e: any) {
       setError(e.message);
       await stopListening();
