@@ -1,39 +1,86 @@
-// Slow-lane Coordinator (stub). Subscribes once per session bus to
-// `thought_turn.finalized` and logs. Future PRs will:
-//   - call decideBrief.functions to produce BriefPatch[] (one operationId)
-//   - serialize writes via slot.briefQueue
-//   - optionally enqueue research via researchQueue
+// Slow-lane Coordinator.
 //
-// Voice never writes the brief; coordinator never speaks.
+// Subscribes once per session bus to `thought_turn.finalized` and:
+//   1. Calls decideBrief to produce BriefPatch[] + optional research query.
+//   2. Serializes work via slot.briefQueue (mutex).
+//   3. Emits ONE `brief.proposed` SessionEvent per turn (carrying patches +
+//      a single operationId). Workbench applies + renders.
+//   4. If decideBrief proposes research → emits `research.requested`
+//      (tagged with same operationId). researchQueue picks it up.
+//
+// Voice never writes the brief. Coordinator never speaks.
 
 import { sessionStore } from "./sessionStore";
+import { decideBrief } from "./decideBrief.functions";
 
-const attached = new Set<string>();
+export type CoordinatorContext = {
+  /** Snapshot of the current brief, used as context for decideBrief. */
+  getSnapshot: () => Array<{ id: string; kind: "h2" | "p"; text: string; locked: boolean }>;
+  /** Model id to use for decideBrief (gateway model string). */
+  getModel?: () => string;
+};
 
-export function attachCoordinator(sessionId: string): () => void {
+const attached = new Map<string, () => void>();
+
+export function attachCoordinator(sessionId: string, ctx: CoordinatorContext): () => void {
+  if (attached.has(sessionId)) return attached.get(sessionId)!;
+
   const slot = sessionStore.getOrCreate(sessionId);
-  if (attached.has(sessionId)) {
-    return () => { /* idempotent */ };
-  }
-  attached.add(sessionId);
 
   const off = slot.bus.on("thought_turn.finalized", (e) => {
-    // PR2 stub: log only.
-    console.info(
-      "[coordinator] thought_turn.finalized",
-      {
-        sessionId: e.sessionId,
-        turnId: e.turnId,
-        boundary: e.thoughtTurn.boundaryReason,
-        chars: e.thoughtTurn.combinedText.length,
-        segments: e.thoughtTurn.segmentIds.length,
-        revision: e.thoughtTurn.revision,
-      },
-    );
+    void slot.briefQueue.run(async () => {
+      try {
+        const snapshot = ctx.getSnapshot();
+        const model = ctx.getModel?.() ?? "google/gemini-3-flash-preview";
+        const decision = await decideBrief({
+          data: {
+            thoughtTurn: {
+              combinedText: e.thoughtTurn.combinedText,
+              boundaryReason: e.thoughtTurn.boundaryReason,
+            },
+            snapshot,
+            model,
+          },
+        });
+
+        const operationId = crypto.randomUUID();
+
+        if (decision.patches.length > 0) {
+          slot.bus.emit({
+            type: "brief.proposed",
+            sessionId,
+            operationId,
+            patches: decision.patches.map((p) => ({
+              action: p.action,
+              blockId: p.blockId,
+              heading: p.heading,
+              level: p.level,
+              bodyMarkdown: p.bodyMarkdown,
+              sourceChunkIds: e.thoughtTurn.chunkIds,
+            })),
+          });
+        }
+
+        if (decision.proposeResearch?.query) {
+          const taskId = crypto.randomUUID();
+          slot.bus.emit({
+            type: "research.requested",
+            sessionId,
+            taskId,
+            query: decision.proposeResearch.query,
+            operationId: decision.patches.length > 0 ? operationId : undefined,
+          });
+        }
+      } catch (err) {
+        console.warn("[coordinator] decideBrief failed", err);
+      }
+    });
   });
 
-  return () => {
+  const detach = () => {
     off();
     attached.delete(sessionId);
   };
+  attached.set(sessionId, detach);
+  return detach;
 }
