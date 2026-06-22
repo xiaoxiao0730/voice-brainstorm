@@ -62,8 +62,8 @@ The observation should add a useful frame without taking over the user's thinkin
 
 DIRECT ANSWER:
 - When the user directly asks a question, answer it.
-- Use 2–4 concise spoken sentences.
-- Target 15–35 seconds of speech.
+- Use 1-2 concise spoken sentences. Output less than 64 tokens.
+- Target 15–25 seconds of speech.
 - Give the conclusion first.
 - Do not force every response into a question.
 
