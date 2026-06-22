@@ -389,7 +389,15 @@ function Workbench() {
         console.warn("persistSegment failed", e);
       }
 
-      // Background Canvas Lane (parallel, schema-driven).
+      // Stage 4: feed long-form ThoughtTurn buffer (slow-lane coordinator).
+      try {
+        sessionStore.getOrCreate(segment.sessionId).thoughtTurnBuffer.ingest(segment);
+      } catch (e) {
+        console.warn("thoughtTurnBuffer.ingest failed", e);
+      }
+
+      // Background Canvas Lane (parallel, schema-driven). Kept until the
+      // coordinator-driven brief writer ships in a later PR.
       void runBackgroundCanvas(segment).catch((e) => console.warn("canvas lane failed", e));
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
