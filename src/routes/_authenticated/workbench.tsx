@@ -703,31 +703,8 @@ function Workbench() {
     }
   }, [mintRealtime, saveChunks]);
 
-  const toggleAgent = useCallback(async () => {
-    if (agentEnabled) {
-      if (realtimeRef.current) {
-        try { await realtimeRef.current.disconnect(); } catch { /* ignore */ }
-        realtimeRef.current = null;
-      }
-      setAgentEnabled(false);
-      setAgentStatus("off");
-      return;
-    }
-    // Auto-start mic if not already listening — Talk with Agent implies
-    // both panels should be live.
-    if (!listening || !streamRef.current) {
-      try {
-        await startListening();
-      } catch {
-        setError("Couldn't access the microphone. Check browser permissions and try again.");
-        return;
-      }
-    }
-    setAgentEnabled(true);
-    void connectAgent();
-  }, [agentEnabled, listening, connectAgent]);
+  // Note: agent lifecycle is owned by startListening / stopListening.
 
-  // Note: no auto-connect effect — toggleAgent owns connection lifecycle.
 
 
 
