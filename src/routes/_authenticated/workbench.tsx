@@ -259,6 +259,105 @@ function Workbench() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Stage 4 helpers — apply coordinator-proposed brief patches as a single
+  // pending operation group (one operationId → one Keep/Undo toolbar).
+  const applyProposedPatches = useCallback(
+    (sessionId: string, operationId: string, patches: import("@/lib/pipeline/types").BriefPatch[]) => {
+      let map: BriefDoc = { ...docRef.current };
+      const appended: BriefBlock[] = [];
+      for (const patch of patches) {
+        const { applyBriefPatch } = require("@/lib/pipeline/applyBriefPatch") as typeof import("@/lib/pipeline/applyBriefPatch");
+        const res = applyBriefPatch(map, patch, { sessionId });
+        if (!res.result.ok) continue;
+        const block: BriefBlock = {
+          ...res.result.block,
+          isPending: true,
+          operationId,
+          lastEditedBy: "ai",
+          locked: false,
+        };
+        map = { ...res.doc, [block.id]: block };
+        appended.push(block);
+      }
+      if (appended.length === 0) return;
+      setDoc(map);
+      docRef.current = map;
+      briefDocRef.current?.appendLines(appended);
+      for (const b of appended) void persistBlock(b);
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [],
+  );
+
+  const applyResearchResult = useCallback(
+    (
+      sessionId: string,
+      operationId: string | undefined,
+      result: import("@/lib/pipeline/types").ResearchResult,
+    ) => {
+      const opId = operationId ?? crypto.randomUUID();
+      const allKeys = Object.values(docRef.current)
+        .map((b) => b.orderKey)
+        .sort();
+      let lastKey: string | null = allKeys.length ? allKeys[allKeys.length - 1] : null;
+      const appended: BriefBlock[] = [];
+
+      const mkHeading = (text: string): BriefBlock => {
+        lastKey = between(lastKey, null);
+        return {
+          id: crypto.randomUUID(),
+          sessionId,
+          orderKey: lastKey,
+          heading: text,
+          level: 2,
+          body: "",
+          lastEditedBy: "ai",
+          locked: false,
+          sourceChunkIds: [],
+          isPending: true,
+          operationId: opId,
+          researchResultId: result.id,
+        };
+      };
+      const mkPara = (text: string): BriefBlock => {
+        lastKey = between(lastKey, null);
+        return {
+          id: crypto.randomUUID(),
+          sessionId,
+          orderKey: lastKey,
+          heading: "",
+          level: 3,
+          body: text,
+          lastEditedBy: "ai",
+          locked: false,
+          sourceChunkIds: [],
+          isPending: true,
+          operationId: opId,
+          researchResultId: result.id,
+        };
+      };
+
+      appended.push(mkHeading(`Research: ${result.title || result.query}`));
+      if (result.summary?.trim()) appended.push(mkPara(result.summary.trim()));
+      for (const f of result.findings) appended.push(mkPara(`• ${f}`));
+      if (result.links.length) {
+        const linkLine = result.links
+          .map((l) => (l.title ? `${l.title} (${l.url})` : l.url))
+          .join(" · ");
+        appended.push(mkPara(`Sources: ${linkLine}`));
+      }
+
+      const map = { ...docRef.current };
+      for (const b of appended) map[b.id] = b;
+      setDoc(map);
+      docRef.current = map;
+      briefDocRef.current?.appendLines(appended);
+      for (const b of appended) void persistBlock(b);
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [],
+  );
+
   // Stage 4: sync sessionStore + attach slow-lane coordinator to the active session.
   // Also subscribe to brief.proposed / research.requested / research.completed.
   useEffect(() => {
