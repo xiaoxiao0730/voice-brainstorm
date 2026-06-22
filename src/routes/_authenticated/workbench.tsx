@@ -389,13 +389,13 @@ function Workbench() {
   );
 
   // ---- BACKGROUND CANVAS LANE ----
-  // Density-gated. Asks the deep model for one pending_approval block bound
-  // to a template slot. User Accept/Reject/Edit signals feed the next call.
+  // Density-gated. Asks the deep model for one pending line for the
+  // continuous document. User Accept/Reject/Edit signals feed the next call.
   const runBackgroundCanvas = useCallback(
     async (segment: TranscriptSegment) => {
       if (!listeningRef.current) return;
-      // Edit-mode protection: if the user is mid-edit on a block, pause.
-      if (focusedBlockRef.current) return;
+      // Edit-mode protection: if the user is mid-edit, pause.
+      if (isEditingRef.current) return;
       if (!policyRef.current.shouldEmitCanvas()) return;
 
       // Density gate
@@ -415,24 +415,31 @@ function Workbench() {
       const snapshot = Object.values(docRef.current)
         .sort((a, b) => a.orderKey.localeCompare(b.orderKey))
         .map((b) => ({
-          slotId: b.slotId ?? "",
-          heading: b.heading,
-          body: b.body,
+          kind: (b.level === 2 ? "h2" : "p") as "h2" | "p",
+          text: (b.level === 2 ? b.heading : b.body) ?? "",
           isPending: !!b.isPending,
           locked: b.locked,
         }));
 
       const userSignals = signalSnapshot().map((s) => ({
         type: s.type,
-        slotId: s.slotId,
         heading: s.heading,
       }));
+
+      const templateHint =
+        tpl.headings.length > 0
+          ? {
+              name: tpl.name,
+              headings: tpl.headings,
+              slotHints: tpl.slotHints ?? [],
+            }
+          : null;
 
       setAgentStatus((s) => (s === "speaking" ? s : "thinking"));
       setAiLoading(true);
 
       let result:
-        | { emit: true; patch: { slotId: string; heading: string; body: string; rationale: string }; insight?: string }
+        | { emit: true; line: { kind: "h2" | "p"; text: string; rationale: string }; insight?: string }
         | { emit: false; insight?: string; error?: string };
       try {
         result = (await generateNudge({
@@ -440,7 +447,7 @@ function Workbench() {
             latestText: segment.rawText,
             recentTexts: recentTextsRef.current.slice(0, -1),
             snapshot,
-            slots: tpl.slots.map((s) => ({ id: s.id, title: s.title, prompt: s.prompt, multi: s.multi })),
+            templateHint,
             userSignals,
             model: modelRef.current,
           },
@@ -450,11 +457,8 @@ function Workbench() {
         setAgentStatus((s) => (s === "speaking" ? s : realtimeRef.current ? "listening" : "off"));
         setAiLoading(false);
         return;
-      } finally {
-        // aiLoading false on emit happens below
       }
 
-      // Whisper background insight (debounced).
       if (result.insight) scheduleInject(`[background insight] ${result.insight}`);
 
       if (!result.emit) {
@@ -468,36 +472,32 @@ function Workbench() {
         return;
       }
 
-      const patch = result.patch;
+      const line = result.line;
       const sid = segment.sessionId;
-      // Append within slot: order by max orderKey of blocks in that slot.
-      const slotKeys = Object.values(docRef.current)
-        .filter((b) => b.slotId === patch.slotId)
-        .map((b) => b.orderKey)
-        .sort();
+      const allKeys = Object.values(docRef.current).map((b) => b.orderKey).sort();
       const newBlock: BriefBlock = {
         id: crypto.randomUUID(),
         sessionId: sid,
-        orderKey: between(slotKeys.length ? slotKeys[slotKeys.length - 1] : null, null),
-        heading: patch.heading,
-        level: 3,
-        body: patch.body,
+        orderKey: between(allKeys.length ? allKeys[allKeys.length - 1] : null, null),
+        heading: line.kind === "h2" ? line.text : "",
+        level: line.kind === "h2" ? 2 : 3,
+        body: line.kind === "h2" ? "" : line.text,
         lastEditedBy: "ai",
         locked: false,
         sourceChunkIds: [],
-        slotId: patch.slotId,
         isPending: true,
-        rationale: patch.rationale,
+        rationale: line.rationale,
       };
       const map = { ...docRef.current, [newBlock.id]: newBlock };
       setDoc(map);
       docRef.current = map;
+      // Imperatively append to the editor without disturbing caret/state.
+      briefDocRef.current?.appendLines([newBlock]);
       await persistBlock(newBlock);
       policyRef.current.recordCanvas();
 
-      // Cross-lane signal
-      publishSignal({ type: "pending_appear", slotId: patch.slotId, heading: patch.heading, body: patch.body });
-      scheduleInject(summarizeForInject({ type: "pending_appear", slotId: patch.slotId, heading: patch.heading, body: patch.body, ts: Date.now() }));
+      publishSignal({ type: "pending_appear", slotId: "", heading: newBlock.heading, body: newBlock.body });
+      scheduleInject(summarizeForInject({ type: "pending_appear", slotId: "", heading: newBlock.heading, body: newBlock.body, ts: Date.now() }));
 
       try {
         await logIntv({
@@ -505,9 +505,9 @@ function Workbench() {
             sessionId: segment.sessionId,
             segmentId: segment.segmentId,
             decision: "pending",
-            responseText: patch.body,
-            slotId: patch.slotId,
+            responseText: newBlock.body || newBlock.heading,
           },
+        });
         });
       } catch { /* best effort */ }
 
