@@ -1,132 +1,324 @@
-# Plan: Live Brief → Single Continuous Document
+# Voice + Live Brief + Research — Revised Plan (v2)
 
-Refactor Live Brief from a multi-block, slot-grouped canvas into a single continuous contentEditable document with optional template starters. Preserve all Workbench layout, design tokens, audio/realtime/background logic.
+Approved direction with 10 revisions applied. Web Search spike verified before designing the Research pipeline.
 
-## 1. Data model
+---
 
-Introduce a single per-session document instead of N blocks. Use a JSON document model that maps cleanly to plain text + heading markers.
+## 0. Web Search spike — VERIFIED
 
+Spike against the production Lovable AI Gateway (`/v1/chat/completions`):
+
+| Attempt | Result |
+|---|---|
+| `tools: [{ type: "google_search" }]` on `google/gemini-3-flash-preview` | **200 OK** — grounded answer with inline markdown citations (e.g. `[Node.js Releases](https://github.com/nodejs/node/releases)`) |
+| Plain ask for URLs (no tool) | 200 — but URLs are hallucinated; not usable |
+| `tools: [{ type: "web_search_preview" }]` on `openai/gpt-5-mini` | **400** — only `function` / `custom` supported |
+
+**Conclusion:** Research Pipeline uses Gemini + `google_search` tool. Citations are NOT exposed as a separate `groundingMetadata` field through the OpenAI-compatible adapter — they appear inline in the assistant message. We will:
+
+1. Call the model with the `google_search` tool and a prompt that asks for both prose + a JSON tail listing `{title, url}` per source.
+2. Parse the JSON tail for `links[]`; fall back to a markdown-link regex on `content` if JSON parsing fails.
+3. Run a second small Gemini call (`Output.object`) to synthesize the final `ResearchResult` from the grounded notes.
+
+The AI SDK `createOpenAICompatible` provider passes `tools` through unchanged, so this works with `generateText({ tools: [{ type: "google_search" }] })` — no provider-specific helper needed.
+
+Minimal verified shape used in spike:
 ```ts
-// src/lib/pipeline/types.ts (additions)
-export type BriefDocLine =
-  | { id: string; kind: "h2"; text: string; lastEditedBy: "user" | "ai"; locked?: boolean }
-  | { id: string; kind: "p";  text: string; lastEditedBy: "user" | "ai"; locked?: boolean };
-
-export type BriefDocV2 = {
-  sessionId: string;
-  lines: BriefDocLine[];        // ordered; rendered as one stream
-  updatedAt: number;
-};
+await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+  method: "POST",
+  headers: { "Content-Type": "application/json", "Lovable-API-Key": key },
+  body: JSON.stringify({
+    model: "google/gemini-3-flash-preview",
+    messages: [{ role: "user", content: query }],
+    tools: [{ type: "google_search" }],
+  }),
+});
 ```
 
-Why "lines" instead of full HTML: avoids storing unsanitised HTML, keeps diffs simple, lets the Background Canvas append plain lines, and serialises trivially.
+---
 
-### Storage
+## 1. Files (minimized)
 
-Reuse the existing `brief_nodes` table — no migration needed.
-- Each `BriefDocLine` is stored as one `brief_nodes` row.
-- `level = "h2"` for headings, `"bullet"` for paragraphs (`kind: "p"`).
-- `orderKey` defines stream order across the whole document (slot grouping ignored).
-- `slot_id` retained only as legacy metadata; never drives UI.
-- `is_pending` / `rationale` retained for AI-pending lines.
+### Create (8 files, not 14)
+```text
+src/lib/orchestrator/
+  types.ts                # TurnDecision, TurnContext, ResearchTask/Result, ids
+  sessionStore.ts         # SINGLE SOURCE OF TRUTH for session state (broker + queues + registry)
+  decide.functions.ts     # createServerFn → TurnDecision
+  runTurn.ts              # client dispatcher: decide → fan out (voice now, brief queued, research queued)
 
-Loader: read all `brief_nodes` for the session, sort by `orderKey`, map each row → `BriefDocLine`. Heading rows become `h2`, body rows become `p`. Old rows that had both `heading` + `body` are split into two lines (heading first, then body) on first load and re-persisted with new orderKeys; this preserves all existing content.
+src/lib/voice/
+  voiceController.ts      # wraps realtimeClient: speak(mode, goal), cancel; owns response.create
 
-## 2. Editor component (`BriefDocument.tsx`)
+src/lib/research/
+  webSearch.functions.ts  # createServerFn: gemini + google_search → grounded notes + links
+  researchSynthesizer.functions.ts  # createServerFn: notes → ResearchResult (Output.object)
+  researchQueue.ts        # global semaphore (2), FIFO, session-tagged tasks
+```
 
-Single `contentEditable` root holding the whole document.
+`sessionStore.ts` is the **single source of truth** for live session state — broker snapshot, per-session briefQueue mutex, per-session turnQueue (decisions+voice only), global researchQueue, and `activeSessionId`. All consumers read/write through it; no parallel module-level signal buses.
 
-- Render each line as a `<h2>` or `<p>` with `data-line-id`.
-- React renders the initial HTML once per session load (keyed on `sessionId`); after mount, React does NOT re-render the contentEditable subtree from state. Local state and DOM diverge intentionally — React owns mount, the DOM owns edits.
-- Background Canvas writes happen via imperative DOM ops (`document.querySelector('[data-line-id="…"]')` insert) wrapped in a helper that preserves the current Selection (save anchor/focus offset before insert, restore after).
-- Composition events: track `isComposing` ref; suppress save/diff while true.
-- Save pipeline (debounced 500 ms, also on blur, on session switch, on `beforeunload`):
-  1. Walk the contentEditable DOM, read each top-level `<h2>`/`<p>` → array of lines (preserve `data-line-id` where present; mint UUIDs for new nodes).
-  2. Diff against last persisted snapshot → emit `upsert` / `delete` calls to existing `brief.functions.ts`.
-- Selection: native browser selection across the whole element; Ctrl+A and Delete work because there is only one contentEditable.
-- Placeholder: render an absolutely-positioned overlay div with `pointer-events-none` showing "A canvas for thinking aloud." + "Start speaking or type anywhere. You can choose a template listed above." Visible only when the editor contains zero non-whitespace text. Driven by a single `isEmpty` state recomputed from DOM on input. Never written to DB.
-- Pending AI lines: render with a subtle left border + lighter text + small inline `Accept` / `Reject` affordances at the end of the line. No card, no dashed box.
-- Edit a pending line: any keystroke flips it to user-owned + accepted.
+### Modify (5 files)
+```text
+src/lib/agent/realtimeClient.ts        # session.update → create_response:false; expose speak(mode,goal), cancel
+src/lib/pipeline/transcriptBuffer.ts   # onSegment final → call runTurn() (current entrypoint preserved)
+src/routes/_authenticated/workbench.tsx# wire onSegment→runTurn; render research status + Keep/Undo inline
+src/components/brief/BriefDocument.tsx # inline pending treatment (green border / red strike + tiny toolbar)
+src/lib/pipeline/types.ts              # add researchResultId? on BriefBlock; NO status field change
+```
 
-## 3. Template behaviour
+### Keep during rollout (delete only after integration tests pass)
+- `src/lib/agent/responseGenerator.functions.ts`
+- `src/lib/agent/interventionPolicy.ts`
+- `src/lib/agent/segmentGate.ts` (stays a density classifier, **not** a transcript entrypoint)
+- `src/lib/orchestrate.functions.ts` (the existing brief writer; `briefQueue` wraps it; rename/replace later)
 
-`thinkingTemplate.ts`:
-- Add `NONE_TEMPLATE_ID = "none"`; `DEFAULT_TEMPLATE_ID = "none"`.
-- Add `headings: string[]` field for insertion. Slots kept as optional AI hint metadata.
-- Product Thinking Artifact headings: Current Question, User Journey, Hypothesis, Info & Observation, Solution, Open Questions, Next Actions.
+### Database
+**No migration.** Reuse existing `brief_nodes` columns: `status: "ai_draft" | "user_confirmed"`, `is_pending: boolean`. Research tasks are tracked in memory inside `sessionStore` (ephemeral); completed research becomes ordinary `ai_draft` rows tagged with a new optional `research_result_id` on a future migration if needed — initially we just store the result id in `rationale` JSON.
 
-Workbench:
-- Rename pinned UI label to "Template", as a dropdown: No template / Product Thinking Artifact / (disabled: Research, Decision).
-- Default per new session: `none`. Persisted per session in localStorage as today.
-- Selecting a template:
-  1. Confirm it's not the currently-applied template (track `appliedTemplateId` separately from `templateId`, both in state + persisted).
-  2. Append each heading as a new `h2` line to the end of the document (mint UUIDs, allocate orderKeys via `between(last, null)`), persist.
-  3. Update `appliedTemplateId`.
-- Re-selecting same template: no-op (dedupe guard).
-- Switching to a different template or back to "No template": only updates AI hint; previously inserted headings stay as normal editable lines.
+---
 
-## 4. Background Canvas adaptation
+## 2. Final TypeScript types
 
-`responseGenerator.functions.ts`:
-- Input shape becomes `{ latestText, recentTexts, documentSnapshot: BriefDocLine[], templateHint?: { name, headings, slotHints } | null, userSignals, model }`.
-- Output shape becomes `{ emit: false, insight? } | { emit: true, lines: Array<{ kind: "h2" | "p"; text: string; rationale: string; anchor?: { afterLineId?: string } }>, insight? }`.
-- Prompt: with template hint, prefer placing under matching heading; without, append freely; never invent "Unsorted" sections.
+```ts
+// orchestrator/types.ts
+export type SessionId = string;
+export type TurnId = string;
 
-Workbench `runBackgroundCanvas`:
-- Pass current document snapshot + optional template hint.
-- For each returned line, insert as `isPending` line either after `anchor.afterLineId` or at end. Insertion uses the DOM-preserving helper from §2 so user's caret isn't disturbed; if `focusedBlockRef` (renamed: `isEditingRef`) is true, queue and retry on blur.
-- Pending lines reuse the existing `acceptPendingBlock` server fn (still keyed by node id).
+export type VoiceAction =
+  | "silent" | "acknowledge" | "probe" | "direct_answer" | "research_ack";
+export type BriefAction =
+  | "none" | "capture" | "restructure" | "capture_answer";
+export type ResearchAction =
+  | "none" | "quick_search" | "deep_search";
 
-## 5. Cleanup
+export interface TurnDecision {
+  voiceAction: VoiceAction;
+  briefAction: BriefAction;
+  researchAction: ResearchAction;
+  reason: string;
+  confidence: number;            // 0..1
+  researchQuery?: string;
+  /** High-level intent for the Voice Pipeline; NOT a draft answer. */
+  responseGoal?: string;         // e.g. "acknowledge user is stuck on pricing", "offer 2 framings for onboarding metric"
+}
 
-- Delete slot-grouping render path in `BriefDocument.tsx`, "Loose threads", "Unsorted", per-block `BlockRow` with its dual contentEditables.
-- Remove `BriefCanvas.tsx` if unused after refactor (check imports first).
-- Keep `interventionPolicy`, `segmentGate`, `signalBus`, `realtimeClient`, speech pipeline untouched.
-- Keep `brief.functions.ts` signatures; only adjust where field meaning changes (heading vs body).
+export interface TurnContext {
+  sessionId: SessionId;
+  turnId: TurnId;
+  finalTranscript: string;
+  recentTranscript: string[];    // last ~6 user turns
+  recentVoice: string[];         // last ~4 agent replies
+  briefDigest: string;           // compressed brief text
+  openResearch: { id: string; status: ResearchStatus; query: string }[];
+  attachmentsDigest?: string;
+}
 
-## 6. Styles (`src/styles.css`)
+// research/types.ts
+export type ResearchStatus =
+  | "queued" | "searching" | "comparing" | "writing" | "ready" | "failed";
 
-Add a minimal scoped block (single class root, e.g. `.brief-doc`):
-- Max width 760 px, mx-auto.
-- `h2`: 22 px, font-medium, mt-8 mb-2, color text-primary, Inter.
-- `p`: 17 px, line-height 1.65, my-3.
-- `::selection`: low-contrast neutral.
-- No focus outline on the root; rely on caret only.
-- Pending line: `border-l-2 border-emerald-400/60 pl-3 text-primary/85`.
+export interface ResearchTask {
+  id: string;
+  sessionId: SessionId;          // origin session — never reassigned
+  turnId: TurnId;
+  kind: "quick" | "deep";
+  query: string;
+  status: ResearchStatus;
+  startedAt: number;
+  finishedAt?: number;
+  error?: string;
+}
 
-No design-token changes. No new colors. Inter remains body font; existing Instrument Serif usage elsewhere untouched.
+export interface ResearchResult {
+  title: string;
+  summary: string;
+  findings: string[];
+  links: string[];               // canvas shows links only, no metadata
+  voiceSummary: string;
+}
+```
 
-## 7. Caret/state safety summary
+**Brief status fields stay untouched:** `status: "ai_draft" | "user_confirmed"`, `isPending: boolean`. Pending = `isPending: true && status: "ai_draft"`. Keep = set `isPending: false, status: "user_confirmed"`. Undo = delete row (or revert via existing `originalText` if present).
 
-- React renders editor HTML once per `sessionId` mount; never re-renders from `doc` state during editing.
-- All AI insertions go through one helper that:
-  1. Saves `selection.anchorNode/offset` (if inside editor).
-  2. Inserts new DOM node at target position.
-  3. Restores selection (clamped if anchor node was replaced).
-- Composition tracked via `compositionstart` / `compositionend` refs; saves suppressed while composing.
-- Debounced save reads DOM, not state, so user keystrokes are the source of truth.
+---
 
-## 8. Files touched
+## 3. Three-pipeline call sequence
 
-- `src/lib/pipeline/types.ts` — add `BriefDocLine`, helpers `nodeToLine` / `lineToNodeUpsert`, keep legacy exports for compat.
-- `src/lib/pipeline/thinkingTemplate.ts` — add `none` template, add `headings` field.
-- `src/components/brief/BriefDocument.tsx` — rewrite as single contentEditable.
-- `src/components/brief/BriefCanvas.tsx` — delete if no remaining import.
-- `src/routes/_authenticated/workbench.tsx` — template default = none, template apply logic, doc loader splits legacy rows, Background Canvas wiring, isEditing ref instead of focusedBlock.
-- `src/lib/agent/responseGenerator.functions.ts` — new I/O shape (lines instead of single slot patch).
-- `src/lib/brief.functions.ts` — no signature change expected; verify pending accept still works on a row whose "heading" is empty.
-- `src/styles.css` — add `.brief-doc` typography block.
+```text
+Azure final transcript
+   │
+   ▼
+workbench onSegment (existing entrypoint, unchanged)
+   │
+   ▼
+transcriptBuffer.push(final)  ── density tracking lives here; segmentGate still classifies for telemetry
+   │
+   ▼
+runTurn({sessionId, turnId, finalText})
+   │
+   ▼  sessionStore.snapshot(sessionId) → TurnContext
+   │
+   ▼  decide(ctx) → TurnDecision     [serialized in turnQueue: decisions + voice only]
+   │
+   ├─► VOICE  (in-order, awaited)
+   │    voiceController.speak(voiceAction, responseGoal)   // voice pipeline drafts the actual words
+   │    on user barge-in → voiceController.cancel()
+   │
+   ├─► BRIEF  (NOT in turnQueue; per-session mutex in briefQueue)
+   │    briefQueue.run(sessionId, () =>
+   │       orchestrateSegment({action, ctx, researchResult?}))   // existing function, wrapped
+   │
+   └─► RESEARCH  (NOT in turnQueue; global semaphore = 2)
+        researchQueue.submit({kind, query, sessionId, turnId})
+          status callbacks → sessionStore.researchStatus(sessionId, id, status)
+          on ready → if sessionStore.isActive(task.sessionId):
+                       briefQueue.run(task.sessionId, () =>
+                         orchestrateSegment({ action:"capture_answer", researchResult }))
+                     else: persist result to origin session's brief_nodes only — never touch UI
+        voice stays silent on completion; user must ask "what did you find"
+```
 
-## 9. Out of scope
+Only **decisions + voice actions** are serialized. Slow brief writes run in parallel with the next turn's voice; research runs fully independently.
 
-- No DB migration. No changes to speech, Realtime token, Azure pipeline, sidebar, transcript, audio meter, agent panel chrome.
-- No new template content beyond Product Thinking Artifact headings.
-- No rich-text formatting (bold/italic/links) — plain headings + paragraphs only.
+---
 
-## 10. Acceptance check map
+## 4. Voice Pipeline (no answer drafting in Orchestrator)
 
-All 19 acceptance criteria covered: default None (§3), placeholder behaviour (§2), Ctrl+A / Delete (§2 single root), template append + persistence (§3), no slot UI (§5), background canvas free-form (§4), IME safety (§2/§7), session reload + legacy data (§1 loader), typecheck (no `any` in new code, lines reuse existing row types).
+`voiceController.speak(action, goal)` builds the Realtime `response.create` instructions from a per-mode template + the orchestrator's `responseGoal`:
 
-## 11. Open question before implementation
+```ts
+const MODE_PROMPTS = {
+  acknowledge: "One short sentence acknowledging what you heard.",
+  probe: "One brief observation, then one focused question. Offer 2–3 concrete options when useful. Never ask generic openers like 'tell me more' or 'what's the main problem'.",
+  direct_answer: "Answer concisely in 3–6 sentences, ≤30s of speech.",
+  research_ack: "Briefly say you'll look it up.",
+};
+client.response.create({
+  modalities: ["audio","text"],
+  instructions: `${MODE_PROMPTS[action]}\n\nGoal: ${goal ?? ""}\n\nRecent context: ${digest}`,
+});
+```
 
-The legacy split (one DB row → two lines on first load) does a one-time write per old session. Confirm this is acceptable, or I can keep legacy rows as a single combined `p` line containing "Heading\n\nBody" instead.
+The Orchestrator passes intent ("user stuck on positioning, suggest 2 angles"); the Voice Pipeline + Realtime model produce the words. No `voicePayload`.
+
+Realtime session: `turn_detection: { type:"server_vad", create_response: false, interrupt_response: true }`. The Orchestrator owns every `response.create`.
+
+---
+
+## 5. Live Brief
+
+- `briefQueue` = per-session mutex around `orchestrateSegment`. Wraps the existing server fn, so we don't rewrite it on day 1.
+- Pending rows: `isPending=true, status="ai_draft"` — unchanged.
+- Research result becomes ONE pending insertion (heading + paragraph) tied to a single Keep/Undo control on the UI side.
+- User-edited rows (`status="user_confirmed"`) are passed to the writer as **immutable** and excluded from restructure targets.
+
+### Inline pending treatment (no cards)
+```css
+.brief-pending-insert { border-left: 2px solid theme(emerald.400/60); padding-left: .75rem; }
+.brief-pending-delete { color: theme(red.400/80); text-decoration: line-through; }
+.brief-pending-toolbar { /* tiny: ✓ Keep · ↶ Undo, ghost buttons, no shadow */ }
+```
+No dashed boxes, no rounded panels, no drop shadows.
+
+---
+
+## 6. Research Pipeline
+
+`webSearch.functions.ts` (createServerFn):
+```ts
+const gateway = createLovableAiGatewayProvider(process.env.LOVABLE_API_KEY!);
+const { text } = await generateText({
+  model: gateway("google/gemini-3-flash-preview"),
+  tools: [{ type: "google_search" } as any],   // verified shape
+  prompt: `${query}\n\nReturn 1-2 paragraphs of grounded notes, then a fenced JSON block:\n\`\`\`json\n{"links":[{"title":"...","url":"..."}]}\n\`\`\`\nTarget ${kind === "deep" ? "8-12" : "3-5"} sources.`,
+  stopWhen: stepCountIs(50),
+});
+// parse trailing ```json``` block; fallback: regex /\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g
+```
+
+`researchSynthesizer.functions.ts` takes the notes + link list and produces `ResearchResult` via small `Output.object` schema (kept narrow to avoid Gemini state-limit errors).
+
+`researchQueue.ts`: in-memory FIFO with `MAX_CONCURRENT = 2` across all sessions. Tasks carry `sessionId/turnId` in their closure; status updates push through `sessionStore` only when the task's origin session is still the active session.
+
+Canvas status strings (no chain-of-thought): `Searching sources…`, `Comparing findings…`, `Preparing brief…`, `Ready for review`, `Search failed`.
+
+---
+
+## 7. Timeout / retry / failure / no-result
+
+| Stage | Timeout | Retry | On failure |
+|---|---|---|---|
+| `decide` | 4s | 1× (network only) | `{silent, none, none}` |
+| Voice `response.create` | n/a (stream) | none | log + status pill |
+| `orchestrateSegment` (brief) | 15s | 1× on 5xx/429 | drop pending row; toast "Brief failed" |
+| `webSearch` | 25s | 1× | task→`failed`; canvas shows "Search failed — retry" |
+| `researchSynthesizer` | 15s | 1× | same as above |
+| No results | n/a | n/a | `ready` with `{summary:"No reliable sources found.", links:[]}` |
+
+429 / 402 from gateway surface explicitly per Lovable AI conventions.
+
+---
+
+## 8. Session isolation (corrected — no aborting research)
+
+- `sessionStore.activeSessionId` is the only "which session is on screen" flag. Set on workbench mount / route param change.
+- **Research tasks are never aborted on session switch.** They run to completion against their origin `sessionId`.
+- On completion, `runResearch.complete()` does:
+  ```ts
+  // ALWAYS persist to origin session
+  await briefQueue.run(task.sessionId, () => persistResearch(task.sessionId, result));
+  // Update UI ONLY if origin === active
+  if (sessionStore.activeSessionId === task.sessionId) {
+    sessionStore.emit(task.sessionId, "research:ready", result);
+  }
+  ```
+- Brief and voice fan-out from `runTurn` check `sessionStore.activeSessionId === ctx.sessionId` before mutating UI signals; database writes always go to `ctx.sessionId` regardless.
+- Switching session: clear UI subscriptions; do NOT cancel in-flight fetches.
+- Voice is cancelled on switch (Realtime is a single live channel): `voiceController.cancel()`.
+
+---
+
+## 9. Reliability checklist
+
+- Decisions+voice serialized per session via `turnQueue` (FIFO).
+- Brief writes serialized per session via `briefQueue` (independent of turnQueue).
+- Research global concurrency = 2 (semaphore).
+- Every async job carries `{sessionId, turnId}` and tags writes.
+- Stale-session UI guard at the emit boundary, not at the write boundary.
+- `sourceChunkIds` round-tripped through `orchestrateSegment` (already does).
+- User edits respected: `status="user_confirmed"` rows excluded from restructure targets (already enforced in the writer's prompt; add an assertion test).
+
+---
+
+## 10. Testing & acceptance
+
+Unit:
+- `decide` returns valid `TurnDecision` for fixtures: thinking-aloud, stuck pause, direct factual Q, comparison Q.
+- `researchQueue` enforces global concurrency 2 + FIFO.
+- `briefQueue` serializes per session; parallel across sessions.
+- `voiceController` cancels on barge-in within one event loop tick.
+
+Integration (Playwright in sandbox):
+- Factual question → voice says "Let me look that up" → status pill cycles → research pending block appears → Keep persists as `user_confirmed`.
+- Rambling thought → voice silent; brief grows pending rows.
+- Barge-in → Realtime response cancelled.
+- **Corrected session switch test:** start research in session A, switch to B mid-flight, wait for completion → confirm session A's `brief_nodes` got the new row, confirm session B's UI never showed it and its `brief_nodes` is untouched. Switch back to A → row is visible.
+- Web search spike (already passing): `tools:[{type:"google_search"}]` returns grounded answer with citations.
+
+Acceptance:
+- No regression in Azure STT, Realtime audio, current Brief editor or template UX.
+- TypeScript + lint + build pass.
+- `orchestrateSegment` and `interventionPolicy` still present until integration tests are green.
+
+---
+
+## 11. Incremental rollout (5 PRs)
+
+1. **Types + `sessionStore`** (no behavior change). Add `voiceController` shim that forwards to existing `realtimeClient` API.
+2. **Realtime `create_response:false`** + Orchestrator `decide` + `turnQueue`. STT final still triggers existing brief path; Orchestrator only drives voice. `responseGenerator`/`interventionPolicy` remain authoritative for now.
+3. **`briefQueue`** wraps `orchestrateSegment`; route brief writes through it. Keep old path behind a flag for one PR.
+4. **Research module** (webSearch + synthesizer + queue) + canvas status pill, behind a flag.
+5. **Enable research actions** in `decide`; flip flags on; delete `responseGenerator.functions.ts` and `interventionPolicy.ts` after acceptance tests pass.
+
+Each PR ships independently; `workbench.tsx` only gains a thin `runTurn()` call, never a rewrite.
