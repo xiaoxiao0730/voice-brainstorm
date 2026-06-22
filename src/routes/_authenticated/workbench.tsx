@@ -256,6 +256,20 @@ function Workbench() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Stage 4: sync sessionStore + attach slow-lane coordinator to the active session.
+  useEffect(() => {
+    if (!activeSessionId) {
+      sessionStore.setActive(null);
+      return;
+    }
+    sessionStore.setActive(activeSessionId);
+    const detach = attachCoordinator(activeSessionId);
+    return () => {
+      detach();
+    };
+  }, [activeSessionId]);
+
+
   const openSession = useCallback(
     async (id: string) => {
       try {
