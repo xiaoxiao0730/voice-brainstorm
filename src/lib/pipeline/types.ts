@@ -40,7 +40,57 @@ export type BriefBlock = {
   slotId?: string;          // template slot binding
   isPending?: boolean;      // true → pending_approval (sandbox staging)
   rationale?: string;       // short LLM justification shown on pending cards
+  // Stage 4: dual-speed coordinator
+  operationId?: string;     // groups co-proposed pending blocks under one Keep/Undo
+  researchResultId?: string;// link to ResearchResult that produced this block
 };
+
+// ===== Stage 4: ThoughtTurn (long-form speech aggregation) =====
+
+export type ThoughtTurnBoundaryReason = "semantic_pause" | "hard_limit" | "manual_stop";
+
+export type ThoughtTurn = {
+  id: string;
+  sessionId: string;
+  segmentIds: string[];     // Azure TranscriptSegment ids
+  chunkIds: string[];       // source chunk ids (flattened) for brief provenance
+  combinedText: string;     // cleanly concatenated segment text
+  startedAt: number;
+  endedAt: number;
+  boundaryReason: ThoughtTurnBoundaryReason;
+  revision: number;         // incremented at checkpoints
+};
+
+// ===== Stage 4: Research =====
+
+export type ResearchLink = { title: string; url: string };
+
+export type ResearchResult = {
+  id: string;
+  query: string;
+  title: string;
+  summary: string;          // markdown, richer than voice
+  findings: string[];
+  links: ResearchLink[];
+  voiceSummary: string;     // ≤ ~25s spoken form
+};
+
+// ===== Stage 4: Session event bus =====
+
+export type SessionEvent =
+  | { type: "thought_turn.finalized"; sessionId: string; turnId: string; thoughtTurn: ThoughtTurn }
+  | { type: "voice.response_started"; sessionId: string }
+  | { type: "voice.spoke"; sessionId: string; turnId?: string; text: string }
+  | { type: "voice.stayed_silent"; sessionId: string; reason: string }
+  | { type: "research.requested"; sessionId: string; taskId: string; query: string; operationId?: string }
+  | { type: "research.completed"; sessionId: string; taskId: string; result: ResearchResult; operationId?: string }
+  | { type: "research.failed"; sessionId: string; taskId: string; error: string; operationId?: string }
+  | { type: "brief.proposed"; sessionId: string; operationId: string }
+  | { type: "brief.kept"; sessionId: string; operationId: string }
+  | { type: "brief.undone"; sessionId: string; operationId: string }
+  | { type: "brief.edited"; sessionId: string; operationId: string };
+
+export type SessionEventType = SessionEvent["type"];
 
 export type BriefDoc = Record<string, BriefBlock>;
 
