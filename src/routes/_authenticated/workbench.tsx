@@ -39,6 +39,8 @@ import { assessDensity } from "@/lib/agent/segmentGate";
 import { publish as publishSignal, snapshot as signalSnapshot, summarizeForInject } from "@/lib/agent/signalBus";
 import { DEFAULT_TEMPLATE_ID, getTemplate, TEMPLATES } from "@/lib/pipeline/thinkingTemplate";
 import { type AgentStatus } from "@/components/agent/AgentPanel";
+import { sessionStore } from "@/lib/orchestrator/sessionStore";
+import { attachCoordinator } from "@/lib/orchestrator/coordinator";
 
 export const Route = createFileRoute("/_authenticated/workbench")({
   validateSearch: (search: Record<string, unknown>) => ({
