@@ -508,7 +508,6 @@ function Workbench() {
             responseText: newBlock.body || newBlock.heading,
           },
         });
-        });
       } catch { /* best effort */ }
 
       setAgentStatus((s) => (s === "speaking" ? s : realtimeRef.current ? "listening" : "off"));
