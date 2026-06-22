@@ -552,9 +552,10 @@ function Workbench() {
         console.warn("thoughtTurnBuffer.ingest failed", e);
       }
 
-      // Background Canvas Lane (parallel, schema-driven). Kept until the
-      // coordinator-driven brief writer ships in a later PR.
-      void runBackgroundCanvas(segment).catch((e) => console.warn("canvas lane failed", e));
+      // Stage 4: brief writes are now driven by the slow-lane coordinator
+      // from thought_turn.finalized — not per Azure segment. The legacy
+      // per-segment canvas lane is intentionally disabled here.
+      void 0;
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [saveSegment],
