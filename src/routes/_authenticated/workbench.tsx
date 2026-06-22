@@ -2,7 +2,7 @@ import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useServerFn } from "@tanstack/react-start";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import { BriefDocument } from "@/components/brief/BriefDocument";
+import { BriefDocument, type BriefDocumentHandle } from "@/components/brief/BriefDocument";
 import { supabase } from "@/integrations/supabase/client";
 
 
@@ -154,9 +154,11 @@ function Workbench() {
   const recentTextsRef = useRef<string[]>([]);
   const listeningRef = useRef(listening);
   const agentConnectedAtRef = useRef(Date.now());
-  const focusedBlockRef = useRef<string | null>(null);
+  const isEditingRef = useRef(false);
   const injectDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendingInjectRef = useRef<string | null>(null);
+  const briefDocRef = useRef<BriefDocumentHandle | null>(null);
+  const [appliedTemplateId, setAppliedTemplateId] = useState<string>(DEFAULT_TEMPLATE_ID);
 
   useEffect(() => { docRef.current = doc; }, [doc]);
   useEffect(() => {
@@ -166,17 +168,23 @@ function Workbench() {
   }, [activeSessionId]);
   useEffect(() => { listeningRef.current = listening; }, [listening]);
 
-  // Persist template per session
+  // Persist template + applied-template per session.
   useEffect(() => {
     if (!activeSessionId || typeof window === "undefined") return;
     const saved = window.localStorage.getItem(`murmur.template.${activeSessionId}`);
     if (saved && TEMPLATES[saved]?.available) setTemplateId(saved);
     else setTemplateId(DEFAULT_TEMPLATE_ID);
+    const applied = window.localStorage.getItem(`murmur.template.applied.${activeSessionId}`);
+    setAppliedTemplateId(applied && TEMPLATES[applied] ? applied : DEFAULT_TEMPLATE_ID);
   }, [activeSessionId]);
   useEffect(() => {
     if (!activeSessionId || typeof window === "undefined") return;
     window.localStorage.setItem(`murmur.template.${activeSessionId}`, templateId);
   }, [templateId, activeSessionId]);
+  useEffect(() => {
+    if (!activeSessionId || typeof window === "undefined") return;
+    window.localStorage.setItem(`murmur.template.applied.${activeSessionId}`, appliedTemplateId);
+  }, [appliedTemplateId, activeSessionId]);
 
   // Debounced injectContext: only fire after 3s of canvas/edit quiet.
   const scheduleInject = useCallback((note: string) => {
@@ -247,11 +255,33 @@ function Workbench() {
       try {
         const briefNodes = await loadB({ data: { sessionId: id } });
         const map: BriefDoc = {};
-        for (const n of briefNodes) map[n.id] = nodeToBlock(n);
+        // Legacy split: a row with BOTH heading and body becomes 2 lines
+        // (heading first, body next) so the continuous document keeps both.
+        for (const n of briefNodes) {
+          const base = nodeToBlock(n);
+          const hasHeading = !!base.heading?.trim();
+          const hasBody = !!base.body?.trim();
+          if (hasHeading && hasBody) {
+            const headingId = base.id;
+            const bodyId = crypto.randomUUID();
+            const bodyKey = between(base.orderKey, null);
+            map[headingId] = { ...base, body: "", level: 2 };
+            map[bodyId] = {
+              ...base,
+              id: bodyId,
+              orderKey: bodyKey,
+              heading: "",
+              level: 3,
+            };
+          } else if (hasHeading) {
+            map[base.id] = { ...base, body: "", level: 2 };
+          } else {
+            map[base.id] = { ...base, heading: "", level: 3 };
+          }
+        }
 
         // First time opening a session that has an onboarding prompt → seed
-        // it as the first locked block so the AI treats it as the user's
-        // intent and writes around it.
+        // it as the first paragraph so the AI treats it as the user's intent.
         if (Object.keys(map).length === 0) {
           try {
             const ctx = await getCtx({ data: { sessionId: id } });
@@ -260,8 +290,8 @@ function Workbench() {
                 id: crypto.randomUUID(),
                 sessionId: id,
                 orderKey: between(null, null),
-                heading: "Starting thought",
-                level: 2,
+                heading: "",
+                level: 3,
                 body: ctx.prompt.trim(),
                 lastEditedBy: "user",
                 locked: true,
@@ -359,13 +389,13 @@ function Workbench() {
   );
 
   // ---- BACKGROUND CANVAS LANE ----
-  // Density-gated. Asks the deep model for one pending_approval block bound
-  // to a template slot. User Accept/Reject/Edit signals feed the next call.
+  // Density-gated. Asks the deep model for one pending line for the
+  // continuous document. User Accept/Reject/Edit signals feed the next call.
   const runBackgroundCanvas = useCallback(
     async (segment: TranscriptSegment) => {
       if (!listeningRef.current) return;
-      // Edit-mode protection: if the user is mid-edit on a block, pause.
-      if (focusedBlockRef.current) return;
+      // Edit-mode protection: if the user is mid-edit, pause.
+      if (isEditingRef.current) return;
       if (!policyRef.current.shouldEmitCanvas()) return;
 
       // Density gate
@@ -385,24 +415,31 @@ function Workbench() {
       const snapshot = Object.values(docRef.current)
         .sort((a, b) => a.orderKey.localeCompare(b.orderKey))
         .map((b) => ({
-          slotId: b.slotId ?? "",
-          heading: b.heading,
-          body: b.body,
+          kind: (b.level === 2 ? "h2" : "p") as "h2" | "p",
+          text: (b.level === 2 ? b.heading : b.body) ?? "",
           isPending: !!b.isPending,
           locked: b.locked,
         }));
 
       const userSignals = signalSnapshot().map((s) => ({
         type: s.type,
-        slotId: s.slotId,
         heading: s.heading,
       }));
+
+      const templateHint =
+        tpl.headings.length > 0
+          ? {
+              name: tpl.name,
+              headings: tpl.headings,
+              slotHints: tpl.slotHints ?? [],
+            }
+          : null;
 
       setAgentStatus((s) => (s === "speaking" ? s : "thinking"));
       setAiLoading(true);
 
       let result:
-        | { emit: true; patch: { slotId: string; heading: string; body: string; rationale: string }; insight?: string }
+        | { emit: true; line: { kind: "h2" | "p"; text: string; rationale: string }; insight?: string }
         | { emit: false; insight?: string; error?: string };
       try {
         result = (await generateNudge({
@@ -410,7 +447,7 @@ function Workbench() {
             latestText: segment.rawText,
             recentTexts: recentTextsRef.current.slice(0, -1),
             snapshot,
-            slots: tpl.slots.map((s) => ({ id: s.id, title: s.title, prompt: s.prompt, multi: s.multi })),
+            templateHint,
             userSignals,
             model: modelRef.current,
           },
@@ -420,11 +457,8 @@ function Workbench() {
         setAgentStatus((s) => (s === "speaking" ? s : realtimeRef.current ? "listening" : "off"));
         setAiLoading(false);
         return;
-      } finally {
-        // aiLoading false on emit happens below
       }
 
-      // Whisper background insight (debounced).
       if (result.insight) scheduleInject(`[background insight] ${result.insight}`);
 
       if (!result.emit) {
@@ -438,36 +472,32 @@ function Workbench() {
         return;
       }
 
-      const patch = result.patch;
+      const line = result.line;
       const sid = segment.sessionId;
-      // Append within slot: order by max orderKey of blocks in that slot.
-      const slotKeys = Object.values(docRef.current)
-        .filter((b) => b.slotId === patch.slotId)
-        .map((b) => b.orderKey)
-        .sort();
+      const allKeys = Object.values(docRef.current).map((b) => b.orderKey).sort();
       const newBlock: BriefBlock = {
         id: crypto.randomUUID(),
         sessionId: sid,
-        orderKey: between(slotKeys.length ? slotKeys[slotKeys.length - 1] : null, null),
-        heading: patch.heading,
-        level: 3,
-        body: patch.body,
+        orderKey: between(allKeys.length ? allKeys[allKeys.length - 1] : null, null),
+        heading: line.kind === "h2" ? line.text : "",
+        level: line.kind === "h2" ? 2 : 3,
+        body: line.kind === "h2" ? "" : line.text,
         lastEditedBy: "ai",
         locked: false,
         sourceChunkIds: [],
-        slotId: patch.slotId,
         isPending: true,
-        rationale: patch.rationale,
+        rationale: line.rationale,
       };
       const map = { ...docRef.current, [newBlock.id]: newBlock };
       setDoc(map);
       docRef.current = map;
+      // Imperatively append to the editor without disturbing caret/state.
+      briefDocRef.current?.appendLines([newBlock]);
       await persistBlock(newBlock);
       policyRef.current.recordCanvas();
 
-      // Cross-lane signal
-      publishSignal({ type: "pending_appear", slotId: patch.slotId, heading: patch.heading, body: patch.body });
-      scheduleInject(summarizeForInject({ type: "pending_appear", slotId: patch.slotId, heading: patch.heading, body: patch.body, ts: Date.now() }));
+      publishSignal({ type: "pending_appear", slotId: "", heading: newBlock.heading, body: newBlock.body });
+      scheduleInject(summarizeForInject({ type: "pending_appear", slotId: "", heading: newBlock.heading, body: newBlock.body, ts: Date.now() }));
 
       try {
         await logIntv({
@@ -475,8 +505,7 @@ function Workbench() {
             sessionId: segment.sessionId,
             segmentId: segment.segmentId,
             decision: "pending",
-            responseText: patch.body,
-            slotId: patch.slotId,
+            responseText: newBlock.body || newBlock.heading,
           },
         });
       } catch { /* best effort */ }
@@ -735,55 +764,26 @@ function Workbench() {
 
   // ============= Document handlers =============
 
-  const editTimers = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
-
-  const onEditBlock = useCallback(
-    (id: string, patch: { heading?: string; body?: string }) => {
-      const existing = docRef.current[id];
-      if (!existing) return;
-      const next: BriefBlock = {
-        ...existing,
-        heading: patch.heading !== undefined ? patch.heading : existing.heading,
-        body: patch.body !== undefined ? patch.body : existing.body,
-        lastEditedBy: "user",
-        locked: true,
-        isPending: false,
-      };
-      const map = { ...docRef.current, [id]: next };
+  // Single delta callback from the continuous editor. Diffed against the
+  // editor's internal snapshot; we just persist to Supabase and mirror state.
+  const onPersistDelta = useCallback(
+    ({ upserts, deletedIds }: { upserts: BriefBlock[]; deletedIds: string[] }) => {
+      if (upserts.length === 0 && deletedIds.length === 0) return;
+      const map = { ...docRef.current };
+      for (const id of deletedIds) delete map[id];
+      for (const b of upserts) map[b.id] = b;
       setDoc(map);
       docRef.current = map;
-
-      // Debounced persist (600ms) per block.
-      const existingTimer = editTimers.current.get(id);
-      if (existingTimer) clearTimeout(existingTimer);
-      const t = setTimeout(() => {
-        editTimers.current.delete(id);
-        void persistBlock(next);
-        publishSignal({ type: "edit", slotId: next.slotId ?? "", heading: next.heading, body: next.body });
-        scheduleInject(summarizeForInject({ type: "edit", slotId: next.slotId ?? "", heading: next.heading, body: next.body, ts: Date.now() }));
-        void logIntv({
-          data: { sessionId: next.sessionId, decision: "edit", slotId: next.slotId, responseText: next.body },
-        }).catch(() => undefined);
-      }, 600);
-      editTimers.current.set(id, t);
-    },
-    [persistBlock, logIntv, scheduleInject],
-  );
-
-  const onDeleteBlock = useCallback(
-    async (id: string) => {
-      const existing = docRef.current[id];
-      const next = { ...docRef.current };
-      delete next[id];
-      setDoc(next);
-      docRef.current = next;
-      await deleteN({ data: { id } }).catch((e) => console.warn("delete failed", e));
-      if (existing) {
-        publishSignal({ type: "reject", slotId: existing.slotId ?? "", heading: existing.heading, body: existing.body });
-        scheduleInject(summarizeForInject({ type: "reject", slotId: existing.slotId ?? "", heading: existing.heading, body: existing.body, ts: Date.now() }));
+      for (const b of upserts) {
+        void persistBlock(b);
+        publishSignal({ type: "edit", slotId: "", heading: b.heading, body: b.body });
+        scheduleInject(summarizeForInject({ type: "edit", slotId: "", heading: b.heading, body: b.body, ts: Date.now() }));
+      }
+      for (const id of deletedIds) {
+        void deleteN({ data: { id } }).catch((e) => console.warn("delete failed", e));
       }
     },
-    [deleteN, scheduleInject],
+    [persistBlock, deleteN, scheduleInject],
   );
 
   const onAcceptPending = useCallback(
@@ -795,10 +795,10 @@ function Workbench() {
       setDoc(map);
       docRef.current = map;
       await acceptN({ data: { id } }).catch((e) => console.warn("accept failed", e));
-      publishSignal({ type: "accept", slotId: next.slotId ?? "", heading: next.heading, body: next.body });
-      scheduleInject(summarizeForInject({ type: "accept", slotId: next.slotId ?? "", heading: next.heading, body: next.body, ts: Date.now() }));
+      publishSignal({ type: "accept", slotId: "", heading: next.heading, body: next.body });
+      scheduleInject(summarizeForInject({ type: "accept", slotId: "", heading: next.heading, body: next.body, ts: Date.now() }));
       void logIntv({
-        data: { sessionId: next.sessionId, decision: "accept", slotId: next.slotId, responseText: next.body },
+        data: { sessionId: next.sessionId, decision: "accept", responseText: next.body || next.heading },
       }).catch(() => undefined);
     },
     [acceptN, logIntv, scheduleInject],
@@ -813,19 +813,57 @@ function Workbench() {
       docRef.current = next;
       await deleteN({ data: { id } }).catch((e) => console.warn("reject failed", e));
       if (existing) {
-        publishSignal({ type: "reject", slotId: existing.slotId ?? "", heading: existing.heading, body: existing.body });
-        scheduleInject(summarizeForInject({ type: "reject", slotId: existing.slotId ?? "", heading: existing.heading, body: existing.body, ts: Date.now() }));
+        publishSignal({ type: "reject", slotId: "", heading: existing.heading, body: existing.body });
+        scheduleInject(summarizeForInject({ type: "reject", slotId: "", heading: existing.heading, body: existing.body, ts: Date.now() }));
         void logIntv({
-          data: { sessionId: existing.sessionId, decision: "reject", slotId: existing.slotId, responseText: existing.body },
+          data: { sessionId: existing.sessionId, decision: "reject", responseText: existing.body || existing.heading },
         }).catch(() => undefined);
       }
     },
     [deleteN, logIntv, scheduleInject],
   );
 
-  const onFocusBlock = useCallback((id: string | null) => {
-    focusedBlockRef.current = id;
+  const onIsEditingChange = useCallback((editing: boolean) => {
+    isEditingRef.current = editing;
   }, []);
+
+  // Apply a template: append its headings to end of document (idempotent).
+  const applyTemplate = useCallback(
+    (id: string) => {
+      const tpl = TEMPLATES[id];
+      if (!tpl?.available) return;
+      setTemplateId(id);
+      if (id === appliedTemplateId) return; // dedupe re-selection
+      setAppliedTemplateId(id);
+      if (tpl.headings.length === 0 || !activeSessionId) return;
+      const sid = activeSessionId;
+      const existingKeys = Object.values(docRef.current).map((b) => b.orderKey).sort();
+      let lastKey: string | null = existingKeys.length ? existingKeys[existingKeys.length - 1] : null;
+      const newBlocks: BriefBlock[] = [];
+      for (const h of tpl.headings) {
+        lastKey = between(lastKey, null);
+        const b: BriefBlock = {
+          id: crypto.randomUUID(),
+          sessionId: sid,
+          orderKey: lastKey,
+          heading: h,
+          level: 2,
+          body: "",
+          lastEditedBy: "user",
+          locked: true,
+          sourceChunkIds: [],
+        };
+        newBlocks.push(b);
+      }
+      const map = { ...docRef.current };
+      for (const b of newBlocks) map[b.id] = b;
+      setDoc(map);
+      docRef.current = map;
+      briefDocRef.current?.appendLines(newBlocks);
+      for (const b of newBlocks) void persistBlock(b);
+    },
+    [appliedTemplateId, activeSessionId, persistBlock],
+  );
 
 
   const liveText = useMemo(
@@ -1075,10 +1113,7 @@ function Workbench() {
             <div className="flex items-center gap-2">
               <select
                 value={templateId}
-                onChange={(e) => {
-                  const id = e.target.value;
-                  if (TEMPLATES[id]?.available) setTemplateId(id);
-                }}
+                onChange={(e) => applyTemplate(e.target.value)}
                 className="px-3 py-1 bg-surface rounded-full text-xs text-primary border border-auralis hover:bg-surface-variant cursor-pointer focus:outline-none focus:ring-1 focus:ring-primary"
                 aria-label="Thinking template"
                 title="Select thinking template"
@@ -1136,13 +1171,14 @@ function Workbench() {
           )}
           <div className="flex-1 overflow-y-auto p-8 min-h-0">
             <BriefDocument
+              key={activeSessionId ?? "none"}
+              ref={briefDocRef}
+              sessionId={activeSessionId ?? ""}
               doc={doc}
-              template={template}
-              onEditBlock={onEditBlock}
-              onDeleteBlock={onDeleteBlock}
+              onPersistDelta={onPersistDelta}
               onAcceptPending={onAcceptPending}
               onRejectPending={onRejectPending}
-              onFocusBlock={onFocusBlock}
+              onIsEditingChange={onIsEditingChange}
               aiLoading={aiLoading}
             />
           </div>
