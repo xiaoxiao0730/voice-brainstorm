@@ -6,6 +6,7 @@ import { BriefDocument, type BriefDocumentHandle } from "@/components/brief/Brie
 import { supabase } from "@/integrations/supabase/client";
 
 import { between } from "@/lib/pipeline/orderKey";
+import { applyBriefPatch } from "@/lib/pipeline/applyBriefPatch";
 import { createTranscriptBuffer } from "@/lib/pipeline/transcriptBuffer";
 import {
   blockToNodeUpsert,
