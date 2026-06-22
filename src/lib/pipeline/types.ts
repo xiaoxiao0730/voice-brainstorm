@@ -85,7 +85,7 @@ export type SessionEvent =
   | { type: "research.requested"; sessionId: string; taskId: string; query: string; operationId?: string }
   | { type: "research.completed"; sessionId: string; taskId: string; result: ResearchResult; operationId?: string }
   | { type: "research.failed"; sessionId: string; taskId: string; error: string; operationId?: string }
-  | { type: "brief.proposed"; sessionId: string; operationId: string }
+  | { type: "brief.proposed"; sessionId: string; operationId: string; patches: BriefPatch[] }
   | { type: "brief.kept"; sessionId: string; operationId: string }
   | { type: "brief.undone"; sessionId: string; operationId: string }
   | { type: "brief.edited"; sessionId: string; operationId: string };

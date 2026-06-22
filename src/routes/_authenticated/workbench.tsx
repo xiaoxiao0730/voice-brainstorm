@@ -6,12 +6,15 @@ import { BriefDocument, type BriefDocumentHandle } from "@/components/brief/Brie
 import { supabase } from "@/integrations/supabase/client";
 
 import { between } from "@/lib/pipeline/orderKey";
+import { applyBriefPatch } from "@/lib/pipeline/applyBriefPatch";
 import { createTranscriptBuffer } from "@/lib/pipeline/transcriptBuffer";
 import {
   blockToNodeUpsert,
   nodeToBlock,
   type BriefBlock,
   type BriefDoc,
+  type BriefPatch,
+  type ResearchResult,
   type TranscriptSegment,
 } from "@/lib/pipeline/types";
 
@@ -161,6 +164,9 @@ function Workbench() {
   const briefDocRef = useRef<BriefDocumentHandle | null>(null);
   const [appliedTemplateId, setAppliedTemplateId] = useState<string>(DEFAULT_TEMPLATE_ID);
 
+  // Stage 4: running research tasks (taskId → query) for the active session.
+  const [researchRunning, setResearchRunning] = useState<Record<string, string>>({});
+
   useEffect(() => {
     docRef.current = doc;
   }, [doc]);
@@ -256,18 +262,154 @@ function Workbench() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Stage 4 helpers — apply coordinator-proposed brief patches as a single
+  // pending operation group (one operationId → one Keep/Undo toolbar).
+  const applyProposedPatches = useCallback(
+    (sessionId: string, operationId: string, patches: BriefPatch[]) => {
+      let map: BriefDoc = { ...docRef.current };
+      const appended: BriefBlock[] = [];
+      for (const patch of patches) {
+        const res = applyBriefPatch(map, patch, { sessionId });
+        if (!res.result.ok) continue;
+        const block: BriefBlock = {
+          ...res.result.block,
+          isPending: true,
+          operationId,
+          lastEditedBy: "ai",
+          locked: false,
+        };
+        map = { ...res.doc, [block.id]: block };
+        appended.push(block);
+      }
+      if (appended.length === 0) return;
+      setDoc(map);
+      docRef.current = map;
+      briefDocRef.current?.appendLines(appended);
+      for (const b of appended) void persistBlock(b);
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [],
+  );
+
+  const applyResearchResult = useCallback(
+    (
+      sessionId: string,
+      operationId: string | undefined,
+      result: ResearchResult,
+    ) => {
+      const opId = operationId ?? crypto.randomUUID();
+      const allKeys = Object.values(docRef.current)
+        .map((b) => b.orderKey)
+        .sort();
+      let lastKey: string | null = allKeys.length ? allKeys[allKeys.length - 1] : null;
+      const appended: BriefBlock[] = [];
+
+      const mkHeading = (text: string): BriefBlock => {
+        lastKey = between(lastKey, null);
+        return {
+          id: crypto.randomUUID(),
+          sessionId,
+          orderKey: lastKey,
+          heading: text,
+          level: 2,
+          body: "",
+          lastEditedBy: "ai",
+          locked: false,
+          sourceChunkIds: [],
+          isPending: true,
+          operationId: opId,
+          researchResultId: result.id,
+        };
+      };
+      const mkPara = (text: string): BriefBlock => {
+        lastKey = between(lastKey, null);
+        return {
+          id: crypto.randomUUID(),
+          sessionId,
+          orderKey: lastKey,
+          heading: "",
+          level: 3,
+          body: text,
+          lastEditedBy: "ai",
+          locked: false,
+          sourceChunkIds: [],
+          isPending: true,
+          operationId: opId,
+          researchResultId: result.id,
+        };
+      };
+
+      appended.push(mkHeading(`Research: ${result.title || result.query}`));
+      if (result.summary?.trim()) appended.push(mkPara(result.summary.trim()));
+      for (const f of result.findings) appended.push(mkPara(`• ${f}`));
+      if (result.links.length) {
+        const linkLine = result.links
+          .map((l) => (l.title ? `${l.title} (${l.url})` : l.url))
+          .join(" · ");
+        appended.push(mkPara(`Sources: ${linkLine}`));
+      }
+
+      const map = { ...docRef.current };
+      for (const b of appended) map[b.id] = b;
+      setDoc(map);
+      docRef.current = map;
+      briefDocRef.current?.appendLines(appended);
+      for (const b of appended) void persistBlock(b);
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [],
+  );
+
   // Stage 4: sync sessionStore + attach slow-lane coordinator to the active session.
+  // Also subscribe to brief.proposed / research.requested / research.completed.
   useEffect(() => {
     if (!activeSessionId) {
       sessionStore.setActive(null);
       return;
     }
     sessionStore.setActive(activeSessionId);
-    const detach = attachCoordinator(activeSessionId);
+    const slot = sessionStore.getOrCreate(activeSessionId);
+
+    const detach = attachCoordinator(activeSessionId, {
+      getSnapshot: () =>
+        Object.values(docRef.current)
+          .sort((a, b) => a.orderKey.localeCompare(b.orderKey))
+          .map((b) => ({
+            id: b.id,
+            kind: (b.level === 2 ? "h2" : "p") as "h2" | "p",
+            text: (b.level === 2 ? b.heading : b.body) ?? "",
+            locked: b.locked,
+          })),
+      getModel: () => modelRef.current,
+    });
+
+    const offProposed = slot.bus.on("brief.proposed", (e) => {
+      if (e.sessionId !== activeSessionRef.current) return;
+      applyProposedPatches(e.sessionId, e.operationId, e.patches);
+    });
+    const offResearchReq = slot.bus.on("research.requested", (e) => {
+      if (e.sessionId !== activeSessionRef.current) return;
+      setResearchRunning((m) => ({ ...m, [e.taskId]: e.query }));
+    });
+    const offResearchDone = slot.bus.on("research.completed", (e) => {
+      setResearchRunning((m) => {
+        const next = { ...m };
+        delete next[e.taskId];
+        return next;
+      });
+      if (e.sessionId !== activeSessionRef.current) return;
+      applyResearchResult(e.sessionId, e.operationId, e.result);
+    });
+
     return () => {
       detach();
+      offProposed();
+      offResearchReq();
+      offResearchDone();
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeSessionId]);
+
 
 
   const openSession = useCallback(
@@ -410,9 +552,10 @@ function Workbench() {
         console.warn("thoughtTurnBuffer.ingest failed", e);
       }
 
-      // Background Canvas Lane (parallel, schema-driven). Kept until the
-      // coordinator-driven brief writer ships in a later PR.
-      void runBackgroundCanvas(segment).catch((e) => console.warn("canvas lane failed", e));
+      // Stage 4: brief writes are now driven by the slow-lane coordinator
+      // from thought_turn.finalized — not per Azure segment. The legacy
+      // per-segment canvas lane is intentionally disabled here.
+      void 0;
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [saveSegment],
@@ -926,6 +1069,35 @@ function Workbench() {
 
   const blockCount = Object.keys(doc).length;
 
+  // Stage 4: group pending blocks by operationId for the grouped Keep/Undo toolbar.
+  const pendingGroups = useMemo(() => {
+    const groups = new Map<string, BriefBlock[]>();
+    for (const b of Object.values(doc)) {
+      if (!b.isPending || !b.operationId) continue;
+      const arr = groups.get(b.operationId) ?? [];
+      arr.push(b);
+      groups.set(b.operationId, arr);
+    }
+    return Array.from(groups.entries()).map(([operationId, blocks]) => ({
+      operationId,
+      blocks: blocks.sort((a, b) => a.orderKey.localeCompare(b.orderKey)),
+    }));
+  }, [doc]);
+
+  const keepAll = useCallback(
+    async (ids: string[]) => {
+      for (const id of ids) await onAcceptPending(id);
+    },
+    [onAcceptPending],
+  );
+  const undoAll = useCallback(
+    async (ids: string[]) => {
+      for (const id of ids) await onRejectPending(id);
+    },
+    [onRejectPending],
+  );
+
+
   // ============= UI =============
 
   return (
@@ -1219,6 +1391,55 @@ function Workbench() {
               <button onClick={() => setError(null)} className="text-rose-500/70 hover:text-rose-500">
                 ✕
               </button>
+            </div>
+          )}
+          {(pendingGroups.length > 0 || Object.keys(researchRunning).length > 0) && (
+            <div className="px-6 pt-3 pb-1 flex flex-col gap-1.5 shrink-0">
+              {Object.entries(researchRunning).map(([taskId, q]) => (
+                <div
+                  key={taskId}
+                  className="flex items-center gap-2 text-xs text-secondary bg-surface border border-auralis rounded-md px-3 py-1.5"
+                >
+                  <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse" />
+                  <span className="truncate">Researching: {q}</span>
+                </div>
+              ))}
+              {pendingGroups.map((g) => {
+                const ids = g.blocks.map((b) => b.id);
+                const preview =
+                  g.blocks.find((b) => b.heading)?.heading ||
+                  g.blocks.find((b) => b.body)?.body?.slice(0, 80) ||
+                  "Proposed changes";
+                const isResearch = g.blocks.some((b) => b.researchResultId);
+                return (
+                  <div
+                    key={g.operationId}
+                    className="flex items-center justify-between gap-3 text-xs bg-surface border border-emerald-500/30 rounded-md px-3 py-1.5"
+                  >
+                    <span className="flex items-center gap-2 min-w-0">
+                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
+                      <span className="text-secondary truncate">
+                        {isResearch ? "Research" : "AI"} · {g.blocks.length}{" "}
+                        {g.blocks.length === 1 ? "change" : "changes"} · {preview}
+                      </span>
+                    </span>
+                    <span className="flex items-center gap-1.5 shrink-0">
+                      <button
+                        onClick={() => void keepAll(ids)}
+                        className="px-2.5 py-0.5 rounded border border-auralis bg-surface text-primary hover:bg-surface-variant"
+                      >
+                        Keep all
+                      </button>
+                      <button
+                        onClick={() => void undoAll(ids)}
+                        className="px-2.5 py-0.5 rounded border border-auralis bg-surface text-rose-500 hover:bg-surface-variant"
+                      >
+                        Undo all
+                      </button>
+                    </span>
+                  </div>
+                );
+              })}
             </div>
           )}
           <div className="flex-1 overflow-y-auto p-8 min-h-0">
