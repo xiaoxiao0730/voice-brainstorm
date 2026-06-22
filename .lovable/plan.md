@@ -1,324 +1,212 @@
-# Voice + Live Brief + Research — Revised Plan (v2)
+# Long-form Speech + Dual-speed Architecture — Implementation Plan
 
-Approved direction with 10 revisions applied. Web Search spike verified before designing the Research pipeline.
-
----
-
-## 0. Web Search spike — VERIFIED
-
-Spike against the production Lovable AI Gateway (`/v1/chat/completions`):
-
-| Attempt | Result |
-|---|---|
-| `tools: [{ type: "google_search" }]` on `google/gemini-3-flash-preview` | **200 OK** — grounded answer with inline markdown citations (e.g. `[Node.js Releases](https://github.com/nodejs/node/releases)`) |
-| Plain ask for URLs (no tool) | 200 — but URLs are hallucinated; not usable |
-| `tools: [{ type: "web_search_preview" }]` on `openai/gpt-5-mini` | **400** — only `function` / `custom` supported |
-
-**Conclusion:** Research Pipeline uses Gemini + `google_search` tool. Citations are NOT exposed as a separate `groundingMetadata` field through the OpenAI-compatible adapter — they appear inline in the assistant message. We will:
-
-1. Call the model with the `google_search` tool and a prompt that asks for both prose + a JSON tail listing `{title, url}` per source.
-2. Parse the JSON tail for `links[]`; fall back to a markdown-link regex on `content` if JSON parsing fails.
-3. Run a second small Gemini call (`Output.object`) to synthesize the final `ResearchResult` from the grounded notes.
-
-The AI SDK `createOpenAICompatible` provider passes `tools` through unchanged, so this works with `generateText({ tools: [{ type: "google_search" }] })` — no provider-specific helper needed.
-
-Minimal verified shape used in spike:
-```ts
-await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
-  method: "POST",
-  headers: { "Content-Type": "application/json", "Lovable-API-Key": key },
-  body: JSON.stringify({
-    model: "google/gemini-3-flash-preview",
-    messages: [{ role: "user", content: query }],
-    tools: [{ type: "google_search" }],
-  }),
-});
-```
+Builds on `.lovable/plan.md` (v2). Keeps Azure STT → OpenAI Realtime → Lovable AI Gateway (Gemini) → Supabase. Refactors the interaction unit from **per-segment** to **ThoughtTurn**, splits work into a **Fast Voice lane** and a **Slow Coordinator lane**, and unifies brief/research output into a single Pending block with one Keep/Undo.
 
 ---
 
-## 1. Files (minimized)
+## 1. File architecture
 
-### Create (8 files, not 14)
+### Create
 ```text
+src/lib/pipeline/
+  thoughtTurnBuffer.ts        # aggregates Azure final segments → ThoughtTurn; owns boundary algorithm
+
 src/lib/orchestrator/
-  types.ts                # TurnDecision, TurnContext, ResearchTask/Result, ids
-  sessionStore.ts         # SINGLE SOURCE OF TRUTH for session state (broker + queues + registry)
-  decide.functions.ts     # createServerFn → TurnDecision
-  runTurn.ts              # client dispatcher: decide → fan out (voice now, brief queued, research queued)
+  sessionEvents.ts            # typed SessionEvent bus (per-session, in-memory)
+  sessionStore.ts             # single source of truth: activeSessionId, per-session broker, queues, registry
+  coordinator.ts              # Slow lane: consumes thought_turn.finalized → brief + research fallback
+  decideBrief.functions.ts    # createServerFn → BriefPatch[] from ThoughtTurn (Lovable AI, Gemini flash)
+  detectResearch.functions.ts # createServerFn → optional research query if coordinator detects gap
 
 src/lib/voice/
-  voiceController.ts      # wraps realtimeClient: speak(mode, goal), cancel; owns response.create
+  voiceController.ts          # wraps realtimeClient; speak/cancel; exposes tool handlers
+  voiceTools.ts               # tool schemas: stay_silent, request_research (passed to Realtime session)
 
 src/lib/research/
-  webSearch.functions.ts  # createServerFn: gemini + google_search → grounded notes + links
-  researchSynthesizer.functions.ts  # createServerFn: notes → ResearchResult (Output.object)
-  researchQueue.ts        # global semaphore (2), FIFO, session-tagged tasks
+  webSearch.functions.ts      # gemini + google_search grounded notes
+  researchSynthesizer.functions.ts  # notes → ResearchResult (Output.object)
+  researchQueue.ts            # global semaphore (max 2), session-tagged tasks, results posted via SessionEvent
 ```
 
-`sessionStore.ts` is the **single source of truth** for live session state — broker snapshot, per-session briefQueue mutex, per-session turnQueue (decisions+voice only), global researchQueue, and `activeSessionId`. All consumers read/write through it; no parallel module-level signal buses.
-
-### Modify (5 files)
+### Modify
 ```text
-src/lib/agent/realtimeClient.ts        # session.update → create_response:false; expose speak(mode,goal), cancel
-src/lib/pipeline/transcriptBuffer.ts   # onSegment final → call runTurn() (current entrypoint preserved)
-src/routes/_authenticated/workbench.tsx# wire onSegment→runTurn; render research status + Keep/Undo inline
-src/components/brief/BriefDocument.tsx # inline pending treatment (green border / red strike + tiny toolbar)
-src/lib/pipeline/types.ts              # add researchResultId? on BriefBlock; NO status field change
+src/lib/pipeline/types.ts                 # add ThoughtTurn, SessionEvent, BriefBlock.researchResultId?
+src/lib/pipeline/transcriptBuffer.ts      # onSegment final → thoughtTurnBuffer.ingest(segment)  (NOT runTurn)
+src/lib/agent/realtimeClient.ts           # remove char/word truncation; register tools; emit speech_started/response_started bridge events; longer reply caps
+src/routes/_authenticated/workbench.tsx   # wire Azure→transcriptBuffer→thoughtTurnBuffer; subscribe to SessionEvent; render pending sections
+src/components/brief/BriefDocument.tsx    # group all blocks from one operationId into ONE inline Pending section with ONE Keep/Undo
 ```
 
-### Keep during rollout (delete only after integration tests pass)
-- `src/lib/agent/responseGenerator.functions.ts`
-- `src/lib/agent/interventionPolicy.ts`
-- `src/lib/agent/segmentGate.ts` (stays a density classifier, **not** a transcript entrypoint)
-- `src/lib/orchestrate.functions.ts` (the existing brief writer; `briefQueue` wraps it; rename/replace later)
+### Delete (after integration test passes)
+```text
+src/lib/agent/responseGenerator.functions.ts
+src/lib/agent/interventionPolicy.ts
+src/lib/orchestrate.functions.ts             # replaced by coordinator.ts + decideBrief
+src/lib/orchestrator/runTurn.ts (v2 plan)    # not built; coordinator replaces it
+```
 
-### Database
-**No migration.** Reuse existing `brief_nodes` columns: `status: "ai_draft" | "user_confirmed"`, `is_pending: boolean`. Research tasks are tracked in memory inside `sessionStore` (ephemeral); completed research becomes ordinary `ai_draft` rows tagged with a new optional `research_result_id` on a future migration if needed — initially we just store the result id in `rationale` JSON.
+`segmentGate.ts` stays only as a density classifier (not a pipeline entrypoint).
 
 ---
 
-## 2. Final TypeScript types
+## 2. Confirmed TypeScript types
+
+In `src/lib/pipeline/types.ts`:
 
 ```ts
-// orchestrator/types.ts
-export type SessionId = string;
-export type TurnId = string;
-
-export type VoiceAction =
-  | "silent" | "acknowledge" | "probe" | "direct_answer" | "research_ack";
-export type BriefAction =
-  | "none" | "capture" | "restructure" | "capture_answer";
-export type ResearchAction =
-  | "none" | "quick_search" | "deep_search";
-
-export interface TurnDecision {
-  voiceAction: VoiceAction;
-  briefAction: BriefAction;
-  researchAction: ResearchAction;
-  reason: string;
-  confidence: number;            // 0..1
-  researchQuery?: string;
-  /** High-level intent for the Voice Pipeline; NOT a draft answer. */
-  responseGoal?: string;         // e.g. "acknowledge user is stuck on pricing", "offer 2 framings for onboarding metric"
-}
-
-export interface TurnContext {
-  sessionId: SessionId;
-  turnId: TurnId;
-  finalTranscript: string;
-  recentTranscript: string[];    // last ~6 user turns
-  recentVoice: string[];         // last ~4 agent replies
-  briefDigest: string;           // compressed brief text
-  openResearch: { id: string; status: ResearchStatus; query: string }[];
-  attachmentsDigest?: string;
-}
-
-// research/types.ts
-export type ResearchStatus =
-  | "queued" | "searching" | "comparing" | "writing" | "ready" | "failed";
-
-export interface ResearchTask {
+export type ThoughtTurn = {
   id: string;
-  sessionId: SessionId;          // origin session — never reassigned
-  turnId: TurnId;
-  kind: "quick" | "deep";
-  query: string;
-  status: ResearchStatus;
+  sessionId: string;
+  segmentIds: string[];        // Azure TranscriptSegment ids
+  chunkIds: string[];          // source chunk ids (flattened) for brief provenance
+  combinedText: string;        // cleanly concatenated segment text
   startedAt: number;
-  finishedAt?: number;
-  error?: string;
-}
-
-export interface ResearchResult {
-  title: string;
-  summary: string;
-  findings: string[];
-  links: string[];               // canvas shows links only, no metadata
-  voiceSummary: string;
-}
-```
-
-**Brief status fields stay untouched:** `status: "ai_draft" | "user_confirmed"`, `isPending: boolean`. Pending = `isPending: true && status: "ai_draft"`. Keep = set `isPending: false, status: "user_confirmed"`. Undo = delete row (or revert via existing `originalText` if present).
-
----
-
-## 3. Three-pipeline call sequence
-
-```text
-Azure final transcript
-   │
-   ▼
-workbench onSegment (existing entrypoint, unchanged)
-   │
-   ▼
-transcriptBuffer.push(final)  ── density tracking lives here; segmentGate still classifies for telemetry
-   │
-   ▼
-runTurn({sessionId, turnId, finalText})
-   │
-   ▼  sessionStore.snapshot(sessionId) → TurnContext
-   │
-   ▼  decide(ctx) → TurnDecision     [serialized in turnQueue: decisions + voice only]
-   │
-   ├─► VOICE  (in-order, awaited)
-   │    voiceController.speak(voiceAction, responseGoal)   // voice pipeline drafts the actual words
-   │    on user barge-in → voiceController.cancel()
-   │
-   ├─► BRIEF  (NOT in turnQueue; per-session mutex in briefQueue)
-   │    briefQueue.run(sessionId, () =>
-   │       orchestrateSegment({action, ctx, researchResult?}))   // existing function, wrapped
-   │
-   └─► RESEARCH  (NOT in turnQueue; global semaphore = 2)
-        researchQueue.submit({kind, query, sessionId, turnId})
-          status callbacks → sessionStore.researchStatus(sessionId, id, status)
-          on ready → if sessionStore.isActive(task.sessionId):
-                       briefQueue.run(task.sessionId, () =>
-                         orchestrateSegment({ action:"capture_answer", researchResult }))
-                     else: persist result to origin session's brief_nodes only — never touch UI
-        voice stays silent on completion; user must ask "what did you find"
-```
-
-Only **decisions + voice actions** are serialized. Slow brief writes run in parallel with the next turn's voice; research runs fully independently.
-
----
-
-## 4. Voice Pipeline (no answer drafting in Orchestrator)
-
-`voiceController.speak(action, goal)` builds the Realtime `response.create` instructions from a per-mode template + the orchestrator's `responseGoal`:
-
-```ts
-const MODE_PROMPTS = {
-  acknowledge: "One short sentence acknowledging what you heard.",
-  probe: "One brief observation, then one focused question. Offer 2–3 concrete options when useful. Never ask generic openers like 'tell me more' or 'what's the main problem'.",
-  direct_answer: "Answer concisely in 3–6 sentences, ≤30s of speech.",
-  research_ack: "Briefly say you'll look it up.",
+  endedAt: number;
+  boundaryReason: "semantic_pause" | "hard_limit" | "manual_stop";
+  revision: number;            // incremented when checkpoint is superseded
 };
-client.response.create({
-  modalities: ["audio","text"],
-  instructions: `${MODE_PROMPTS[action]}\n\nGoal: ${goal ?? ""}\n\nRecent context: ${digest}`,
-});
+
+export type SessionEvent =
+  | { type: "thought_turn.finalized"; sessionId: string; turnId: string; thoughtTurn: ThoughtTurn }
+  | { type: "voice.spoke"; sessionId: string; turnId?: string; text: string }
+  | { type: "research.requested"; sessionId: string; taskId: string; query: string }
+  | { type: "research.completed"; sessionId: string; taskId: string; result: ResearchResult }
+  | { type: "brief.proposed" | "brief.kept" | "brief.undone" | "brief.edited";
+      sessionId: string; operationId: string };
+
+export type ResearchResult = {
+  id: string;
+  query: string;
+  title: string;
+  summary: string;             // markdown, richer than voice
+  findings: string[];
+  links: { title: string; url: string }[];
+  voiceSummary: string;        // ≤ ~25s spoken form
+};
 ```
 
-The Orchestrator passes intent ("user stuck on positioning, suggest 2 angles"); the Voice Pipeline + Realtime model produce the words. No `voicePayload`.
-
-Realtime session: `turn_detection: { type:"server_vad", create_response: false, interrupt_response: true }`. The Orchestrator owns every `response.create`.
+`BriefBlock` gains `researchResultId?: string` and `operationId?: string` (groups co-proposed pending blocks). No change to `status` / `isPending`.
 
 ---
 
-## 5. Live Brief
+## 3. ThoughtTurn boundary algorithm
 
-- `briefQueue` = per-session mutex around `orchestrateSegment`. Wraps the existing server fn, so we don't rewrite it on day 1.
-- Pending rows: `isPending=true, status="ai_draft"` — unchanged.
-- Research result becomes ONE pending insertion (heading + paragraph) tied to a single Keep/Undo control on the UI side.
-- User-edited rows (`status="user_confirmed"`) are passed to the writer as **immutable** and excluded from restructure targets.
+`thoughtTurnBuffer.ts` (per-session singleton, held in `sessionStore`):
 
-### Inline pending treatment (no cards)
-```css
-.brief-pending-insert { border-left: 2px solid theme(emerald.400/60); padding-left: .75rem; }
-.brief-pending-delete { color: theme(red.400/80); text-decoration: line-through; }
-.brief-pending-toolbar { /* tiny: ✓ Keep · ↶ Undo, ghost buttons, no shadow */ }
-```
-No dashed boxes, no rounded panels, no drop shadows.
+State: `current: { segments: TranscriptSegment[]; startedAt; lastSegmentAt; revision } | null`,
+hard-limit timer, checkpoint timer.
 
----
+Constants:
+- `CHECKPOINT_MS = 30_000`  — internal-only progress snapshot
+- `HARD_LIMIT_MS = 120_000`
+- `SEMANTIC_PAUSE_MS = 2_500` — Azure final + no new final within window
+- `MAX_GAP_MS = 8_000`        — segment older than this starts a new turn
 
-## 6. Research Pipeline
+### ingest(segment)
+1. If `current == null` or `segment.startTimeMs - current.lastSegmentAt > MAX_GAP_MS`:
+   start new turn (`id = uuid`, `startedAt = segment.startTimeMs`, `revision = 0`).
+2. Push segment; update `lastSegmentAt`. Clear pending semantic-pause timer; schedule a new one at `SEMANTIC_PAUSE_MS`.
+3. If `(now - startedAt) >= HARD_LIMIT_MS` → `finalize("hard_limit")`.
+4. Else if `(now - startedAt) >= CHECKPOINT_MS` and no checkpoint at this revision → `checkpoint()` (bumps `revision`, emits internal-only event, no Pending UI).
 
-`webSearch.functions.ts` (createServerFn):
-```ts
-const gateway = createLovableAiGatewayProvider(process.env.LOVABLE_API_KEY!);
-const { text } = await generateText({
-  model: gateway("google/gemini-3-flash-preview"),
-  tools: [{ type: "google_search" } as any],   // verified shape
-  prompt: `${query}\n\nReturn 1-2 paragraphs of grounded notes, then a fenced JSON block:\n\`\`\`json\n{"links":[{"title":"...","url":"..."}]}\n\`\`\`\nTarget ${kind === "deep" ? "8-12" : "3-5"} sources.`,
-  stopWhen: stepCountIs(50),
-});
-// parse trailing ```json``` block; fallback: regex /\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g
-```
+### Finalization triggers
+- semantic-pause timer fires → `finalize("semantic_pause")`
+- voice lane emits `agent.response_started` (via SessionEvent) → flush current turn early → `finalize("semantic_pause")` (treat agent yield as turn close)
+- `manualStop()` → `finalize("manual_stop")`
+- hard-limit reached → `finalize("hard_limit")`
 
-`researchSynthesizer.functions.ts` takes the notes + link list and produces `ResearchResult` via small `Output.object` schema (kept narrow to avoid Gemini state-limit errors).
+### finalize(reason)
+- Build `ThoughtTurn`: `combinedText = segments.map(rawText).join(" ").normalizeWhitespace()`,
+  `chunkIds = segments.flatMap(s => s.chunkIds)`.
+- Emit `SessionEvent { type: "thought_turn.finalized", … }`.
+- Clear all timers; `current = null`.
 
-`researchQueue.ts`: in-memory FIFO with `MAX_CONCURRENT = 2` across all sessions. Tasks carry `sessionId/turnId` in their closure; status updates push through `sessionStore` only when the task's origin session is still the active session.
-
-Canvas status strings (no chain-of-thought): `Searching sources…`, `Comparing findings…`, `Preparing brief…`, `Ready for review`, `Search failed`.
+`runTurn()` is NOT called per Azure segment. The slow-lane coordinator subscribes to `thought_turn.finalized` once.
 
 ---
 
-## 7. Timeout / retry / failure / no-result
+## 4. Two-lane architecture
 
-| Stage | Timeout | Retry | On failure |
+### Lane A — Fast (OpenAI Realtime, WebRTC)
+- `realtimeClient.ts`: drop hard word/char caps and the interviewer prompt; new SOCRATIC prompt allows 3–6 sentence replies (~30s), peer tone, no "tell me more" filler.
+- Keep `create_response: true` + server VAD (Lane A owns its own turn-taking; the slow lane never speaks).
+- Register two tools on the Realtime session (`session.update.tools`):
+  - `stay_silent({ reason })` — cancel/suppress in-flight response; surfaces as `voice.stayed_silent` SessionEvent.
+  - `request_research({ query, reason })` — synchronously: (a) emit `research.requested` SessionEvent (Canvas shows running pill instantly), (b) push task to `researchQueue`, (c) return short string for the agent to speak ("Looking that up.").
+- Emit bridge SessionEvents on `response.created` (`voice.response_started`) and `response.done` (`voice.spoke` with transcript). `thoughtTurnBuffer` listens for `voice.response_started` to early-finalize.
+
+### Lane B — Slow Coordinator (Lovable AI Gateway, Gemini flash)
+- `coordinator.ts` subscribes to `thought_turn.finalized`. For each turn (serialized per session via `briefQueue` mutex):
+  1. Call `decideBrief.functions` → returns `{ operationId, patches: BriefPatch[], proposeResearch?: { query, reason } }`.
+  2. Apply patches as a single Pending group: every produced/edited block gets the same `operationId` and `isPending: true`; emits one `brief.proposed` SessionEvent.
+  3. If `proposeResearch` and no Lane-A `request_research` already covers it → enqueue research task tagged with `sessionId + operationId`.
+- Voice never writes to the brief. Coordinator never speaks.
+
+### UI Pending rules (BriefDocument.tsx)
+- Group all pending blocks sharing `operationId` into ONE inline Pending section with ONE Keep/Undo toolbar.
+- Inline rendering only: green left-border for inserts, red strike-through for edits/deletes. No dashed cards, no shadow.
+- Research completion appends its result blocks into the SAME `operationId` group if research was triggered for that op; otherwise its own single group.
+- Keep → flips all blocks in group to `status: "user_confirmed"`, `isPending: false`, emits `brief.kept`. Undo → deletes/reverts, emits `brief.undone`.
+
+---
+
+## 5. Shared state & queues
+
+`sessionStore.ts` (single source of truth, no parallel signal bus):
+- `activeSessionId: string | null`
+- `sessions: Map<sessionId, { broker, thoughtTurnBuffer, briefQueue (mutex), eventBus, researchTasks: Map<taskId, status> }>`
+- Global `researchQueue` (semaphore = 2, FIFO; tasks carry `sessionId`).
+- `setActiveSession(id)`: does NOT abort in-flight research. Coordinator/UI subscribers gate on `event.sessionId === activeSessionId` before rendering; results still persist to their original session row.
+- `disposeSession(id)`: cancels Realtime, clears that session's buffers/queues; lets pending research finish and write to its origin session only.
+
+Research result delivery: on completion, `researchQueue` emits `research.completed` on the **origin** session's eventBus. UI subscribes only to the active session's bus, so stale results never flash on the new canvas but are preserved when the user returns.
+
+---
+
+## 6. Web Search
+
+Per spike (already in `.lovable/plan.md`): Gemini `google/gemini-3-flash-preview` + `tools: [{ type: "google_search" }]` via OpenAI-compatible adapter. Two-call shape: grounded notes → `Output.object` synthesis to `ResearchResult`. Links parsed from JSON tail with markdown-regex fallback.
+
+---
+
+## 7. Timeout / retry / failure
+
+| Pipeline | Timeout | Retry | No-result / failure |
 |---|---|---|---|
-| `decide` | 4s | 1× (network only) | `{silent, none, none}` |
-| Voice `response.create` | n/a (stream) | none | log + status pill |
-| `orchestrateSegment` (brief) | 15s | 1× on 5xx/429 | drop pending row; toast "Brief failed" |
-| `webSearch` | 25s | 1× | task→`failed`; canvas shows "Search failed — retry" |
-| `researchSynthesizer` | 15s | 1× | same as above |
-| No results | n/a | n/a | `ready` with `{summary:"No reliable sources found.", links:[]}` |
-
-429 / 402 from gateway surface explicitly per Lovable AI conventions.
+| Realtime tool call | 10s server-side ack | none (user can re-ask) | tool returns `{ ok:false }`; agent apologizes |
+| decideBrief | 12s | 1× on 5xx/timeout | drop turn silently; log |
+| webSearch | 20s | 1× | emit `research.completed` with empty `findings`+`links`; UI shows "No reliable sources found" pending block (still single Keep/Undo) |
+| researchSynthesizer | 10s | 1× | fall back to notes as `summary` |
 
 ---
 
-## 8. Session isolation (corrected — no aborting research)
+## 8. Session isolation
 
-- `sessionStore.activeSessionId` is the only "which session is on screen" flag. Set on workbench mount / route param change.
-- **Research tasks are never aborted on session switch.** They run to completion against their origin `sessionId`.
-- On completion, `runResearch.complete()` does:
-  ```ts
-  // ALWAYS persist to origin session
-  await briefQueue.run(task.sessionId, () => persistResearch(task.sessionId, result));
-  // Update UI ONLY if origin === active
-  if (sessionStore.activeSessionId === task.sessionId) {
-    sessionStore.emit(task.sessionId, "research:ready", result);
-  }
-  ```
-- Brief and voice fan-out from `runTurn` check `sessionStore.activeSessionId === ctx.sessionId` before mutating UI signals; database writes always go to `ctx.sessionId` regardless.
-- Switching session: clear UI subscriptions; do NOT cancel in-flight fetches.
-- Voice is cancelled on switch (Realtime is a single live channel): `voiceController.cancel()`.
+- Every async job carries `{ sessionId, turnId?, operationId?, taskId? }`.
+- Coordinator / UI subscribers filter by `activeSessionId` before mutating UI.
+- Research tasks persist results to `sessions.get(originSessionId).eventBus` regardless of active session.
+- Switching session → UI unsubscribes from old bus, subscribes to new bus; old research never renders on new canvas.
 
 ---
 
-## 9. Reliability checklist
+## 9. Testing & acceptance
 
-- Decisions+voice serialized per session via `turnQueue` (FIFO).
-- Brief writes serialized per session via `briefQueue` (independent of turnQueue).
-- Research global concurrency = 2 (semaphore).
-- Every async job carries `{sessionId, turnId}` and tags writes.
-- Stale-session UI guard at the emit boundary, not at the write boundary.
-- `sourceChunkIds` round-tripped through `orchestrateSegment` (already does).
-- User edits respected: `status="user_confirmed"` rows excluded from restructure targets (already enforced in the writer's prompt; add an assertion test).
-
----
-
-## 10. Testing & acceptance
-
-Unit:
-- `decide` returns valid `TurnDecision` for fixtures: thinking-aloud, stuck pause, direct factual Q, comparison Q.
-- `researchQueue` enforces global concurrency 2 + FIFO.
-- `briefQueue` serializes per session; parallel across sessions.
-- `voiceController` cancels on barge-in within one event loop tick.
-
-Integration (Playwright in sandbox):
-- Factual question → voice says "Let me look that up" → status pill cycles → research pending block appears → Keep persists as `user_confirmed`.
-- Rambling thought → voice silent; brief grows pending rows.
-- Barge-in → Realtime response cancelled.
-- **Corrected session switch test:** start research in session A, switch to B mid-flight, wait for completion → confirm session A's `brief_nodes` got the new row, confirm session B's UI never showed it and its `brief_nodes` is untouched. Switch back to A → row is visible.
-- Web search spike (already passing): `tools:[{type:"google_search"}]` returns grounded answer with citations.
-
-Acceptance:
-- No regression in Azure STT, Realtime audio, current Brief editor or template UX.
-- TypeScript + lint + build pass.
-- `orchestrateSegment` and `interventionPolicy` still present until integration tests are green.
+1. **Boundary**: speak 45s nonstop → exactly one `thought_turn.finalized` with `boundaryReason: "semantic_pause"` (or `hard_limit` past 120s). No per-segment briefs.
+2. **Voice early-finalize**: agent starts speaking mid-stream → current turn finalizes; brief reflects everything said before voice started.
+3. **Tools**: ask a factual question → agent calls `request_research`, voice says short ack, Canvas shows running pill instantly, result appears as ONE pending group later.
+4. **Single Pending group**: a long turn that yields 3 brief blocks + 1 research result → ONE Keep/Undo toolbar controlling all four.
+5. **Session switch**: trigger research, switch session before it returns → new canvas stays clean; switch back → result is there.
+6. **No regression**: Azure STT entrypoint unchanged; `transcriptBuffer` still owns chunk dedupe and silence flush.
 
 ---
 
-## 11. Incremental rollout (5 PRs)
+## 10. Rollout (incremental, no big-bang)
 
-1. **Types + `sessionStore`** (no behavior change). Add `voiceController` shim that forwards to existing `realtimeClient` API.
-2. **Realtime `create_response:false`** + Orchestrator `decide` + `turnQueue`. STT final still triggers existing brief path; Orchestrator only drives voice. `responseGenerator`/`interventionPolicy` remain authoritative for now.
-3. **`briefQueue`** wraps `orchestrateSegment`; route brief writes through it. Keep old path behind a flag for one PR.
-4. **Research module** (webSearch + synthesizer + queue) + canvas status pill, behind a flag.
-5. **Enable research actions** in `decide`; flip flags on; delete `responseGenerator.functions.ts` and `interventionPolicy.ts` after acceptance tests pass.
+1. Types + `sessionEvents` + `sessionStore` skeleton (no behavior change).
+2. `thoughtTurnBuffer` + transcriptBuffer wiring; coordinator stub logs only.
+3. Voice prompt + remove caps; register tools (Lane A complete).
+4. `decideBrief` + briefQueue + single-Pending-group UI.
+5. Research pipeline + concurrency cap + session-gated rendering.
+6. Delete legacy `responseGenerator`, `interventionPolicy`, `orchestrate.functions`.
 
-Each PR ships independently; `workbench.tsx` only gains a thin `runTurn()` call, never a rewrite.
+Awaiting approval before writing code.
