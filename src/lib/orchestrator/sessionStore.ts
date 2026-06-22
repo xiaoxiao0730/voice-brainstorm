@@ -35,6 +35,7 @@ export type SessionSlot = {
   sessionId: string;
   bus: SessionEventBus;
   briefQueue: Mutex;
+  thoughtTurnBuffer: ThoughtTurnBuffer;
   researchTasks: Map<string, ResearchTaskStatus>;
 };
 
