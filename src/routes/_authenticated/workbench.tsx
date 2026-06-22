@@ -764,55 +764,26 @@ function Workbench() {
 
   // ============= Document handlers =============
 
-  const editTimers = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
-
-  const onEditBlock = useCallback(
-    (id: string, patch: { heading?: string; body?: string }) => {
-      const existing = docRef.current[id];
-      if (!existing) return;
-      const next: BriefBlock = {
-        ...existing,
-        heading: patch.heading !== undefined ? patch.heading : existing.heading,
-        body: patch.body !== undefined ? patch.body : existing.body,
-        lastEditedBy: "user",
-        locked: true,
-        isPending: false,
-      };
-      const map = { ...docRef.current, [id]: next };
+  // Single delta callback from the continuous editor. Diffed against the
+  // editor's internal snapshot; we just persist to Supabase and mirror state.
+  const onPersistDelta = useCallback(
+    ({ upserts, deletedIds }: { upserts: BriefBlock[]; deletedIds: string[] }) => {
+      if (upserts.length === 0 && deletedIds.length === 0) return;
+      const map = { ...docRef.current };
+      for (const id of deletedIds) delete map[id];
+      for (const b of upserts) map[b.id] = b;
       setDoc(map);
       docRef.current = map;
-
-      // Debounced persist (600ms) per block.
-      const existingTimer = editTimers.current.get(id);
-      if (existingTimer) clearTimeout(existingTimer);
-      const t = setTimeout(() => {
-        editTimers.current.delete(id);
-        void persistBlock(next);
-        publishSignal({ type: "edit", slotId: next.slotId ?? "", heading: next.heading, body: next.body });
-        scheduleInject(summarizeForInject({ type: "edit", slotId: next.slotId ?? "", heading: next.heading, body: next.body, ts: Date.now() }));
-        void logIntv({
-          data: { sessionId: next.sessionId, decision: "edit", slotId: next.slotId, responseText: next.body },
-        }).catch(() => undefined);
-      }, 600);
-      editTimers.current.set(id, t);
-    },
-    [persistBlock, logIntv, scheduleInject],
-  );
-
-  const onDeleteBlock = useCallback(
-    async (id: string) => {
-      const existing = docRef.current[id];
-      const next = { ...docRef.current };
-      delete next[id];
-      setDoc(next);
-      docRef.current = next;
-      await deleteN({ data: { id } }).catch((e) => console.warn("delete failed", e));
-      if (existing) {
-        publishSignal({ type: "reject", slotId: existing.slotId ?? "", heading: existing.heading, body: existing.body });
-        scheduleInject(summarizeForInject({ type: "reject", slotId: existing.slotId ?? "", heading: existing.heading, body: existing.body, ts: Date.now() }));
+      for (const b of upserts) {
+        void persistBlock(b);
+        publishSignal({ type: "edit", slotId: "", heading: b.heading, body: b.body });
+        scheduleInject(summarizeForInject({ type: "edit", slotId: "", heading: b.heading, body: b.body, ts: Date.now() }));
+      }
+      for (const id of deletedIds) {
+        void deleteN({ data: { id } }).catch((e) => console.warn("delete failed", e));
       }
     },
-    [deleteN, scheduleInject],
+    [persistBlock, deleteN, scheduleInject],
   );
 
   const onAcceptPending = useCallback(
@@ -824,10 +795,10 @@ function Workbench() {
       setDoc(map);
       docRef.current = map;
       await acceptN({ data: { id } }).catch((e) => console.warn("accept failed", e));
-      publishSignal({ type: "accept", slotId: next.slotId ?? "", heading: next.heading, body: next.body });
-      scheduleInject(summarizeForInject({ type: "accept", slotId: next.slotId ?? "", heading: next.heading, body: next.body, ts: Date.now() }));
+      publishSignal({ type: "accept", slotId: "", heading: next.heading, body: next.body });
+      scheduleInject(summarizeForInject({ type: "accept", slotId: "", heading: next.heading, body: next.body, ts: Date.now() }));
       void logIntv({
-        data: { sessionId: next.sessionId, decision: "accept", slotId: next.slotId, responseText: next.body },
+        data: { sessionId: next.sessionId, decision: "accept", responseText: next.body || next.heading },
       }).catch(() => undefined);
     },
     [acceptN, logIntv, scheduleInject],
@@ -842,19 +813,57 @@ function Workbench() {
       docRef.current = next;
       await deleteN({ data: { id } }).catch((e) => console.warn("reject failed", e));
       if (existing) {
-        publishSignal({ type: "reject", slotId: existing.slotId ?? "", heading: existing.heading, body: existing.body });
-        scheduleInject(summarizeForInject({ type: "reject", slotId: existing.slotId ?? "", heading: existing.heading, body: existing.body, ts: Date.now() }));
+        publishSignal({ type: "reject", slotId: "", heading: existing.heading, body: existing.body });
+        scheduleInject(summarizeForInject({ type: "reject", slotId: "", heading: existing.heading, body: existing.body, ts: Date.now() }));
         void logIntv({
-          data: { sessionId: existing.sessionId, decision: "reject", slotId: existing.slotId, responseText: existing.body },
+          data: { sessionId: existing.sessionId, decision: "reject", responseText: existing.body || existing.heading },
         }).catch(() => undefined);
       }
     },
     [deleteN, logIntv, scheduleInject],
   );
 
-  const onFocusBlock = useCallback((id: string | null) => {
-    focusedBlockRef.current = id;
+  const onIsEditingChange = useCallback((editing: boolean) => {
+    isEditingRef.current = editing;
   }, []);
+
+  // Apply a template: append its headings to end of document (idempotent).
+  const applyTemplate = useCallback(
+    (id: string) => {
+      const tpl = TEMPLATES[id];
+      if (!tpl?.available) return;
+      setTemplateId(id);
+      if (id === appliedTemplateId) return; // dedupe re-selection
+      setAppliedTemplateId(id);
+      if (tpl.headings.length === 0 || !activeSessionId) return;
+      const sid = activeSessionId;
+      const existingKeys = Object.values(docRef.current).map((b) => b.orderKey).sort();
+      let lastKey: string | null = existingKeys.length ? existingKeys[existingKeys.length - 1] : null;
+      const newBlocks: BriefBlock[] = [];
+      for (const h of tpl.headings) {
+        lastKey = between(lastKey, null);
+        const b: BriefBlock = {
+          id: crypto.randomUUID(),
+          sessionId: sid,
+          orderKey: lastKey,
+          heading: h,
+          level: 2,
+          body: "",
+          lastEditedBy: "user",
+          locked: true,
+          sourceChunkIds: [],
+        };
+        newBlocks.push(b);
+      }
+      const map = { ...docRef.current };
+      for (const b of newBlocks) map[b.id] = b;
+      setDoc(map);
+      docRef.current = map;
+      briefDocRef.current?.appendLines(newBlocks);
+      for (const b of newBlocks) void persistBlock(b);
+    },
+    [appliedTemplateId, activeSessionId, persistBlock],
+  );
 
 
   const liveText = useMemo(
