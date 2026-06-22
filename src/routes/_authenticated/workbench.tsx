@@ -265,11 +265,10 @@ function Workbench() {
   // Stage 4 helpers — apply coordinator-proposed brief patches as a single
   // pending operation group (one operationId → one Keep/Undo toolbar).
   const applyProposedPatches = useCallback(
-    (sessionId: string, operationId: string, patches: import("@/lib/pipeline/types").BriefPatch[]) => {
+    (sessionId: string, operationId: string, patches: BriefPatch[]) => {
       let map: BriefDoc = { ...docRef.current };
       const appended: BriefBlock[] = [];
       for (const patch of patches) {
-        const { applyBriefPatch } = require("@/lib/pipeline/applyBriefPatch") as typeof import("@/lib/pipeline/applyBriefPatch");
         const res = applyBriefPatch(map, patch, { sessionId });
         if (!res.result.ok) continue;
         const block: BriefBlock = {
