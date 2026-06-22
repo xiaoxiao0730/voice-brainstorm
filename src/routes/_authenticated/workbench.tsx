@@ -13,6 +13,8 @@ import {
   nodeToBlock,
   type BriefBlock,
   type BriefDoc,
+  type BriefPatch,
+  type ResearchResult,
   type TranscriptSegment,
 } from "@/lib/pipeline/types";
 
