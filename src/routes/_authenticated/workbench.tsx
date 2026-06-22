@@ -161,6 +161,9 @@ function Workbench() {
   const briefDocRef = useRef<BriefDocumentHandle | null>(null);
   const [appliedTemplateId, setAppliedTemplateId] = useState<string>(DEFAULT_TEMPLATE_ID);
 
+  // Stage 4: running research tasks (taskId → query) for the active session.
+  const [researchRunning, setResearchRunning] = useState<Record<string, string>>({});
+
   useEffect(() => {
     docRef.current = doc;
   }, [doc]);
