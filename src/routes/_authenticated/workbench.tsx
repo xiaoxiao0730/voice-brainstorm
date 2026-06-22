@@ -255,11 +255,33 @@ function Workbench() {
       try {
         const briefNodes = await loadB({ data: { sessionId: id } });
         const map: BriefDoc = {};
-        for (const n of briefNodes) map[n.id] = nodeToBlock(n);
+        // Legacy split: a row with BOTH heading and body becomes 2 lines
+        // (heading first, body next) so the continuous document keeps both.
+        for (const n of briefNodes) {
+          const base = nodeToBlock(n);
+          const hasHeading = !!base.heading?.trim();
+          const hasBody = !!base.body?.trim();
+          if (hasHeading && hasBody) {
+            const headingId = base.id;
+            const bodyId = crypto.randomUUID();
+            const bodyKey = between(base.orderKey, null);
+            map[headingId] = { ...base, body: "", level: 2 };
+            map[bodyId] = {
+              ...base,
+              id: bodyId,
+              orderKey: bodyKey,
+              heading: "",
+              level: 3,
+            };
+          } else if (hasHeading) {
+            map[base.id] = { ...base, body: "", level: 2 };
+          } else {
+            map[base.id] = { ...base, heading: "", level: 3 };
+          }
+        }
 
         // First time opening a session that has an onboarding prompt → seed
-        // it as the first locked block so the AI treats it as the user's
-        // intent and writes around it.
+        // it as the first paragraph so the AI treats it as the user's intent.
         if (Object.keys(map).length === 0) {
           try {
             const ctx = await getCtx({ data: { sessionId: id } });
@@ -268,8 +290,8 @@ function Workbench() {
                 id: crypto.randomUUID(),
                 sessionId: id,
                 orderKey: between(null, null),
-                heading: "Starting thought",
-                level: 2,
+                heading: "",
+                level: 3,
                 body: ctx.prompt.trim(),
                 lastEditedBy: "user",
                 locked: true,
