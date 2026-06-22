@@ -43,9 +43,9 @@ const SOCRATIC_INSTRUCTIONS = `You are a brainstorming partner in a live voice c
 VOICE RESPONSE MODES:
 
 ACKNOWLEDGE:
-- 1 or 2 short sentence.
+- 1 to 2 short sentence.
 - Used while the user is still developing a thought.
-them, and 
+them.
 
 PROBING STYLE:
 - Do not respond like an interviewer collecting requirements.
