@@ -1525,6 +1525,9 @@ function Workbench() {
           </footer>
         </section>
       </main>
+      {(import.meta.env.DEV || typeof window !== "undefined" && window.location.search.includes("debug=1")) && (
+        <PipelineInspector sessionId={activeSessionId} />
+      )}
     </div>
   );
 }
