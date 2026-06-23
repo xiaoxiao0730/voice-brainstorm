@@ -12,8 +12,13 @@ import type { BriefBlock, BriefDoc } from "@/lib/pipeline/types";
 import { between } from "@/lib/pipeline/orderKey";
 
 export type BriefDocumentHandle = {
-  /** Append lines to the end of the document (and persist via callback). */
-  appendLines: (blocks: BriefBlock[]) => void;
+  /**
+   * Append lines to the end of the document (and persist via callback).
+   * When `asHtml` is true, each block's `heading` / `body` is treated as
+   * pre-sanitized HTML (e.g. markdown converted via renderMarkdownToSafeHtml)
+   * and inserted without further escaping. Defaults to false (plain text).
+   */
+  appendLines: (blocks: BriefBlock[], opts?: { asHtml?: boolean }) => void;
   /** Force-flush any in-flight debounced save (e.g. before session switch). */
   flush: () => void;
 };
@@ -238,9 +243,10 @@ export const BriefDocument = forwardRef<BriefDocumentHandle, Props>(function Bri
   useImperativeHandle(
     ref,
     () => ({
-      appendLines: (blocks) => {
+      appendLines: (blocks, opts) => {
         const el = editorRef.current;
         if (!el || blocks.length === 0) return;
+        const escapeText = !opts?.asHtml;
         const sel = window.getSelection();
         const savedRange =
           sel && sel.rangeCount > 0 && el.contains(sel.anchorNode)
@@ -252,8 +258,9 @@ export const BriefDocument = forwardRef<BriefDocumentHandle, Props>(function Bri
         for (const b of blocks) {
           const key = b.orderKey || between(lastKey, null);
           const block: BriefBlock = { ...b, orderKey: key };
-          // AI / template-supplied content is plain text — escape on insert.
-          el.insertAdjacentHTML("beforeend", renderLineHtml(block, { escapeText: true }));
+          // When asHtml is false, escape on insert (AI/template plain text).
+          // When asHtml is true, the caller has already rendered safe HTML.
+          el.insertAdjacentHTML("beforeend", renderLineHtml(block, { escapeText }));
           lastSnapshotRef.current.set(block.id, block);
           lastKey = key;
         }

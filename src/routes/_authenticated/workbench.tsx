@@ -7,6 +7,7 @@ import { supabase } from "@/integrations/supabase/client";
 
 import { between } from "@/lib/pipeline/orderKey";
 import { applyBriefPatch } from "@/lib/pipeline/applyBriefPatch";
+import { renderMarkdownToSafeHtml } from "@/lib/markdown";
 import { createTranscriptBuffer } from "@/lib/pipeline/transcriptBuffer";
 import {
   blockToNodeUpsert,
@@ -304,13 +305,17 @@ function Workbench() {
       let lastKey: string | null = allKeys.length ? allKeys[allKeys.length - 1] : null;
       const appended: BriefBlock[] = [];
 
-      const mkHeading = (text: string): BriefBlock => {
+      // Heading text — escape only (no markdown formatting expected here).
+      const headingHtml = renderMarkdownToSafeHtml(
+        `Research: ${result.title || result.query}`,
+      );
+      const mkHeading = (html: string): BriefBlock => {
         lastKey = between(lastKey, null);
         return {
           id: crypto.randomUUID(),
           sessionId,
           orderKey: lastKey,
-          heading: text,
+          heading: html,
           level: 2,
           body: "",
           lastEditedBy: "ai",
@@ -321,7 +326,7 @@ function Workbench() {
           researchResultId: result.id,
         };
       };
-      const mkPara = (text: string): BriefBlock => {
+      const mkParaHtml = (html: string): BriefBlock => {
         lastKey = between(lastKey, null);
         return {
           id: crypto.randomUUID(),
@@ -329,7 +334,7 @@ function Workbench() {
           orderKey: lastKey,
           heading: "",
           level: 3,
-          body: text,
+          body: html,
           lastEditedBy: "ai",
           locked: false,
           sourceChunkIds: [],
@@ -339,21 +344,25 @@ function Workbench() {
         };
       };
 
-      appended.push(mkHeading(`Research: ${result.title || result.query}`));
-      if (result.summary?.trim()) appended.push(mkPara(result.summary.trim()));
-      for (const f of result.findings) appended.push(mkPara(`• ${f}`));
+      appended.push(mkHeading(headingHtml));
+      if (result.summary?.trim()) {
+        appended.push(mkParaHtml(renderMarkdownToSafeHtml(result.summary.trim())));
+      }
+      for (const f of result.findings) {
+        appended.push(mkParaHtml(renderMarkdownToSafeHtml(`- ${f}`)));
+      }
       if (result.links.length) {
-        const linkLine = result.links
-          .map((l) => (l.title ? `${l.title} (${l.url})` : l.url))
+        const linksMd = result.links
+          .map((l) => (l.title ? `[${l.title}](${l.url})` : l.url))
           .join(" · ");
-        appended.push(mkPara(`Sources: ${linkLine}`));
+        appended.push(mkParaHtml(renderMarkdownToSafeHtml(`Sources: ${linksMd}`)));
       }
 
       const map = { ...docRef.current };
       for (const b of appended) map[b.id] = b;
       setDoc(map);
       docRef.current = map;
-      briefDocRef.current?.appendLines(appended);
+      briefDocRef.current?.appendLines(appended, { asHtml: true });
       for (const b of appended) void persistBlock(b);
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
