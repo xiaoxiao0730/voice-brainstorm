@@ -161,6 +161,8 @@ function Workbench() {
   const realtimeRef = useRef<RealtimeClient | null>(null);
   const policyRef = useRef(createPolicyEngine(null));
   const recentTextsRef = useRef<string[]>([]);
+  // Fast-lane: bullets emitted recently (last ~8) so the bullet lane avoids repeats.
+  const recentBulletsRef = useRef<string[]>([]);
   const listeningRef = useRef(listening);
   const agentConnectedAtRef = useRef(Date.now());
   const isEditingRef = useRef(false);
@@ -179,6 +181,7 @@ function Workbench() {
     activeSessionRef.current = activeSessionId;
     policyRef.current = createPolicyEngine(activeSessionId);
     recentTextsRef.current = [];
+    recentBulletsRef.current = [];
   }, [activeSessionId]);
   useEffect(() => {
     listeningRef.current = listening;
