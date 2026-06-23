@@ -45,6 +45,8 @@ import { DEFAULT_TEMPLATE_ID, getTemplate, TEMPLATES } from "@/lib/pipeline/thin
 import { type AgentStatus } from "@/components/agent/AgentPanel";
 import { sessionStore } from "@/lib/orchestrator/sessionStore";
 import { attachCoordinator } from "@/lib/orchestrator/coordinator";
+import { pipelineTracer } from "@/lib/debug/pipelineTracer";
+import { PipelineInspector } from "@/components/debug/PipelineInspector";
 
 export const Route = createFileRoute("/_authenticated/workbench")({
   validateSearch: (search: Record<string, unknown>) => ({
@@ -324,6 +326,12 @@ function Workbench() {
       docRef.current = map;
       briefDocRef.current?.appendLines(appended);
       for (const b of appended) void persistBlock(b);
+      pipelineTracer.log({
+        sessionId,
+        kind: "brief.applied",
+        operationId,
+        meta: { blocks: appended.length },
+      });
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [],
@@ -575,6 +583,15 @@ function Workbench() {
 
   const onSegment = useCallback(
     async (segment: TranscriptSegment) => {
+      pipelineTracer.log({
+        sessionId: segment.sessionId,
+        kind: "transcript.segment",
+        meta: {
+          chars: segment.rawText.length,
+          chunks: segment.chunkIds.length,
+          boundary: segment.boundaryReason,
+        },
+      });
       try {
         await saveSegment({
           data: {
@@ -1514,6 +1531,9 @@ function Workbench() {
           </footer>
         </section>
       </main>
+      {(import.meta.env.DEV || typeof window !== "undefined" && window.location.search.includes("debug=1")) && (
+        <PipelineInspector sessionId={activeSessionId} />
+      )}
     </div>
   );
 }

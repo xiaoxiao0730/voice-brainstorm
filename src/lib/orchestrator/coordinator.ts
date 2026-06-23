@@ -12,6 +12,7 @@
 
 import { sessionStore } from "./sessionStore";
 import { decideBrief } from "./decideBrief.functions";
+import { pipelineTracer } from "@/lib/debug/pipelineTracer";
 
 export type CoordinatorContext = {
   /** Snapshot of the current brief, used as context for decideBrief. */
@@ -29,6 +30,14 @@ export function attachCoordinator(sessionId: string, ctx: CoordinatorContext): (
 
   const off = slot.bus.on("thought_turn.finalized", (e) => {
     void slot.briefQueue.run(async () => {
+      const endSpan = pipelineTracer.startSpan({
+        sessionId,
+        kind: "decideBrief.start",
+        endKind: "decideBrief.end",
+        key: e.turnId,
+        turnId: e.turnId,
+        meta: { chars: e.thoughtTurn.combinedText.length },
+      });
       try {
         const snapshot = ctx.getSnapshot();
         const model = ctx.getModel?.() ?? "google/gemini-3-flash-preview";
@@ -41,6 +50,11 @@ export function attachCoordinator(sessionId: string, ctx: CoordinatorContext): (
             snapshot,
             model,
           },
+        });
+        endSpan({
+          patches: decision.patches.length,
+          research: decision.proposeResearch?.query ? 1 : 0,
+          rationale: (decision.rationale ?? "").slice(0, 120),
         });
 
         const operationId = crypto.randomUUID();
@@ -72,6 +86,7 @@ export function attachCoordinator(sessionId: string, ctx: CoordinatorContext): (
           });
         }
       } catch (err) {
+        endSpan({ error: err instanceof Error ? err.message : String(err) });
         console.warn("[coordinator] decideBrief failed", err);
       }
     });

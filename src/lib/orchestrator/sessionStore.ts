@@ -13,6 +13,7 @@
 
 import { createSessionEventBus, type SessionEventBus } from "./sessionEvents";
 import { createThoughtTurnBuffer, type ThoughtTurnBuffer } from "@/lib/pipeline/thoughtTurnBuffer";
+import { wireTracerToBus } from "@/lib/debug/pipelineTracer";
 
 type Mutex = {
   run: <T>(fn: () => Promise<T>) => Promise<T>;
@@ -49,6 +50,7 @@ function ensure(sessionId: string): SessionSlot {
   const existing = sessions.get(sessionId);
   if (existing) return existing;
   const bus = createSessionEventBus();
+  wireTracerToBus(sessionId, bus);
   const thoughtTurnBuffer = createThoughtTurnBuffer(sessionId, bus);
   // Voice grabbing the turn = user yielded → early-finalize the current ThoughtTurn.
   bus.on("voice.response_started", () => thoughtTurnBuffer.onVoiceResponseStarted());
