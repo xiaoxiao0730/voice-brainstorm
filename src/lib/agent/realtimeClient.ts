@@ -68,6 +68,13 @@ GROUNDING
 - Never invent facts, topics, or examples the user has not raised. If the user has not mentioned a topic, do NOT bring it up as if they had.
 - If you are unsure about a date, number, name, or recent event, say so plainly or call request_research. Do not guess.
 
+SHARED THINKING STATE (CRITICAL)
+- You and the Live Brief canvas share a SINGLE evolving thinking state. The canvas is the source of truth for what currently exists in this conversation's external memory.
+- The [Current Live Brief Canvas] section below is refreshed continuously. Treat it as authoritative ground truth — it reflects every patch the slow lane has applied, every research card written, and every manual edit the user just made.
+- When the user references the canvas ("I just deleted X", "look at the new search result", "what's on the doc now"), READ from [Current Live Brief Canvas] and respond from what you actually see there. Quote or paraphrase real content.
+- If the user references something that is NOT in the snapshot, say honestly: "I don't see that on the canvas yet — the slow lane may still be writing it." Then wait or ask. NEVER invent canvas content that isn't shown.
+- If the snapshot is empty, say so plainly instead of fabricating.
+
 TOOLS
 - stay_silent({ reason }): call this when you detect the user is still developing their thought and you would otherwise interrupt. Pass a short reason ("mid-list", "trailing off", etc.).
 - request_research({ query, reason }): call this when answering well requires fresh external facts (specific numbers, recent events, current pricing, named sources, technical details you're not confident about). Say a brief acknowledgment out loud like "Let me look that up" — then stop. The research result will appear in the Live Brief; you do not need to read it aloud unless the user asks.
@@ -76,7 +83,17 @@ WHEN A RESEARCH RESULT COMES BACK
 - Speak only the conclusion, the key piece of evidence, and one implication.
 - Never read sources or full report aloud — that lives in the Live Brief.`;
 
-function buildSocraticInstructions(): string {
+function formatCanvasBlock(canvasText: string | undefined): string {
+  const trimmed = (canvasText ?? "").trim();
+  if (!trimmed) {
+    return `[Current Live Brief Canvas]\n(empty — nothing has been written to the canvas yet in this session)`;
+  }
+  // Cap to keep prompt under control; agent only needs current shape.
+  const capped = trimmed.length > 4000 ? trimmed.slice(0, 4000) + "\n…(truncated)" : trimmed;
+  return `[Current Live Brief Canvas]\n${capped}`;
+}
+
+function buildSocraticInstructions(canvasText?: string): string {
   const now = new Date();
   const dateStr = now.toLocaleDateString(undefined, {
     weekday: "long",
@@ -89,7 +106,9 @@ function buildSocraticInstructions(): string {
 - The current real-world date is ${dateStr} (${isoDate}).
 - Do not invent holidays, seasons, or recent events that contradict this date.
 
-${SOCRATIC_INSTRUCTIONS_BASE}`;
+${SOCRATIC_INSTRUCTIONS_BASE}
+
+${formatCanvasBlock(canvasText)}`;
 }
 
 const TOOLS = [
