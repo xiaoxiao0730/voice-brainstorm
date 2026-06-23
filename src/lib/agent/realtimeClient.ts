@@ -426,6 +426,21 @@ export async function connectRealtime(opts: ConnectOptions): Promise<RealtimeCli
         },
       });
     },
+    updateCanvasSnapshot(canvasText: string) {
+      if (disposed) return;
+      const next = (canvasText ?? "").trim();
+      if (next === currentCanvasText) return;
+      currentCanvasText = next;
+      // Re-push full instructions with the fresh canvas. The Realtime API
+      // merges session.update; instructions string replaces the prior one.
+      send({
+        type: "session.update",
+        session: {
+          type: "realtime",
+          instructions: buildSocraticInstructions(currentCanvasText),
+        },
+      });
+    },
     isAgentSpeaking: () => agentSpeaking,
     async disconnect() {
       disposed = true;
