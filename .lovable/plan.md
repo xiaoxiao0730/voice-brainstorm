@@ -47,6 +47,7 @@ TranscriptSegment (Azure final, 每 ~3-8s 一条)
 ```
 
 要点：
+
 - Bullet lane 只回答一个问题："这一段 transcript 里有没有 1 句话能挂在 brief 上？" 输出 `{ text, attachToBlockId? | newBlockTopic }`，强约束 ≤ 20 字。
 - UI 上 pending bullet 用浅色 + 小圆点显示，decideBrief 触发后由 coordinator 决定 keep / merge / drop（用 operationId 串起来）。
 - 复用现有 `brief.proposed` 事件，加一个 `source: "bullet" | "decide"` 字段，避免 UI 闪烁。
@@ -75,11 +76,13 @@ type InsightPacket = {
 ```
 
 新增 `InsightAgent`（不联网，纯推理，gemini-2.5-pro 或 gpt-5-mini）：
+
 - 输入：最近 N 个 thoughtTurn + 当前 brief snapshot + 最新 research 结果。
 - 触发：每个 thought_turn.finalized 之后跑一次；research.completed 之后再跑一次。
 - 输出：0-2 个 InsightPacket，发到 bus。
 
 两个消费者：
+
 1. **Brief 侧**：高优 packet 自动变成 bullet（走 A 的通道）。
 2. **Realtime 侧**：通过 `session.update` 把 packet 注入 instructions 的"pending insight"段，并在 `shouldSpeak=true` 时手动 `response.create`——不再依赖 VAD 自动回复。
 
@@ -92,12 +95,14 @@ type InsightPacket = {
 **目标**：默认沉默，只在有 Insight 或用户明确求助时开口；开口时短、具体、可被打断。
 
 具体动作：
+
 1. Realtime session 里 **关掉 `turn_detection.create_response`**（之前你打开它是因为没有调度器；现在 InsightAgent 就是调度器）。保留 VAD 只做"用户在说话"的事件，用来打断 TTS、不再用来自动回复。
 2. `interventionPolicy.ts` 改成纯函数：`decide(packets, recentVoiceLog, userSilenceMs) → SpeakDecision`。规则示例：
    - 距上次 agent 说话 < 20s → 默认不说。
    - 用户连续讲 > 45s 且出现 `contradiction|conclusion` priority=high → 说。
    - 用户明确 stop / "你怎么看" → 说，且优先消费最高优 packet。
 3. 触发说话 = `response.create` 带上当前 packet text 作为 `instructions` 的临时 override，让它讲这句 insight 而不是自由发挥。
+4. 语音Realtime Agent和Live Brief共享Thinking State（应该已经实现了）在回答用户问题的时候需要结合已知的Context，需要连接上传的文件也作为Context获取对象。
 
 这一项做完，"低打扰、一小段一小段引导"的体感就出来了。
 
