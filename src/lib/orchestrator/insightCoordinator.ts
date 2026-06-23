@@ -43,8 +43,8 @@ export function attachInsightCoordinator(
   ) => {
     const endSpan = pipelineTracer.startSpan({
       sessionId,
-      kind: "insight.start" as never,
-      endKind: "insight.end" as never,
+      kind: "insight.start",
+      endKind: "insight.end",
       key: `${trigger}:${Date.now()}`,
       meta: { trigger, turns: recent.length, hasResearch: !!research },
     });
