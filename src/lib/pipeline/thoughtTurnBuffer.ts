@@ -18,6 +18,7 @@ import type {
   TranscriptSegment,
 } from "@/lib/pipeline/types";
 import type { SessionEventBus } from "@/lib/orchestrator/sessionEvents";
+import { pipelineTracer } from "@/lib/debug/pipelineTracer";
 
 export const THOUGHT_TURN_CONSTANTS = {
   CHECKPOINT_MS: 30_000,
@@ -128,6 +129,11 @@ export function createThoughtTurnBuffer(
           lastCheckpointRevision: -1,
           segments: [],
         };
+        pipelineTracer.log({
+          sessionId,
+          kind: "thought_turn.started",
+          turnId: current.id,
+        });
         scheduleHardLimit(THOUGHT_TURN_CONSTANTS.HARD_LIMIT_MS);
       }
       current.segments.push(segment);
