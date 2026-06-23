@@ -186,7 +186,7 @@ export async function connectRealtime(opts: ConnectOptions): Promise<RealtimeCli
       type: "session.update",
       session: {
         type: "realtime",
-        instructions: buildSocraticInstructions(),
+        instructions: buildSocraticInstructions(currentCanvasText),
         tools: TOOLS,
         audio: {
           input: {
