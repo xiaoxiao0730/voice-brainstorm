@@ -172,10 +172,14 @@ export async function connectRealtime(opts: ConnectOptions): Promise<RealtimeCli
 
     if (name === "stay_silent") {
       const reason = typeof args.reason === "string" ? args.reason : "user mid-thought";
-      try {
-        dc.readyState === "open" && send({ type: "response.cancel" });
-      } catch {
-        /* ignore */
+      // Only cancel if a response is actually active — otherwise OpenAI throws
+      // `response_cancel_not_active` which surfaces as a spurious UI error.
+      if (agentSpeaking && dc.readyState === "open") {
+        try {
+          send({ type: "response.cancel" });
+        } catch {
+          /* ignore */
+        }
       }
       emit({ type: "voice.stayed_silent", sessionId, reason });
       events.onStaySilent?.(reason);
