@@ -195,7 +195,7 @@ export async function connectRealtime(opts: ConnectOptions): Promise<RealtimeCli
               threshold: 0.55,
               prefix_padding_ms: 200,
               silence_duration_ms: 600,
-              create_response: true,
+              create_response: false,
               interrupt_response: true,
             },
           },
