@@ -5,7 +5,7 @@
 // Keep / Undo control.
 
 import { createServerFn } from "@tanstack/react-start";
-import { Output, generateText } from "ai";
+import { generateText } from "ai";
 import { z } from "zod";
 
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
@@ -84,17 +84,39 @@ export const decideBrief = createServerFn({ method: "POST" })
           .join("\n")
       : "  (empty document)";
 
-    const userPrompt = `LIVE BRIEF (in order):\n${docStr}\n\nNEW THOUGHT TURN (boundary=${data.thoughtTurn.boundaryReason}):\n${data.thoughtTurn.combinedText}\n\nProduce patches (max 3) and optional proposeResearch.`;
+    const userPrompt = `LIVE BRIEF (in order):\n${docStr}\n\nNEW THOUGHT TURN (boundary=${data.thoughtTurn.boundaryReason}):\n${data.thoughtTurn.combinedText}\n\nReturn STRICT JSON only, no prose, no code fences. Shape:
+{
+  "patches": [ { "action": "append_block"|"update_block"|"append_to_block", "blockId": string|null, "heading": string, "level": "2"|"3", "bodyMarkdown": string } ],
+  "proposeResearch": { "query": string, "reason": string },
+  "rationale": string
+}
+Max 3 patches. Empty patches array if nothing structural was said.`;
 
     const gateway = createLovableAiGatewayProvider(key);
     try {
-      const { experimental_output } = await generateText({
+      const { text } = await generateText({
         model: gateway(data.model),
         system: buildSystem(),
         prompt: userPrompt,
-        experimental_output: Output.object({ schema: DecisionSchema }),
       });
-      const out = experimental_output;
+
+      // Tolerant JSON extraction — strip code fences / leading prose if any.
+      let raw = (text ?? "").trim();
+      const fence = raw.match(/```(?:json)?\s*([\s\S]*?)```/i);
+      if (fence) raw = fence[1].trim();
+      const first = raw.indexOf("{");
+      const last = raw.lastIndexOf("}");
+      if (first >= 0 && last > first) raw = raw.slice(first, last + 1);
+
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(raw);
+      } catch (e) {
+        console.warn("[decideBrief] JSON parse failed", (e as Error).message, "raw=", raw.slice(0, 200));
+        return { patches: [], proposeResearch: null, rationale: "" };
+      }
+
+      const out = DecisionSchema.parse(parsed);
       const patches = out.patches
         .map((p) => ({
           action: p.action,
