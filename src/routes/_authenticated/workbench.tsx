@@ -326,6 +326,12 @@ function Workbench() {
       docRef.current = map;
       briefDocRef.current?.appendLines(appended);
       for (const b of appended) void persistBlock(b);
+      pipelineTracer.log({
+        sessionId,
+        kind: "brief.applied",
+        operationId,
+        meta: { blocks: appended.length },
+      });
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [],
