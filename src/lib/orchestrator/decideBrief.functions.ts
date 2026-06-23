@@ -62,12 +62,7 @@ Return strict JSON matching the schema.`;
 
 function buildSystem(): string {
   const now = new Date();
-  const dateStr = now.toLocaleDateString(undefined, {
-    weekday: "long",
-    year: "numeric",
-    month: "long",
-    day: "numeric",
-  });
+  const dateStr = now.toLocaleDateString(undefined, { weekday: "long", year: "numeric", month: "long", day: "numeric" });
   const isoDate = now.toISOString().slice(0, 10);
   return `TIME ANCHOR (authoritative): today is ${dateStr} (${isoDate}). Do not invent holidays, seasons, or recent events that contradict this date.\n\n${SYSTEM_BASE}`;
 }
@@ -110,25 +105,15 @@ export const decideBrief = createServerFn({ method: "POST" })
         }))
         .filter((p) => (p.heading && p.heading.length) || (p.bodyMarkdown && p.bodyMarkdown.length));
 
-      const research = out.proposeResearch?.query?.trim()
-        ? { query: out.proposeResearch.query.trim(), reason: (out.proposeResearch.reason ?? "").trim() }
-        : null;
+      const research =
+        out.proposeResearch?.query?.trim()
+          ? { query: out.proposeResearch.query.trim(), reason: (out.proposeResearch.reason ?? "").trim() }
+          : null;
 
       return { patches, proposeResearch: research, rationale: out.rationale };
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
       console.warn("[decideBrief] failed", message);
       return { patches: [], proposeResearch: null, rationale: "" };
-      //debug
-      console.log("[pipeline] decideBrief.server.start", {
-        model: data.model,
-        textLength: data.thoughtTurn.combinedText.length,
-        snapshotCount: data.snapshot.length,
-      });
-
-      console.log("[pipeline] decideBrief.server.done", {
-        patchCount: patches.length,
-        research,
-      });
     }
   });
