@@ -147,6 +147,8 @@ export async function connectRealtime(opts: ConnectOptions): Promise<RealtimeCli
   const pc = new RTCPeerConnection();
   let agentSpeaking = false;
   let disposed = false;
+  // Latest canvas snapshot — re-injected into instructions on every refresh.
+  let currentCanvasText = "";
 
   // Buffer function-call arguments by call_id; the Realtime API streams them.
   const pendingToolArgs = new Map<string, { name: string; args: string }>();
