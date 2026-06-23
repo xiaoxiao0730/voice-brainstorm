@@ -39,6 +39,8 @@ export type ThoughtTurnBuffer = {
   ingest: (segment: TranscriptSegment) => void;
   manualStop: () => void;
   onVoiceResponseStarted: () => void;
+  /** Drop any in-flight turn WITHOUT emitting. Used on session switch / reconnect. */
+  reset: () => void;
   dispose: () => void;
 };
 
@@ -154,6 +156,12 @@ export function createThoughtTurnBuffer(
       if (disposed || !current) return;
       // Agent grabbed the turn — flush what the user has said so far.
       finalize("semantic_pause");
+    },
+    reset() {
+      if (disposed) return;
+      current = null;
+      clearPause();
+      clearHard();
     },
     dispose() {
       disposed = true;

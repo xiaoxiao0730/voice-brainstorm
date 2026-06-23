@@ -24,13 +24,21 @@ const ResultSchema = z.object({
   voiceSummary: z.string().default(""),
 });
 
-const SYSTEM = `Convert raw research notes into a clean structured result for a Live Brief.
+const SYSTEM_BASE = `Convert raw research notes into a clean structured result for a Live Brief.
 - title: ≤ 8 words
 - summary: 2–4 sentences of markdown
-- findings: 3–5 short bullets, each one concrete fact
+- findings: 3–5 short bullets, each one concrete fact taken from the notes (do not invent)
 - links: only include URLs explicitly named in the notes; otherwise return an empty list
 - voiceSummary: ≤ 2 sentences, ~25s spoken, plain conversational tone
+- If the notes say "uncertain" or contradict the time anchor, reflect that honestly instead of fabricating.
 Match the user's language. Return strict JSON.`;
+
+function buildSystem(): string {
+  const now = new Date();
+  const dateStr = now.toLocaleDateString(undefined, { weekday: "long", year: "numeric", month: "long", day: "numeric" });
+  const isoDate = now.toISOString().slice(0, 10);
+  return `TIME ANCHOR (authoritative): today is ${dateStr} (${isoDate}).\n\n${SYSTEM_BASE}`;
+}
 
 export const synthesizeResearch = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
@@ -43,7 +51,7 @@ export const synthesizeResearch = createServerFn({ method: "POST" })
     try {
       const { experimental_output } = await generateText({
         model: gateway(data.model),
-        system: SYSTEM,
+        system: buildSystem(),
         prompt: userPrompt,
         experimental_output: Output.object({ schema: ResultSchema }),
       });

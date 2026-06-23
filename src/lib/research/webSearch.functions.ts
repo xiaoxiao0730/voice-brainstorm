@@ -16,7 +16,14 @@ const InputSchema = z.object({
   model: z.string().default("google/gemini-3-flash-preview"),
 });
 
-const SYSTEM = `You are a research assistant collecting concise notes for a co-thinking workbench. Produce DENSE plain-text notes for the given query. Include concrete facts, named entities, numbers, and any well-known sources. If you're uncertain about freshness or accuracy, say so explicitly. No fluff, no preamble — just the notes.`;
+const SYSTEM_BASE = `You are a research assistant collecting concise notes for a co-thinking workbench. Produce DENSE plain-text notes for the given query. Include concrete facts, named entities, numbers, and any well-known sources. If you're uncertain about freshness or accuracy, say so explicitly. If you do not actually know something, write "uncertain" rather than guessing. No fluff, no preamble — just the notes.`;
+
+function buildSystem(): string {
+  const now = new Date();
+  const dateStr = now.toLocaleDateString(undefined, { weekday: "long", year: "numeric", month: "long", day: "numeric" });
+  const isoDate = now.toISOString().slice(0, 10);
+  return `TIME ANCHOR (authoritative): today is ${dateStr} (${isoDate}). Treat any event after this date as future/unknown. Do not invent holidays or recent events.\n\n${SYSTEM_BASE}`;
+}
 
 export const webSearch = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
@@ -28,7 +35,7 @@ export const webSearch = createServerFn({ method: "POST" })
     try {
       const { text } = await generateText({
         model: gateway(data.model),
-        system: SYSTEM,
+        system: buildSystem(),
         prompt: `Query: ${data.query}\n\nWrite the research notes now.`,
       });
       return { ok: true as const, notes: text.trim() };

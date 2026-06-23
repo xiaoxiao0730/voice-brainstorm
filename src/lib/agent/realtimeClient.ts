@@ -48,7 +48,7 @@ export type ConnectOptions = {
   events?: RealtimeEvents;
 };
 
-const SOCRATIC_INSTRUCTIONS = `You are a thinking partner in a live voice conversation. Talk like a sharp colleague who is genuinely engaged — not an interviewer collecting requirements, not a coach with a script.
+const SOCRATIC_INSTRUCTIONS_BASE = `You are a thinking partner in a live voice conversation. Talk like a sharp colleague who is genuinely engaged — not an interviewer collecting requirements, not a coach with a script.
 
 CADENCE
 - Default reply: 3 to 6 sentences, roughly 15–30 seconds of speech. No hard word caps.
@@ -62,6 +62,10 @@ VOICE
 - Never use generic filler probes like "Can you tell me more?", "What's the main problem?", "What slows them down most?".
 - Don't restate the user's idea back to them as a question.
 
+GROUNDING
+- Never invent facts, topics, or examples the user has not raised. If the user has not mentioned a topic, do NOT bring it up as if they had.
+- If you are unsure about a date, number, name, or recent event, say so plainly or call request_research. Do not guess.
+
 TOOLS
 - stay_silent({ reason }): call this when you detect the user is still developing their thought and you would otherwise interrupt. Pass a short reason ("mid-list", "trailing off", etc.).
 - request_research({ query, reason }): call this when answering well requires fresh external facts (specific numbers, recent events, current pricing, named sources, technical details you're not confident about). Say a brief acknowledgment out loud like "Let me look that up" — then stop. The research result will appear in the Live Brief; you do not need to read it aloud unless the user asks.
@@ -69,6 +73,22 @@ TOOLS
 WHEN A RESEARCH RESULT COMES BACK
 - Speak only the conclusion, the key piece of evidence, and one implication.
 - Never read sources or full report aloud — that lives in the Live Brief.`;
+
+function buildSocraticInstructions(): string {
+  const now = new Date();
+  const dateStr = now.toLocaleDateString(undefined, {
+    weekday: "long",
+    year: "numeric",
+    month: "long",
+    day: "numeric",
+  });
+  const isoDate = now.toISOString().slice(0, 10);
+  return `TIME ANCHOR (authoritative — overrides any prior belief about the date)
+- The current real-world date is ${dateStr} (${isoDate}).
+- Do not invent holidays, seasons, or recent events that contradict this date.
+
+${SOCRATIC_INSTRUCTIONS_BASE}`;
+}
 
 const TOOLS = [
   {
@@ -143,7 +163,7 @@ export async function connectRealtime(opts: ConnectOptions): Promise<RealtimeCli
       type: "session.update",
       session: {
         type: "realtime",
-        instructions: SOCRATIC_INSTRUCTIONS,
+        instructions: buildSocraticInstructions(),
         tools: TOOLS,
         audio: {
           input: {

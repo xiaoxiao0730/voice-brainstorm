@@ -86,8 +86,18 @@ export const sessionStore = {
   },
   setActive(sessionId: string | null) {
     if (activeSessionId === sessionId) return;
+    // Hard-isolate context: clear in-flight buffers on the previous session
+    // so stale segments don't bleed into the next session's ThoughtTurn.
+    if (activeSessionId) {
+      const prev = sessions.get(activeSessionId);
+      prev?.thoughtTurnBuffer.reset();
+    }
     activeSessionId = sessionId;
-    if (sessionId) ensure(sessionId);
+    if (sessionId) {
+      const slot = ensure(sessionId);
+      // Fresh start for the newly-active session as well.
+      slot.thoughtTurnBuffer.reset();
+    }
     for (const l of activeListeners) { try { l(sessionId); } catch (err) { console.error("[sessionStore]", err); } }
   },
   getActive(): string | null {
