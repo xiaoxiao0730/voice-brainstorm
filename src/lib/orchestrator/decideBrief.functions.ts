@@ -43,14 +43,14 @@ const DecisionSchema = z.object({
   rationale: z.string().default(""),
 });
 
-const SYSTEM = `You are the SLOW LANE of a dual-pipeline co-thinking system. A separate voice agent handles speech. Your only job is to keep the user's Live Brief document in sync with their thinking.
+const SYSTEM_BASE = `You are the SLOW LANE of a dual-pipeline co-thinking system. A separate voice agent handles speech. Your only job is to keep the user's Live Brief document in sync with their thinking.
 
 INPUT: ONE long ThoughtTurn (everything the user said since they last paused). Plus the current brief snapshot.
 
 OUTPUT: A short batch of structured patches (max 3) that capture what's NEW or what should be REVISED. Then optionally a research query.
 
 RULES
-- Ground every patch in the user's words. Don't invent facts.
+- Ground every patch STRICTLY in the user's actual words from the ThoughtTurn. Never invent topics, examples, or facts the user did not say. If the ThoughtTurn does not contain a topic, do NOT introduce it.
 - Prefer append_block for genuinely new ideas. Use update_block / append_to_block only on UNLOCKED existing blocks (locked=false) when the new speech refines them.
 - Heading blocks: level "2", short 2–6 words in heading, empty bodyMarkdown.
 - Body blocks: level "3", empty heading, 1–3 sentences in bodyMarkdown.
@@ -59,6 +59,13 @@ RULES
 - proposeResearch: set query+reason ONLY when answering well requires external fresh facts (named sources, recent events, specific numbers). Otherwise leave query="" and reason="".
 
 Return strict JSON matching the schema.`;
+
+function buildSystem(): string {
+  const now = new Date();
+  const dateStr = now.toLocaleDateString(undefined, { weekday: "long", year: "numeric", month: "long", day: "numeric" });
+  const isoDate = now.toISOString().slice(0, 10);
+  return `TIME ANCHOR (authoritative): today is ${dateStr} (${isoDate}). Do not invent holidays, seasons, or recent events that contradict this date.\n\n${SYSTEM_BASE}`;
+}
 
 export const decideBrief = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
