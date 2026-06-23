@@ -35,6 +35,8 @@ export type RealtimeClient = {
   promptResponse: () => void;
   cancel: () => void;
   injectContext: (note: string) => void;
+  /** Push a fresh Live Brief canvas snapshot into the agent's instructions. */
+  updateCanvasSnapshot: (canvasText: string) => void;
   isAgentSpeaking: () => boolean;
   disconnect: () => Promise<void>;
 };
