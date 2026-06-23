@@ -101,6 +101,7 @@ function Workbench() {
   const acceptN = useServerFn(acceptPendingBlock);
   const saveChunks = useServerFn(persistChunks);
   const saveSegment = useServerFn(persistSegment);
+  const runBulletLane = useServerFn(bulletLane);
   const generateNudge = useServerFn(generateIntervention);
   const logIntv = useServerFn(logIntervention);
   const mintRealtime = useServerFn(getRealtimeSession);
