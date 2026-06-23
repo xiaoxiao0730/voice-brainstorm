@@ -7,6 +7,7 @@ import { supabase } from "@/integrations/supabase/client";
 
 import { between } from "@/lib/pipeline/orderKey";
 import { applyBriefPatch } from "@/lib/pipeline/applyBriefPatch";
+import { renderMarkdownToSafeHtml } from "@/lib/markdown";
 import { createTranscriptBuffer } from "@/lib/pipeline/transcriptBuffer";
 import {
   blockToNodeUpsert,
