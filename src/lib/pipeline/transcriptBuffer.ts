@@ -50,7 +50,11 @@ export function createTranscriptBuffer(opts: TranscriptBufferOptions) {
       silenceTimer = null;
     }
     if (pending.length === 0) return;
-    const rawText = pending.map((c) => c.text.trim()).filter(Boolean).join(" ").trim();
+    const rawText = pending
+      .map((c) => c.text.trim())
+      .filter(Boolean)
+      .join(" ")
+      .trim();
     if (!rawText || rawText === lastFlushedText) {
       pending = [];
       firstFinalAt = null;
@@ -70,6 +74,14 @@ export function createTranscriptBuffer(opts: TranscriptBufferOptions) {
     pending = [];
     firstFinalAt = null;
     lastFinalAt = null;
+    //debug
+    console.log("[pipeline] transcript.segment.flush", {
+      sessionId,
+      segmentId: segment.segmentId,
+      reason,
+      chunkCount: segment.chunkIds.length,
+      text: segment.rawText,
+    });
     onSegment(segment);
   };
 

@@ -227,9 +227,7 @@ function Workbench() {
     canvasPushDebounceRef.current = setTimeout(() => {
       const client = realtimeRef.current;
       if (!client) return;
-      const ordered = Object.values(docRef.current).sort((a, b) =>
-        a.orderKey.localeCompare(b.orderKey),
-      );
+      const ordered = Object.values(docRef.current).sort((a, b) => a.orderKey.localeCompare(b.orderKey));
       const text = ordered
         .map((b) => {
           if (b.level === 2) return `## ${(b.heading ?? "").trim()}`;
@@ -251,7 +249,6 @@ function Workbench() {
       }
     };
   }, [doc, agentEnabled, agentStatus]);
-
 
   // Fetch user email
   useEffect(() => {
@@ -306,6 +303,13 @@ function Workbench() {
     (sessionId: string, operationId: string, patches: BriefPatch[]) => {
       let map: BriefDoc = { ...docRef.current };
       const appended: BriefBlock[] = [];
+      //debug
+      console.log("[pipeline] brief.patch.apply", {
+        sessionId,
+        operationId,
+        patchCount: patches.length,
+        patches,
+      });
       for (const patch of patches) {
         const res = applyBriefPatch(map, patch, { sessionId });
         if (!res.result.ok) continue;
@@ -330,11 +334,7 @@ function Workbench() {
   );
 
   const applyResearchResult = useCallback(
-    (
-      sessionId: string,
-      operationId: string | undefined,
-      result: ResearchResult,
-    ) => {
+    (sessionId: string, operationId: string | undefined, result: ResearchResult) => {
       const opId = operationId ?? crypto.randomUUID();
       const allKeys = Object.values(docRef.current)
         .map((b) => b.orderKey)
@@ -343,9 +343,7 @@ function Workbench() {
       const appended: BriefBlock[] = [];
 
       // Heading text — escape only (no markdown formatting expected here).
-      const headingHtml = renderMarkdownToSafeHtml(
-        `Research: ${result.title || result.query}`,
-      );
+      const headingHtml = renderMarkdownToSafeHtml(`Research: ${result.title || result.query}`);
       const mkHeading = (html: string): BriefBlock => {
         lastKey = between(lastKey, null);
         return {
@@ -389,9 +387,7 @@ function Workbench() {
         appended.push(mkParaHtml(renderMarkdownToSafeHtml(`- ${f}`)));
       }
       if (result.links.length) {
-        const linksMd = result.links
-          .map((l) => (l.title ? `[${l.title}](${l.url})` : l.url))
-          .join(" · ");
+        const linksMd = result.links.map((l) => (l.title ? `[${l.title}](${l.url})` : l.url)).join(" · ");
         appended.push(mkParaHtml(renderMarkdownToSafeHtml(`Sources: ${linksMd}`)));
       }
 
@@ -455,8 +451,6 @@ function Workbench() {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeSessionId]);
-
-
 
   const openSession = useCallback(
     async (id: string) => {
@@ -803,6 +797,10 @@ function Workbench() {
         onEvent: (e) => {
           if (e.kind === "partial") {
             setPartial(e.text);
+            console.log("[pipeline] chunk.final.received", {
+              sessionId,
+              text: e.text,
+            });
           } else if (e.kind === "final") {
             const chunkId = crypto.randomUUID();
             setPartial("");
@@ -1142,7 +1140,6 @@ function Workbench() {
     },
     [onRejectPending],
   );
-
 
   // ============= UI =============
 
