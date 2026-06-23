@@ -25,6 +25,8 @@ export type TracerKind =
   | "thought_turn.started"
   | "decideBrief.start"
   | "decideBrief.end"
+  | "bulletLane.start"
+  | "bulletLane.end"
   | "brief.applied"
   | "research.start"
   | "research.synth.start"
