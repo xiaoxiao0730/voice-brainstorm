@@ -216,6 +216,43 @@ function Workbench() {
     }, 3000);
   }, []);
 
+  // ── Shared Thinking State ─────────────────────────────────────────────
+  // Whenever the Live Brief canvas changes (slow-lane patches, research
+  // writes, manual edits), push a fresh snapshot into the Realtime agent's
+  // instructions so the voice lane stays grounded in what the user sees.
+  const canvasPushDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    if (!realtimeRef.current) return;
+    if (canvasPushDebounceRef.current) clearTimeout(canvasPushDebounceRef.current);
+    canvasPushDebounceRef.current = setTimeout(() => {
+      const client = realtimeRef.current;
+      if (!client) return;
+      const ordered = Object.values(docRef.current).sort((a, b) =>
+        a.orderKey.localeCompare(b.orderKey),
+      );
+      const text = ordered
+        .map((b) => {
+          if (b.level === 2) return `## ${(b.heading ?? "").trim()}`;
+          const body = (b.body ?? "").trim();
+          return body ? body : "";
+        })
+        .filter(Boolean)
+        .join("\n\n");
+      try {
+        client.updateCanvasSnapshot(text);
+      } catch (err) {
+        console.warn("[workbench] updateCanvasSnapshot failed", err);
+      }
+    }, 600);
+    return () => {
+      if (canvasPushDebounceRef.current) {
+        clearTimeout(canvasPushDebounceRef.current);
+        canvasPushDebounceRef.current = null;
+      }
+    };
+  }, [doc, agentEnabled, agentStatus]);
+
+
   // Fetch user email
   useEffect(() => {
     supabase.auth.getUser().then(({ data }) => {
