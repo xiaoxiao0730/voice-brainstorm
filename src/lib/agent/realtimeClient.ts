@@ -306,7 +306,7 @@ export async function connectRealtime(opts: ConnectOptions): Promise<RealtimeCli
         // 过滤因打断时差导致的 response.cancel 报错（此时已经没有活动响应在运行）
         if (errorObj?.code === "response_cancel_not_active") {
           console.debug("[Realtime] Mild race condition: response.cancel sent but no active response was running.");
-          break;
+          return;
         }
 
         // other system errors:
