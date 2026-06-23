@@ -575,6 +575,15 @@ function Workbench() {
 
   const onSegment = useCallback(
     async (segment: TranscriptSegment) => {
+      pipelineTracer.log({
+        sessionId: segment.sessionId,
+        kind: "transcript.segment",
+        meta: {
+          chars: segment.rawText.length,
+          chunks: segment.chunkIds.length,
+          boundary: segment.boundaryReason,
+        },
+      });
       try {
         await saveSegment({
           data: {
