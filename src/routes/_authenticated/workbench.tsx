@@ -45,6 +45,8 @@ import { DEFAULT_TEMPLATE_ID, getTemplate, TEMPLATES } from "@/lib/pipeline/thin
 import { type AgentStatus } from "@/components/agent/AgentPanel";
 import { sessionStore } from "@/lib/orchestrator/sessionStore";
 import { attachCoordinator } from "@/lib/orchestrator/coordinator";
+import { pipelineTracer } from "@/lib/debug/pipelineTracer";
+import { PipelineInspector } from "@/components/debug/PipelineInspector";
 
 export const Route = createFileRoute("/_authenticated/workbench")({
   validateSearch: (search: Record<string, unknown>) => ({
