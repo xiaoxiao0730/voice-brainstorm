@@ -172,7 +172,11 @@ export async function connectRealtime(opts: ConnectOptions): Promise<RealtimeCli
 
     if (name === "stay_silent") {
       const reason = typeof args.reason === "string" ? args.reason : "user mid-thought";
-      try { dc.readyState === "open" && send({ type: "response.cancel" }); } catch { /* ignore */ }
+      try {
+        dc.readyState === "open" && send({ type: "response.cancel" });
+      } catch {
+        /* ignore */
+      }
       emit({ type: "voice.stayed_silent", sessionId, reason });
       events.onStaySilent?.(reason);
       // Return a noop tool output so the model doesn't hang on it.
@@ -189,7 +193,11 @@ export async function connectRealtime(opts: ConnectOptions): Promise<RealtimeCli
       if (!query) {
         send({
           type: "conversation.item.create",
-          item: { type: "function_call_output", call_id: callId, output: JSON.stringify({ ok: false, error: "missing query" }) },
+          item: {
+            type: "function_call_output",
+            call_id: callId,
+            output: JSON.stringify({ ok: false, error: "missing query" }),
+          },
         });
         // Do NOT call response.create here — the in-flight response that
         // emitted this tool call is still active. A second response.create
@@ -217,7 +225,11 @@ export async function connectRealtime(opts: ConnectOptions): Promise<RealtimeCli
     // Unknown tool — return an error output.
     send({
       type: "conversation.item.create",
-      item: { type: "function_call_output", call_id: callId, output: JSON.stringify({ ok: false, error: `unknown tool ${name}` }) },
+      item: {
+        type: "function_call_output",
+        call_id: callId,
+        output: JSON.stringify({ ok: false, error: `unknown tool ${name}` }),
+      },
     });
   };
 
@@ -272,7 +284,7 @@ export async function connectRealtime(opts: ConnectOptions): Promise<RealtimeCli
         if (!callId) break;
         const buf = pendingToolArgs.get(callId);
         const name = nameFromEvt ?? buf?.name;
-        const argsStr = typeof finalArgs === "string" && finalArgs.length > 0 ? finalArgs : buf?.args ?? "";
+        const argsStr = typeof finalArgs === "string" && finalArgs.length > 0 ? finalArgs : (buf?.args ?? "");
         pendingToolArgs.delete(callId);
         if (name) handleToolCall(name, argsStr, callId);
         break;
@@ -289,9 +301,18 @@ export async function connectRealtime(opts: ConnectOptions): Promise<RealtimeCli
           events.onUserBargeIn?.();
         }
         break;
-      case "error":
+      case "error": {
+        const errorObj = (evt as any).error;
+        // 过滤因打断时差导致的 response.cancel 报错（此时已经没有活动响应在运行）
+        if (errorObj?.code === "response_cancel_not_active") {
+          console.debug("[Realtime] Mild race condition: response.cancel sent but no active response was running.");
+          break;
+        }
+
+        // other system errors:
         events.onError?.(new Error(`Realtime error: ${JSON.stringify(evt)}`));
         break;
+      }
     }
   };
 
@@ -361,9 +382,21 @@ export async function connectRealtime(opts: ConnectOptions): Promise<RealtimeCli
     isAgentSpeaking: () => agentSpeaking,
     async disconnect() {
       disposed = true;
-      try { dc.close(); } catch { /* ignore */ }
-      try { pc.close(); } catch { /* ignore */ }
-      try { audioEl.remove(); } catch { /* ignore */ }
+      try {
+        dc.close();
+      } catch {
+        /* ignore */
+      }
+      try {
+        pc.close();
+      } catch {
+        /* ignore */
+      }
+      try {
+        audioEl.remove();
+      } catch {
+        /* ignore */
+      }
       events.onDisconnected?.();
     },
   };
