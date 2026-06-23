@@ -39,6 +39,8 @@ export type ThoughtTurnBuffer = {
   ingest: (segment: TranscriptSegment) => void;
   manualStop: () => void;
   onVoiceResponseStarted: () => void;
+  /** Drop any in-flight turn WITHOUT emitting. Used on session switch / reconnect. */
+  reset: () => void;
   dispose: () => void;
 };
 
