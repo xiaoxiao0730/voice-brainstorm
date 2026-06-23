@@ -90,7 +90,7 @@ export const decideBrief = createServerFn({ method: "POST" })
     try {
       const { experimental_output } = await generateText({
         model: gateway(data.model),
-        system: SYSTEM,
+        system: buildSystem(),
         prompt: userPrompt,
         experimental_output: Output.object({ schema: DecisionSchema }),
       });
