@@ -30,7 +30,9 @@ export type TracerKind =
   | "brief.applied"
   | "research.start"
   | "research.synth.start"
-  | "research.synth.end";
+  | "research.synth.end"
+  | "insight.start"
+  | "insight.end";
 
 export type TracerEntry = {
   id: number;

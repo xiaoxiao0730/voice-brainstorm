@@ -32,6 +32,9 @@ const KIND_COLOR: Record<string, string> = {
   "research.synth.end": "#ea580c",
   "research.completed": "#d97706",
   "research.failed": "#dc2626",
+  "insight.start": "#06b6d4",
+  "insight.end": "#0891b2",
+  "insight.created": "#0e7490",
 };
 
 function fmtTime(t: number): string {

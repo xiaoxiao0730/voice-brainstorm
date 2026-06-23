@@ -77,6 +77,27 @@ export type ResearchResult = {
 
 // ===== Stage 4: Session event bus =====
 
+export type InsightKind =
+  | "observation"
+  | "contradiction"
+  | "suggestion"
+  | "question"
+  | "conclusion";
+
+export type InsightPriority = "low" | "medium" | "high";
+
+export type InsightPacket = {
+  id: string;
+  sessionId: string;
+  kind: InsightKind;
+  text: string;                 // 1–2 sentences, voice-ready
+  priority: InsightPriority;
+  shouldSpeak: boolean;         // hint for the intervention policy (C1)
+  bulletText?: string;          // ≤ 20 chars; if set, becomes a pending bullet
+  basedOn: { turnIds: string[]; researchTaskId?: string };
+  createdAt: number;
+};
+
 export type SessionEvent =
   | { type: "thought_turn.finalized"; sessionId: string; turnId: string; thoughtTurn: ThoughtTurn }
   | { type: "voice.response_started"; sessionId: string }
@@ -88,7 +109,8 @@ export type SessionEvent =
   | { type: "brief.proposed"; sessionId: string; operationId: string; patches: BriefPatch[] }
   | { type: "brief.kept"; sessionId: string; operationId: string }
   | { type: "brief.undone"; sessionId: string; operationId: string }
-  | { type: "brief.edited"; sessionId: string; operationId: string };
+  | { type: "brief.edited"; sessionId: string; operationId: string }
+  | { type: "insight.created"; sessionId: string; packet: InsightPacket };
 
 export type SessionEventType = SessionEvent["type"];
 

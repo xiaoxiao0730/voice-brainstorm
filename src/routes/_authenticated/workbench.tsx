@@ -45,6 +45,7 @@ import { DEFAULT_TEMPLATE_ID, getTemplate, TEMPLATES } from "@/lib/pipeline/thin
 import { type AgentStatus } from "@/components/agent/AgentPanel";
 import { sessionStore } from "@/lib/orchestrator/sessionStore";
 import { attachCoordinator } from "@/lib/orchestrator/coordinator";
+import { attachInsightCoordinator } from "@/lib/orchestrator/insightCoordinator";
 import { bulletLane } from "@/lib/pipeline/bulletLane.functions";
 import { pipelineTracer } from "@/lib/debug/pipelineTracer";
 import { PipelineInspector } from "@/components/debug/PipelineInspector";
@@ -442,6 +443,20 @@ function Workbench() {
       getModel: () => modelRef.current,
     });
 
+    const detachInsight = attachInsightCoordinator(activeSessionId, {
+      getSnapshot: () =>
+        Object.values(docRef.current)
+          .sort((a, b) => a.orderKey.localeCompare(b.orderKey))
+          .map((b) => ({
+            id: b.id,
+            kind: (b.level === 2 ? "h2" : "p") as "h2" | "p",
+            text: (b.level === 2 ? b.heading : b.body) ?? "",
+            locked: b.locked,
+          })),
+      getModel: () => "openai/gpt-5-mini",
+    });
+
+
     const offProposed = slot.bus.on("brief.proposed", (e) => {
       if (e.sessionId !== activeSessionRef.current) return;
       applyProposedPatches(e.sessionId, e.operationId, e.patches);
@@ -462,6 +477,7 @@ function Workbench() {
 
     return () => {
       detach();
+      detachInsight();
       offProposed();
       offResearchReq();
       offResearchDone();
