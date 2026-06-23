@@ -45,6 +45,7 @@ import { DEFAULT_TEMPLATE_ID, getTemplate, TEMPLATES } from "@/lib/pipeline/thin
 import { type AgentStatus } from "@/components/agent/AgentPanel";
 import { sessionStore } from "@/lib/orchestrator/sessionStore";
 import { attachCoordinator } from "@/lib/orchestrator/coordinator";
+import { bulletLane } from "@/lib/pipeline/bulletLane.functions";
 import { pipelineTracer } from "@/lib/debug/pipelineTracer";
 import { PipelineInspector } from "@/components/debug/PipelineInspector";
 
@@ -100,6 +101,7 @@ function Workbench() {
   const acceptN = useServerFn(acceptPendingBlock);
   const saveChunks = useServerFn(persistChunks);
   const saveSegment = useServerFn(persistSegment);
+  const runBulletLane = useServerFn(bulletLane);
   const generateNudge = useServerFn(generateIntervention);
   const logIntv = useServerFn(logIntervention);
   const mintRealtime = useServerFn(getRealtimeSession);
@@ -159,6 +161,8 @@ function Workbench() {
   const realtimeRef = useRef<RealtimeClient | null>(null);
   const policyRef = useRef(createPolicyEngine(null));
   const recentTextsRef = useRef<string[]>([]);
+  // Fast-lane: bullets emitted recently (last ~8) so the bullet lane avoids repeats.
+  const recentBulletsRef = useRef<string[]>([]);
   const listeningRef = useRef(listening);
   const agentConnectedAtRef = useRef(Date.now());
   const isEditingRef = useRef(false);
@@ -177,6 +181,7 @@ function Workbench() {
     activeSessionRef.current = activeSessionId;
     policyRef.current = createPolicyEngine(activeSessionId);
     recentTextsRef.current = [];
+    recentBulletsRef.current = [];
   }, [activeSessionId]);
   useEffect(() => {
     listeningRef.current = listening;
@@ -615,13 +620,67 @@ function Workbench() {
         console.warn("thoughtTurnBuffer.ingest failed", e);
       }
 
-      // Stage 4: brief writes are now driven by the slow-lane coordinator
-      // from thought_turn.finalized — not per Azure segment. The legacy
-      // per-segment canvas lane is intentionally disabled here.
-      void 0;
+      // Stage A1 — FAST LANE: per-segment bullet extraction. Runs in parallel
+      // with the slow-lane decideBrief (which only fires at ThoughtTurn
+      // boundaries). Fire-and-forget; failures are silent.
+      if (segment.rawText.trim().length >= 8) {
+        const sid = segment.sessionId;
+        const briefHints = Object.values(docRef.current)
+          .sort((a, b) => a.orderKey.localeCompare(b.orderKey))
+          .map((b) => (b.level === 2 ? b.heading : b.body)?.trim() || "")
+          .filter((t) => t.length > 0)
+          .slice(-12);
+        const recentBullets = recentBulletsRef.current.slice(-8);
+        const endSpan = pipelineTracer.startSpan({
+          sessionId: sid,
+          kind: "bulletLane.start",
+          endKind: "bulletLane.end",
+          key: segment.segmentId,
+          meta: { chars: segment.rawText.length },
+        });
+        void runBulletLane({
+          data: {
+            segmentText: segment.rawText,
+            recentBullets,
+            briefHints,
+          },
+        })
+          .then((res) => {
+            endSpan({ bullets: res.bullets.length });
+            if (!res.bullets.length) return;
+            if (sessionStore.getActive() !== sid) return;
+            const slot = sessionStore.get(sid);
+            if (!slot) return;
+            // Dedupe against recently-emitted bullet text.
+            const fresh = res.bullets.filter(
+              (b) => !recentBulletsRef.current.includes(b.text),
+            );
+            if (!fresh.length) return;
+            recentBulletsRef.current = [
+              ...recentBulletsRef.current,
+              ...fresh.map((b) => b.text),
+            ].slice(-16);
+            slot.bus.emit({
+              type: "brief.proposed",
+              sessionId: sid,
+              operationId: crypto.randomUUID(),
+              patches: fresh.map((b) => ({
+                action: "append_block" as const,
+                blockId: null,
+                level: 3 as const,
+                heading: "",
+                bodyMarkdown: b.text,
+                sourceChunkIds: segment.chunkIds,
+              })),
+            });
+          })
+          .catch((err) => {
+            endSpan({ error: err instanceof Error ? err.message : String(err) });
+          });
+      }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [saveSegment],
+    [saveSegment, runBulletLane],
   );
 
   // ---- BACKGROUND CANVAS LANE ----

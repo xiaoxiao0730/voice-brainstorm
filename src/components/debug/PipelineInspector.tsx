@@ -16,6 +16,8 @@ const KIND_COLOR: Record<string, string> = {
   "thought_turn.finalized": "#0284c7",
   "decideBrief.start": "#a78bfa",
   "decideBrief.end": "#7c3aed",
+  "bulletLane.start": "#34d399",
+  "bulletLane.end": "#059669",
   "brief.proposed": "#16a34a",
   "brief.applied": "#15803d",
   "brief.kept": "#22c55e",

@@ -1,5 +1,7 @@
 # 下一阶段重点：把"回合制语音 + 滞后笔记"改造成"实时共思工作台"
 
+> **进度**：A1 + A2 已完成 ✅。新建 `bulletLane.functions.ts`，在 workbench `onSegment` 内 fire-and-forget 调用；命中的 bullet 通过现有 `brief.proposed` 总线进入文档（按 pending 渲染）。tracer 增加 `bulletLane.start/end` span，Inspector 增加配色。下一步：B1（InsightAgent + InsightPacket 总线）。
+
 结合你的 PRD（v1/v1.3）、Stage 0 已落地的可观测性、以及你描述的核心体验诉求，问题其实集中在 **三条数据通路** 上。下面是按"对你想要效果的影响 × 可行性"排序的重点调试方向。建议按顺序做，但 A 和 B 完成后 C 自然顺滑。
 
 ---
