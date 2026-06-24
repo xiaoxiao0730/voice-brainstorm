@@ -20,17 +20,32 @@ export type MindMapNode = {
   children: MindMapNode[];
 };
 
-const NodeSchema: z.ZodType<MindMapNode> = z.lazy(() =>
+type MindMapNodeInput = {
+  id?: string;
+  label?: string;
+  children?: MindMapNodeInput[];
+};
+
+const NodeSchema: z.ZodType<MindMapNodeInput> = z.lazy(() =>
   z.object({
-    id: z.string().optional().transform((v) => v ?? ""),
-    label: z.string().optional().transform((v) => v ?? ""),
-    children: z.array(NodeSchema).optional().transform((v) => v ?? []),
+    id: z.string().optional(),
+    label: z.string().optional(),
+    children: z.array(NodeSchema).optional(),
   }),
 );
 
 const OutputSchema = z.object({
   root: NodeSchema,
 });
+
+function ensureIds(node: MindMapNodeInput, path = "r"): MindMapNode {
+  const id = node.id?.trim() || path;
+  return {
+    id,
+    label: (node.label ?? "").trim() || "·",
+    children: (node.children ?? []).map((c, i) => ensureIds(c, `${path}-${i}`)),
+  };
+}
 
 const SYSTEM = `You convert a snippet of working notes into a compact MIND MAP tree.
 
