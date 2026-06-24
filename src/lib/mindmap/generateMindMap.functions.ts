@@ -61,14 +61,6 @@ RULES
 Return STRICT JSON only, no prose, no code fences:
 { "root": { "id": "r", "label": "...", "children": [ { "id": "n1", "label": "...", "children": [ ... ] } ] } }`;
 
-function ensureIds(node: MindMapNode, path = "r"): MindMapNode {
-  const id = node.id?.trim() || path;
-  return {
-    id,
-    label: (node.label ?? "").trim() || "·",
-    children: (node.children ?? []).map((c, i) => ensureIds(c, `${path}-${i}`)),
-  };
-}
 
 export const generateMindMap = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
