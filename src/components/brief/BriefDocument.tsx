@@ -13,6 +13,7 @@ import {
 import type { BriefBlock, BriefDoc } from "@/lib/pipeline/types";
 import { between } from "@/lib/pipeline/orderKey";
 import { supabase } from "@/integrations/supabase/client";
+import { MindMapModal } from "@/components/brief/MindMapModal";
 
 const IMAGE_BUCKET = "brief-images";
 const SIGNED_URL_TTL_SECONDS = 60 * 60 * 24 * 365 * 10; // ~10 years
@@ -394,6 +395,46 @@ export const BriefDocument = forwardRef<BriefDocumentHandle, Props>(function Bri
   }, []);
 
 
+  // ===== Selection bubble (mind map trigger) =====
+  const [bubble, setBubble] = useState<{
+    x: number;
+    y: number;
+    text: string;
+  } | null>(null);
+  const [mindMap, setMindMap] = useState<{ text: string; context: string } | null>(null);
+
+  useEffect(() => {
+    const onSelChange = () => {
+      const el = editorRef.current;
+      const sel = window.getSelection();
+      if (!el || !sel || sel.rangeCount === 0 || sel.isCollapsed) {
+        setBubble(null);
+        return;
+      }
+      const range = sel.getRangeAt(0);
+      if (!el.contains(range.commonAncestorContainer)) {
+        setBubble(null);
+        return;
+      }
+      const text = (sel.toString() ?? "").trim();
+      if (text.length < 3) {
+        setBubble(null);
+        return;
+      }
+      const rect = range.getBoundingClientRect();
+      if (rect.width === 0 && rect.height === 0) {
+        setBubble(null);
+        return;
+      }
+      setBubble({
+        x: rect.left + rect.width / 2,
+        y: rect.top - 8,
+        text,
+      });
+    };
+    document.addEventListener("selectionchange", onSelChange);
+    return () => document.removeEventListener("selectionchange", onSelChange);
+  }, []);
   const isSelectionInEditor = (): boolean => {
     const el = editorRef.current;
     const sel = window.getSelection();
@@ -590,6 +631,35 @@ export const BriefDocument = forwardRef<BriefDocumentHandle, Props>(function Bri
           </div>
         )}
       </div>
+
+      {bubble && (
+        <div
+          className="fixed z-[70] -translate-x-1/2 -translate-y-full"
+          style={{ left: bubble.x, top: bubble.y }}
+          onMouseDown={(e) => e.preventDefault()}
+        >
+          <button
+            type="button"
+            onClick={() => {
+              const ctx = editorRef.current?.innerText?.slice(0, 2000) ?? "";
+              setMindMap({ text: bubble.text, context: ctx });
+              setBubble(null);
+              window.getSelection()?.removeAllRanges();
+            }}
+            className="px-2.5 h-7 rounded-md bg-zinc-900 text-white text-xs shadow-lg hover:bg-zinc-800 flex items-center gap-1.5"
+            title="Generate mind map from selection"
+          >
+            <span aria-hidden>🧠</span> Mind map
+          </button>
+        </div>
+      )}
+
+      <MindMapModal
+        open={!!mindMap}
+        selectedText={mindMap?.text ?? ""}
+        contextText={mindMap?.context}
+        onClose={() => setMindMap(null)}
+      />
     </div>
   );
 });
