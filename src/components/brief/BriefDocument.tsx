@@ -281,6 +281,117 @@ export const BriefDocument = forwardRef<BriefDocumentHandle, Props>(function Bri
 
   // No accept/undo controls — AI writes land directly in the canvas.
 
+  // ===== Image paste / drop =====
+
+  const [uploadingImages, setUploadingImages] = useState(0);
+
+  const uploadAndInsertImage = useCallback(
+    async (file: File) => {
+      const el = editorRef.current;
+      if (!el) return;
+      const sid = sessionIdRef.current;
+      const auth = await supabase.auth.getUser();
+      const userId = auth.data.user?.id;
+      if (!userId) {
+        console.warn("[image-paste] not authenticated");
+        return;
+      }
+      // Folder must start with the user's id to satisfy storage RLS.
+      const ext =
+        file.type === "image/png"
+          ? "png"
+          : file.type === "image/webp"
+            ? "webp"
+            : file.type === "image/gif"
+              ? "gif"
+              : file.type === "image/svg+xml"
+                ? "svg"
+                : "jpg";
+      const key = `${userId}/${sid || "no-session"}/${crypto.randomUUID()}.${ext}`;
+      setUploadingImages((n) => n + 1);
+      try {
+        const { error: upErr } = await supabase.storage
+          .from(IMAGE_BUCKET)
+          .upload(key, file, { contentType: file.type || "image/jpeg", upsert: false });
+        if (upErr) throw upErr;
+        const { data: signed, error: sErr } = await supabase.storage
+          .from(IMAGE_BUCKET)
+          .createSignedUrl(key, SIGNED_URL_TTL_SECONDS);
+        if (sErr || !signed?.signedUrl) throw sErr ?? new Error("signed url failed");
+        const url = signed.signedUrl;
+
+        // Append a new paragraph block at end carrying the <img>.
+        const childs = Array.from(el.children) as HTMLElement[];
+        const lastKey =
+          childs.length > 0 ? childs[childs.length - 1].dataset.orderKey ?? null : null;
+        const id = crypto.randomUUID();
+        const orderKey = between(lastKey, null);
+        const safeUrl = url.replace(/"/g, "&quot;");
+        const p = document.createElement("p");
+        p.dataset.lineId = id;
+        p.dataset.orderKey = orderKey;
+        p.innerHTML = `<img src="${safeUrl}" alt="pasted image" style="max-width:100%;height:auto;border-radius:6px;" />`;
+        el.appendChild(p);
+        recomputeEmpty();
+        scheduleSave();
+      } catch (e) {
+        console.warn("[image-paste] upload failed", e);
+      } finally {
+        setUploadingImages((n) => Math.max(0, n - 1));
+      }
+    },
+    [recomputeEmpty, scheduleSave],
+  );
+
+  const extractImageFiles = (items: DataTransferItemList | null, files: FileList | null): File[] => {
+    const out: File[] = [];
+    if (items) {
+      for (let i = 0; i < items.length; i++) {
+        const it = items[i];
+        if (it.kind === "file" && it.type.startsWith("image/")) {
+          const f = it.getAsFile();
+          if (f) out.push(f);
+        }
+      }
+    }
+    if (out.length === 0 && files) {
+      for (let i = 0; i < files.length; i++) {
+        const f = files[i];
+        if (f && f.type.startsWith("image/")) out.push(f);
+      }
+    }
+    return out;
+  };
+
+  const onPaste = useCallback(
+    (e: ReactClipboardEvent<HTMLDivElement>) => {
+      const cd = e.clipboardData;
+      const imgs = extractImageFiles(cd?.items ?? null, cd?.files ?? null);
+      if (imgs.length === 0) return; // let text paste fall through
+      e.preventDefault();
+      for (const f of imgs) void uploadAndInsertImage(f);
+    },
+    [uploadAndInsertImage],
+  );
+
+  const onDrop = useCallback(
+    (e: ReactDragEvent<HTMLDivElement>) => {
+      const dt = e.dataTransfer;
+      const imgs = extractImageFiles(dt?.items ?? null, dt?.files ?? null);
+      if (imgs.length === 0) return;
+      e.preventDefault();
+      for (const f of imgs) void uploadAndInsertImage(f);
+    },
+    [uploadAndInsertImage],
+  );
+
+  const onDragOver = useCallback((e: ReactDragEvent<HTMLDivElement>) => {
+    if (e.dataTransfer && Array.from(e.dataTransfer.items ?? []).some((it) => it.kind === "file")) {
+      e.preventDefault();
+    }
+  }, []);
+
+
   const isSelectionInEditor = (): boolean => {
     const el = editorRef.current;
     const sel = window.getSelection();
