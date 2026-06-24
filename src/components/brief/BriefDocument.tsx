@@ -5,11 +5,17 @@ import {
   useImperativeHandle,
   useRef,
   useState,
+  type ClipboardEvent as ReactClipboardEvent,
+  type DragEvent as ReactDragEvent,
   type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent,
 } from "react";
 import type { BriefBlock, BriefDoc } from "@/lib/pipeline/types";
 import { between } from "@/lib/pipeline/orderKey";
+import { supabase } from "@/integrations/supabase/client";
+
+const IMAGE_BUCKET = "brief-images";
+const SIGNED_URL_TTL_SECONDS = 60 * 60 * 24 * 365 * 10; // ~10 years
 
 export type BriefDocumentHandle = {
   /**
