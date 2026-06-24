@@ -395,7 +395,48 @@ export const BriefDocument = forwardRef<BriefDocumentHandle, Props>(function Bri
   }, []);
 
 
-  const isSelectionInEditor = (): boolean => {
+  // ===== Selection bubble (mind map trigger) =====
+  const [bubble, setBubble] = useState<{
+    x: number;
+    y: number;
+    text: string;
+  } | null>(null);
+  const [mindMap, setMindMap] = useState<{ text: string; context: string } | null>(null);
+
+  useEffect(() => {
+    const onSelChange = () => {
+      const el = editorRef.current;
+      const sel = window.getSelection();
+      if (!el || !sel || sel.rangeCount === 0 || sel.isCollapsed) {
+        setBubble(null);
+        return;
+      }
+      const range = sel.getRangeAt(0);
+      if (!el.contains(range.commonAncestorContainer)) {
+        setBubble(null);
+        return;
+      }
+      const text = (sel.toString() ?? "").trim();
+      if (text.length < 3) {
+        setBubble(null);
+        return;
+      }
+      const rect = range.getBoundingClientRect();
+      if (rect.width === 0 && rect.height === 0) {
+        setBubble(null);
+        return;
+      }
+      setBubble({
+        x: rect.left + rect.width / 2,
+        y: rect.top - 8,
+        text,
+      });
+    };
+    document.addEventListener("selectionchange", onSelChange);
+    return () => document.removeEventListener("selectionchange", onSelChange);
+  }, []);
+
+
     const el = editorRef.current;
     const sel = window.getSelection();
     if (!el || !sel || sel.rangeCount === 0) return false;
