@@ -71,13 +71,9 @@ function renderLineHtml(block: BriefBlock, options?: { escapeText?: boolean }): 
   const tag = kind === "h2" ? "h2" : "p";
   const raw = blockHtml(block);
   const inner = (options?.escapeText ? escapeHtml(raw) : raw) || "<br>";
-  const pendingAttr = block.isPending ? ' data-pending="true"' : "";
-  const controls = block.isPending
-    ? `<span contenteditable="false" data-control class="brief-line-controls"><button type="button" data-accept title="Accept">✓</button><button type="button" data-reject title="Reject">✕</button></span>`
-    : "";
   return `<${tag} data-line-id="${block.id}" data-order-key="${escapeHtml(
     block.orderKey,
-  )}"${pendingAttr}>${inner}${controls}</${tag}>`;
+  )}">${inner}</${tag}>`;
 }
 
 function readLineHtml(el: HTMLElement): { html: string; text: string } {
