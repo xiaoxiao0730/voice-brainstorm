@@ -29,8 +29,6 @@ type Props = {
   sessionId: string;
   doc: BriefDoc;
   onPersistDelta: (delta: Delta) => void;
-  onAcceptPending: (id: string) => void;
-  onRejectPending: (id: string) => void;
   onIsEditingChange?: (editing: boolean) => void;
   aiLoading: boolean;
 };
@@ -71,13 +69,9 @@ function renderLineHtml(block: BriefBlock, options?: { escapeText?: boolean }): 
   const tag = kind === "h2" ? "h2" : "p";
   const raw = blockHtml(block);
   const inner = (options?.escapeText ? escapeHtml(raw) : raw) || "<br>";
-  const pendingAttr = block.isPending ? ' data-pending="true"' : "";
-  const controls = block.isPending
-    ? `<span contenteditable="false" data-control class="brief-line-controls"><button type="button" data-accept title="Accept">✓</button><button type="button" data-reject title="Reject">✕</button></span>`
-    : "";
   return `<${tag} data-line-id="${block.id}" data-order-key="${escapeHtml(
     block.orderKey,
-  )}"${pendingAttr}>${inner}${controls}</${tag}>`;
+  )}">${inner}</${tag}>`;
 }
 
 function readLineHtml(el: HTMLElement): { html: string; text: string } {
@@ -95,7 +89,7 @@ function readLineHtml(el: HTMLElement): { html: string; text: string } {
 }
 
 export const BriefDocument = forwardRef<BriefDocumentHandle, Props>(function BriefDocument(
-  { sessionId, doc, onPersistDelta, onAcceptPending, onRejectPending, onIsEditingChange, aiLoading },
+  { sessionId, doc, onPersistDelta, onIsEditingChange, aiLoading },
   ref,
 ) {
   const editorRef = useRef<HTMLDivElement>(null);
@@ -279,32 +273,7 @@ export const BriefDocument = forwardRef<BriefDocumentHandle, Props>(function Bri
     [flush, recomputeEmpty],
   );
 
-  // Delegated click for pending controls
-  const onClick = (e: ReactMouseEvent<HTMLDivElement>) => {
-    const target = e.target as HTMLElement;
-    const acceptBtn = target.closest("[data-accept]") as HTMLElement | null;
-    const rejectBtn = target.closest("[data-reject]") as HTMLElement | null;
-    if (!acceptBtn && !rejectBtn) return;
-    e.preventDefault();
-    e.stopPropagation();
-    const line = (acceptBtn ?? rejectBtn)!.closest("[data-line-id]") as HTMLElement | null;
-    const id = line?.dataset.lineId;
-    if (!id) return;
-    if (acceptBtn) {
-      line!.removeAttribute("data-pending");
-      line!.querySelectorAll("[data-control]").forEach((n) => n.remove());
-      const snap = lastSnapshotRef.current.get(id);
-      if (snap)
-        lastSnapshotRef.current.set(id, { ...snap, isPending: false, locked: true, lastEditedBy: "user" });
-      recomputeEmpty();
-      onAcceptPending(id);
-    } else if (rejectBtn) {
-      line!.remove();
-      lastSnapshotRef.current.delete(id);
-      recomputeEmpty();
-      onRejectPending(id);
-    }
-  };
+  // No accept/undo controls — AI writes land directly in the canvas.
 
   const isSelectionInEditor = (): boolean => {
     const el = editorRef.current;
@@ -468,7 +437,6 @@ export const BriefDocument = forwardRef<BriefDocumentHandle, Props>(function Bri
             flush();
           }}
           onFocus={() => onIsEditingChange?.(true)}
-          onClick={onClick}
           onKeyDown={onKeyDown}
         />
         {isEmpty && (

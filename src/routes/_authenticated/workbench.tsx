@@ -319,7 +319,7 @@ function Workbench() {
         if (!res.result.ok) continue;
         const block: BriefBlock = {
           ...res.result.block,
-          isPending: true,
+          isPending: false,
           operationId,
           lastEditedBy: "ai",
           locked: false,
@@ -372,7 +372,7 @@ function Workbench() {
           lastEditedBy: "ai",
           locked: false,
           sourceChunkIds: [],
-          isPending: true,
+          isPending: false,
           operationId: opId,
           researchResultId: result.id,
         };
@@ -389,7 +389,7 @@ function Workbench() {
           lastEditedBy: "ai",
           locked: false,
           sourceChunkIds: [],
-          isPending: true,
+          isPending: false,
           operationId: opId,
           researchResultId: result.id,
         };
@@ -807,7 +807,7 @@ function Workbench() {
         lastEditedBy: "ai",
         locked: false,
         sourceChunkIds: [],
-        isPending: true,
+        isPending: false,
         rationale: line.rationale,
       };
       const map = { ...docRef.current, [newBlock.id]: newBlock };
@@ -1531,7 +1531,7 @@ function Workbench() {
               </button>
             </div>
           )}
-          {(pendingGroups.length > 0 || Object.keys(researchRunning).length > 0) && (
+          {Object.keys(researchRunning).length > 0 && (
             <div className="px-6 pt-3 pb-1 flex flex-col gap-1.5 shrink-0">
               {Object.entries(researchRunning).map(([taskId, q]) => (
                 <div
@@ -1542,42 +1542,6 @@ function Workbench() {
                   <span className="truncate">Researching: {q}</span>
                 </div>
               ))}
-              {pendingGroups.map((g) => {
-                const ids = g.blocks.map((b) => b.id);
-                const preview =
-                  g.blocks.find((b) => b.heading)?.heading ||
-                  g.blocks.find((b) => b.body)?.body?.slice(0, 80) ||
-                  "Proposed changes";
-                const isResearch = g.blocks.some((b) => b.researchResultId);
-                return (
-                  <div
-                    key={g.operationId}
-                    className="flex items-center justify-between gap-3 text-xs bg-surface border border-emerald-500/30 rounded-md px-3 py-1.5"
-                  >
-                    <span className="flex items-center gap-2 min-w-0">
-                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
-                      <span className="text-secondary truncate">
-                        {isResearch ? "Research" : "AI"} · {g.blocks.length}{" "}
-                        {g.blocks.length === 1 ? "change" : "changes"} · {preview}
-                      </span>
-                    </span>
-                    <span className="flex items-center gap-1.5 shrink-0">
-                      <button
-                        onClick={() => void keepAll(ids)}
-                        className="px-2.5 py-0.5 rounded border border-auralis bg-surface text-primary hover:bg-surface-variant"
-                      >
-                        Keep all
-                      </button>
-                      <button
-                        onClick={() => void undoAll(ids)}
-                        className="px-2.5 py-0.5 rounded border border-auralis bg-surface text-rose-500 hover:bg-surface-variant"
-                      >
-                        Undo all
-                      </button>
-                    </span>
-                  </div>
-                );
-              })}
             </div>
           )}
           <div className="flex-1 overflow-y-auto p-8 min-h-0">
@@ -1587,8 +1551,6 @@ function Workbench() {
               sessionId={activeSessionId ?? ""}
               doc={doc}
               onPersistDelta={onPersistDelta}
-              onAcceptPending={onAcceptPending}
-              onRejectPending={onRejectPending}
               onIsEditingChange={onIsEditingChange}
               aiLoading={aiLoading}
             />
