@@ -123,7 +123,8 @@ export const BriefDocument = forwardRef<BriefDocumentHandle, Props>(function Bri
     const el = editorRef.current;
     if (!el) return;
     const text = (el.innerText ?? "").replace(/\u200b/g, "").trim();
-    setIsEmpty(text.length === 0);
+    const hasImage = !!el.querySelector("img");
+    setIsEmpty(text.length === 0 && !hasImage);
   }, []);
 
   const readDom = useCallback((): BriefBlock[] => {
@@ -136,7 +137,8 @@ export const BriefDocument = forwardRef<BriefDocumentHandle, Props>(function Bri
     for (let i = 0; i < children.length; i++) {
       const ch = children[i];
       const { html, text } = readLineHtml(ch);
-      if (!text) continue;
+      const hasImg = !!ch.querySelector("img");
+      if (!text && !hasImg) continue;
       let id = ch.dataset.lineId;
       if (!id) {
         id = (crypto as Crypto).randomUUID();
