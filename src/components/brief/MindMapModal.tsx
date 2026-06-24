@@ -55,8 +55,8 @@ function layoutTree(root: MindMapNode): Layout {
         maxWidth: 200,
         color: "#111827",
       },
-      sourcePosition: "right" as const,
-      targetPosition: "left" as const,
+      sourcePosition: Position.Right,
+      targetPosition: Position.Left,
     });
     if (parentId) {
       edges.push({
