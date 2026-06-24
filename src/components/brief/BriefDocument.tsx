@@ -437,7 +437,6 @@ export const BriefDocument = forwardRef<BriefDocumentHandle, Props>(function Bri
             flush();
           }}
           onFocus={() => onIsEditingChange?.(true)}
-          onClick={onClick}
           onKeyDown={onKeyDown}
         />
         {isEmpty && (
