@@ -435,8 +435,7 @@ export const BriefDocument = forwardRef<BriefDocumentHandle, Props>(function Bri
     document.addEventListener("selectionchange", onSelChange);
     return () => document.removeEventListener("selectionchange", onSelChange);
   }, []);
-
-
+  const isSelectionInEditor = (): boolean => {
     const el = editorRef.current;
     const sel = window.getSelection();
     if (!el || !sel || sel.rangeCount === 0) return false;
