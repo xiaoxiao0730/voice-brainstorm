@@ -13,6 +13,7 @@ import {
 import type { BriefBlock, BriefDoc } from "@/lib/pipeline/types";
 import { between } from "@/lib/pipeline/orderKey";
 import { supabase } from "@/integrations/supabase/client";
+import { MindMapModal } from "@/components/brief/MindMapModal";
 
 const IMAGE_BUCKET = "brief-images";
 const SIGNED_URL_TTL_SECONDS = 60 * 60 * 24 * 365 * 10; // ~10 years
