@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import {
   Background,
   Controls,
+  Position,
   ReactFlow,
   type Edge,
   type Node,
