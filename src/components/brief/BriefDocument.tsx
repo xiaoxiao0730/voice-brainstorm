@@ -29,8 +29,6 @@ type Props = {
   sessionId: string;
   doc: BriefDoc;
   onPersistDelta: (delta: Delta) => void;
-  onAcceptPending: (id: string) => void;
-  onRejectPending: (id: string) => void;
   onIsEditingChange?: (editing: boolean) => void;
   aiLoading: boolean;
 };
