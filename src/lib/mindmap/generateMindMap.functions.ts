@@ -22,9 +22,9 @@ export type MindMapNode = {
 
 const NodeSchema: z.ZodType<MindMapNode> = z.lazy(() =>
   z.object({
-    id: z.string().default(""),
-    label: z.string().default(""),
-    children: z.array(NodeSchema).default([]),
+    id: z.string().optional().transform((v) => v ?? ""),
+    label: z.string().optional().transform((v) => v ?? ""),
+    children: z.array(NodeSchema).optional().transform((v) => v ?? []),
   }),
 );
 
