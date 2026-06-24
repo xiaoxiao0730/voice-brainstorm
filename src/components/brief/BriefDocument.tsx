@@ -89,7 +89,7 @@ function readLineHtml(el: HTMLElement): { html: string; text: string } {
 }
 
 export const BriefDocument = forwardRef<BriefDocumentHandle, Props>(function BriefDocument(
-  { sessionId, doc, onPersistDelta, onAcceptPending, onRejectPending, onIsEditingChange, aiLoading },
+  { sessionId, doc, onPersistDelta, onIsEditingChange, aiLoading },
   ref,
 ) {
   const editorRef = useRef<HTMLDivElement>(null);
