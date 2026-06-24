@@ -319,7 +319,7 @@ function Workbench() {
         if (!res.result.ok) continue;
         const block: BriefBlock = {
           ...res.result.block,
-          isPending: true,
+          isPending: false,
           operationId,
           lastEditedBy: "ai",
           locked: false,
