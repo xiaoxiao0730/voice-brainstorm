@@ -631,6 +631,35 @@ export const BriefDocument = forwardRef<BriefDocumentHandle, Props>(function Bri
           </div>
         )}
       </div>
+
+      {bubble && (
+        <div
+          className="fixed z-[70] -translate-x-1/2 -translate-y-full"
+          style={{ left: bubble.x, top: bubble.y }}
+          onMouseDown={(e) => e.preventDefault()}
+        >
+          <button
+            type="button"
+            onClick={() => {
+              const ctx = editorRef.current?.innerText?.slice(0, 2000) ?? "";
+              setMindMap({ text: bubble.text, context: ctx });
+              setBubble(null);
+              window.getSelection()?.removeAllRanges();
+            }}
+            className="px-2.5 h-7 rounded-md bg-zinc-900 text-white text-xs shadow-lg hover:bg-zinc-800 flex items-center gap-1.5"
+            title="Generate mind map from selection"
+          >
+            <span aria-hidden>🧠</span> Mind map
+          </button>
+        </div>
+      )}
+
+      <MindMapModal
+        open={!!mindMap}
+        selectedText={mindMap?.text ?? ""}
+        contextText={mindMap?.context}
+        onClose={() => setMindMap(null)}
+      />
     </div>
   );
 });
