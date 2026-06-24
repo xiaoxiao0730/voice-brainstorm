@@ -273,32 +273,7 @@ export const BriefDocument = forwardRef<BriefDocumentHandle, Props>(function Bri
     [flush, recomputeEmpty],
   );
 
-  // Delegated click for pending controls
-  const onClick = (e: ReactMouseEvent<HTMLDivElement>) => {
-    const target = e.target as HTMLElement;
-    const acceptBtn = target.closest("[data-accept]") as HTMLElement | null;
-    const rejectBtn = target.closest("[data-reject]") as HTMLElement | null;
-    if (!acceptBtn && !rejectBtn) return;
-    e.preventDefault();
-    e.stopPropagation();
-    const line = (acceptBtn ?? rejectBtn)!.closest("[data-line-id]") as HTMLElement | null;
-    const id = line?.dataset.lineId;
-    if (!id) return;
-    if (acceptBtn) {
-      line!.removeAttribute("data-pending");
-      line!.querySelectorAll("[data-control]").forEach((n) => n.remove());
-      const snap = lastSnapshotRef.current.get(id);
-      if (snap)
-        lastSnapshotRef.current.set(id, { ...snap, isPending: false, locked: true, lastEditedBy: "user" });
-      recomputeEmpty();
-      onAcceptPending(id);
-    } else if (rejectBtn) {
-      line!.remove();
-      lastSnapshotRef.current.delete(id);
-      recomputeEmpty();
-      onRejectPending(id);
-    }
-  };
+  // No accept/undo controls — AI writes land directly in the canvas.
 
   const isSelectionInEditor = (): boolean => {
     const el = editorRef.current;
