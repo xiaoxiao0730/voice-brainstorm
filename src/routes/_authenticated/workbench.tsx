@@ -1587,8 +1587,6 @@ function Workbench() {
               sessionId={activeSessionId ?? ""}
               doc={doc}
               onPersistDelta={onPersistDelta}
-              onAcceptPending={onAcceptPending}
-              onRejectPending={onRejectPending}
               onIsEditingChange={onIsEditingChange}
               aiLoading={aiLoading}
             />
