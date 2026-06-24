@@ -1472,7 +1472,7 @@ function Workbench() {
               <select
                 value={templateId}
                 onChange={(e) => applyTemplate(e.target.value)}
-                className="px-3 py-1 bg-surface rounded-full text-xs text-primary border border-auralis hover:bg-surface-variant cursor-pointer focus:outline-none focus:ring-1 focus:ring-primary"
+                className="px-3 py-1 bg-surface rounded-full text-xs text-primary border border-auralis hover:bg-surface-variant cursor-pointer focus:outline-none focus:ring-1 focus:ring-primary max-w-[120px]"
                 aria-label="Thinking template"
                 title="Select thinking template"
               >
