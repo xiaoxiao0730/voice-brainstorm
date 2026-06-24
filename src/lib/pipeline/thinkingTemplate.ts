@@ -26,7 +26,7 @@ export const noneTemplate: ThinkingTemplate = {
 
 export const productThinkingArtifact: ThinkingTemplate = {
   id: "product_thinking_artifact",
-  name: "Product Thinking Artifact",
+  name: "Product pin",
   description: "A product thinker's canvas: question → journey → hypothesis → solution → next steps.",
   available: true,
   headings: [
