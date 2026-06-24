@@ -372,7 +372,7 @@ function Workbench() {
           lastEditedBy: "ai",
           locked: false,
           sourceChunkIds: [],
-          isPending: true,
+          isPending: false,
           operationId: opId,
           researchResultId: result.id,
         };
@@ -389,7 +389,7 @@ function Workbench() {
           lastEditedBy: "ai",
           locked: false,
           sourceChunkIds: [],
-          isPending: true,
+          isPending: false,
           operationId: opId,
           researchResultId: result.id,
         };
