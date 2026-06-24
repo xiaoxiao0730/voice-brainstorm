@@ -807,7 +807,7 @@ function Workbench() {
         lastEditedBy: "ai",
         locked: false,
         sourceChunkIds: [],
-        isPending: true,
+        isPending: false,
         rationale: line.rationale,
       };
       const map = { ...docRef.current, [newBlock.id]: newBlock };
