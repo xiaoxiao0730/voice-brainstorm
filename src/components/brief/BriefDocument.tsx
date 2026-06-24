@@ -555,6 +555,9 @@ export const BriefDocument = forwardRef<BriefDocumentHandle, Props>(function Bri
           }}
           onFocus={() => onIsEditingChange?.(true)}
           onKeyDown={onKeyDown}
+          onPaste={onPaste}
+          onDrop={onDrop}
+          onDragOver={onDragOver}
         />
         {isEmpty && (
           <div
@@ -568,7 +571,7 @@ export const BriefDocument = forwardRef<BriefDocumentHandle, Props>(function Bri
               A canvas for thinking aloud.
             </h3>
             <p className="text-sm text-secondary">
-              Start speaking or type anywhere. You can choose a template listed above.
+              Start speaking or type anywhere. You can paste or drop images too.
             </p>
           </div>
         )}
@@ -576,6 +579,12 @@ export const BriefDocument = forwardRef<BriefDocumentHandle, Props>(function Bri
           <div className="mt-3 flex items-center gap-2 text-xs text-secondary px-1">
             <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse" />
             AI is weaving your thoughts…
+          </div>
+        )}
+        {uploadingImages > 0 && (
+          <div className="mt-2 flex items-center gap-2 text-xs text-secondary px-1">
+            <span className="w-1.5 h-1.5 rounded-full bg-sky-500 animate-pulse" />
+            Uploading {uploadingImages} image{uploadingImages > 1 ? "s" : ""}…
           </div>
         )}
       </div>
