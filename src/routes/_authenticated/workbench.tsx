@@ -3,6 +3,12 @@ import { useServerFn } from "@tanstack/react-start";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { BriefDocument, type BriefDocumentHandle } from "@/components/brief/BriefDocument";
+import {
+  IdeaCanvas,
+  mergeIdeaCanvas,
+  treeToIdeaCanvas,
+  type IdeaCanvasState,
+} from "@/components/mindmap/IdeaCanvas";
 
 import { between } from "@/lib/pipeline/orderKey";
 import { applyBriefPatch } from "@/lib/pipeline/applyBriefPatch";
@@ -48,6 +54,8 @@ import { attachInsightCoordinator } from "@/lib/orchestrator/insightCoordinator"
 import { bulletLane } from "@/lib/pipeline/bulletLane.functions";
 import { pipelineTracer } from "@/lib/debug/pipelineTracer";
 import { PipelineInspector } from "@/components/debug/PipelineInspector";
+import { generateMindMap } from "@/lib/mindmap/generateMindMap.functions";
+import { loadIdeaCanvas, saveIdeaCanvas } from "@/lib/ideaCanvas.functions";
 
 export const Route = createFileRoute("/_authenticated/workbench")({
   validateSearch: (search: Record<string, unknown>) => ({
@@ -72,6 +80,7 @@ export const Route = createFileRoute("/_authenticated/workbench")({
 });
 
 type SessionRow = { id: string; title: string; status: string; started_at: string; ended_at: string | null };
+type SurfaceMode = "brief" | "map";
 
 function relative(ts: string) {
   const diff = (Date.now() - new Date(ts).getTime()) / 1000;
@@ -79,6 +88,17 @@ function relative(ts: string) {
   if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
   if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
   return `${Math.floor(diff / 86400)}d ago`;
+}
+
+function briefDocToPlainText(doc: BriefDoc) {
+  return Object.values(doc)
+    .sort((a, b) => a.orderKey.localeCompare(b.orderKey))
+    .map((b) => {
+      if (b.level === 2) return `## ${(b.heading ?? b.body ?? "").trim()}`;
+      return (b.body ?? b.heading ?? "").trim();
+    })
+    .filter(Boolean)
+    .join("\n\n");
 }
 
 function Workbench() {
@@ -105,6 +125,9 @@ function Workbench() {
   const generateNudge = useServerFn(generateIntervention);
   const logIntv = useServerFn(logIntervention);
   const mintRealtime = useServerFn(getRealtimeSession);
+  const genMindMap = useServerFn(generateMindMap);
+  const loadCanvas = useServerFn(loadIdeaCanvas);
+  const saveCanvas = useServerFn(saveIdeaCanvas);
 
   // UI state
   const [sessions, setSessions] = useState<SessionRow[]>([]);
@@ -119,6 +142,10 @@ function Workbench() {
   const [doc, setDoc] = useState<BriefDoc>({});
   const [aiLoading, setAiLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [surfaceMode, setSurfaceMode] = useState<SurfaceMode>("brief");
+  const [ideaCanvas, setIdeaCanvas] = useState<IdeaCanvasState>({ nodes: [], edges: [] });
+  const [mapLoading, setMapLoading] = useState(false);
+  const [autoMapEnabled, setAutoMapEnabled] = useState(true);
 
   // Agent state — Realtime voice lane only. Background canvas lane runs
   // whenever `listening` is true, independent of `agentEnabled`.
@@ -167,6 +194,14 @@ function Workbench() {
   const injectDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendingInjectRef = useRef<string | null>(null);
   const briefDocRef = useRef<BriefDocumentHandle | null>(null);
+  const skipIdeaCanvasSaveRef = useRef(false);
+  const loadedIdeaCanvasSessionRef = useRef<string | null>(null);
+  const ideaCanvasSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const surfaceModeRef = useRef<SurfaceMode>("brief");
+  const mapLoadingRef = useRef(false);
+  const autoMapEnabledRef = useRef(true);
+  const autoMappedTurnIdsRef = useRef<Set<string>>(new Set());
+  const lastAutoMapAtRef = useRef(0);
   const [appliedTemplateId, setAppliedTemplateId] = useState<string>(DEFAULT_TEMPLATE_ID);
 
   // Stage 4: running research tasks (taskId → query) for the active session.
@@ -180,10 +215,21 @@ function Workbench() {
     policyRef.current = createPolicyEngine(activeSessionId);
     recentTextsRef.current = [];
     recentBulletsRef.current = [];
+    autoMappedTurnIdsRef.current.clear();
+    lastAutoMapAtRef.current = 0;
   }, [activeSessionId]);
   useEffect(() => {
     listeningRef.current = listening;
   }, [listening]);
+  useEffect(() => {
+    surfaceModeRef.current = surfaceMode;
+  }, [surfaceMode]);
+  useEffect(() => {
+    mapLoadingRef.current = mapLoading;
+  }, [mapLoading]);
+  useEffect(() => {
+    autoMapEnabledRef.current = autoMapEnabled;
+  }, [autoMapEnabled]);
 
   // Persist template + applied-template per session.
   useEffect(() => {
@@ -202,6 +248,88 @@ function Workbench() {
     if (!activeSessionId || typeof window === "undefined") return;
     window.localStorage.setItem(`murmur.template.applied.${activeSessionId}`, appliedTemplateId);
   }, [appliedTemplateId, activeSessionId]);
+
+  useEffect(() => {
+    if (!activeSessionId) return;
+    let cancelled = false;
+    skipIdeaCanvasSaveRef.current = true;
+    loadedIdeaCanvasSessionRef.current = null;
+
+    const readLocalCanvas = (): IdeaCanvasState | null => {
+      if (typeof window === "undefined") return null;
+      const saved = window.localStorage.getItem(`murmur.ideaCanvas.${activeSessionId}`);
+      if (!saved) return null;
+      try {
+        const parsed = JSON.parse(saved) as IdeaCanvasState;
+        return {
+          nodes: Array.isArray(parsed.nodes) ? parsed.nodes : [],
+          edges: Array.isArray(parsed.edges) ? parsed.edges : [],
+        };
+      } catch {
+        return null;
+      }
+    };
+
+    const emptyCanvas: IdeaCanvasState = { nodes: [], edges: [] };
+    void (async () => {
+      try {
+        const fromDb = (await loadCanvas({ data: { sessionId: activeSessionId } })) as IdeaCanvasState;
+        if (cancelled) return;
+        const localCanvas = readLocalCanvas();
+        const hasDbCanvas = (fromDb.nodes?.length ?? 0) > 0 || (fromDb.edges?.length ?? 0) > 0;
+        const hasLocalCanvas = (localCanvas?.nodes.length ?? 0) > 0 || (localCanvas?.edges.length ?? 0) > 0;
+        const next = hasDbCanvas ? fromDb : hasLocalCanvas ? localCanvas! : emptyCanvas;
+        setIdeaCanvas(next);
+        loadedIdeaCanvasSessionRef.current = activeSessionId;
+        if (!hasDbCanvas && hasLocalCanvas) {
+          void saveCanvas({
+            data: {
+              sessionId: activeSessionId,
+              nodes: localCanvas!.nodes,
+              edges: localCanvas!.edges,
+            },
+          }).catch((e) => console.warn("[ideaCanvas] seed local canvas failed", e));
+        }
+      } catch (e) {
+        if (cancelled) return;
+        console.warn("[ideaCanvas] load failed, using local fallback", e);
+        setIdeaCanvas(readLocalCanvas() ?? emptyCanvas);
+        loadedIdeaCanvasSessionRef.current = activeSessionId;
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activeSessionId, loadCanvas, saveCanvas]);
+
+  useEffect(() => {
+    if (!activeSessionId) return;
+    if (loadedIdeaCanvasSessionRef.current !== activeSessionId) return;
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem(`murmur.ideaCanvas.${activeSessionId}`, JSON.stringify(ideaCanvas));
+    }
+    if (skipIdeaCanvasSaveRef.current) {
+      skipIdeaCanvasSaveRef.current = false;
+      return;
+    }
+    if (ideaCanvasSaveTimerRef.current) clearTimeout(ideaCanvasSaveTimerRef.current);
+    ideaCanvasSaveTimerRef.current = setTimeout(() => {
+      void saveCanvas({
+        data: {
+          sessionId: activeSessionId,
+          nodes: ideaCanvas.nodes,
+          edges: ideaCanvas.edges,
+        },
+      }).catch((e) => console.warn("[ideaCanvas] save failed", e));
+    }, 700);
+    return () => {
+      if (ideaCanvasSaveTimerRef.current) {
+        clearTimeout(ideaCanvasSaveTimerRef.current);
+        ideaCanvasSaveTimerRef.current = null;
+      }
+    };
+  }, [activeSessionId, ideaCanvas, saveCanvas]);
 
   // Debounced injectContext: only fire after 3s of canvas/edit quiet.
   const scheduleInject = useCallback((note: string) => {
@@ -1199,7 +1327,72 @@ function Workbench() {
 
   const liveText = useMemo(() => (finals.map((f) => f.text).join(" ") + " " + partial).trim(), [finals, partial]);
 
+  const briefPlainText = useMemo(
+    () => briefDocToPlainText(doc),
+    [doc],
+  );
+
+  const appendMapFromText = useCallback(
+    async ({ text, context }: { text: string; context: string }) => {
+      const selectedText = text.trim();
+      if (!selectedText) return;
+      setSurfaceMode("map");
+      setMapLoading(true);
+      setError(null);
+      try {
+        const res = await genMindMap({
+          data: {
+            selectedText: selectedText.slice(0, 8000),
+            context: context.slice(0, 4000),
+            model: modelRef.current,
+          },
+        });
+        const incoming = treeToIdeaCanvas(res.root);
+        setIdeaCanvas((current) => mergeIdeaCanvas(current, incoming));
+      } catch (e) {
+        setError(e instanceof Error ? e.message : String(e));
+      } finally {
+        setMapLoading(false);
+      }
+    },
+    [genMindMap],
+  );
+
+  const generateMapFromBrief = useCallback(() => {
+    void appendMapFromText({
+      text: briefPlainText || liveText || "Untitled idea",
+      context: briefPlainText.slice(0, 4000),
+    });
+  }, [appendMapFromText, briefPlainText, liveText]);
+
+  useEffect(() => {
+    if (!activeSessionId) return;
+    const slot = sessionStore.getOrCreate(activeSessionId);
+    const offAutoMap = slot.bus.on("thought_turn.finalized", (e) => {
+      if (e.sessionId !== activeSessionRef.current) return;
+      if (surfaceModeRef.current !== "map" || !autoMapEnabledRef.current) return;
+      if (mapLoadingRef.current) return;
+      if (autoMappedTurnIdsRef.current.has(e.turnId)) return;
+
+      const text = e.thoughtTurn.combinedText.trim();
+      if (text.length < 16) return;
+
+      const now = Date.now();
+      if (now - lastAutoMapAtRef.current < 8000) return;
+      lastAutoMapAtRef.current = now;
+      autoMappedTurnIdsRef.current.add(e.turnId);
+
+      void appendMapFromText({
+        text,
+        context: briefDocToPlainText(docRef.current).slice(0, 4000),
+      });
+    });
+
+    return () => offAutoMap();
+  }, [activeSessionId, appendMapFromText]);
+
   const blockCount = Object.keys(doc).length;
+  const activeSession = sessions.find((s) => s.id === activeSessionId);
 
   // Stage 4: group pending blocks by operationId for the grouped Keep/Undo toolbar.
   const pendingGroups = useMemo(() => {
@@ -1461,21 +1654,32 @@ function Workbench() {
         {/* CANVAS PANEL */}
         <section className="flex-1 flex flex-col min-w-0">
           <header className="h-14 px-6 flex items-center justify-between border-b border-auralis shrink-0">
-            <span className="text-xs uppercase tracking-[0.18em] text-secondary">Live Brief</span>
+            <span className="text-xs uppercase tracking-[0.18em] text-secondary">
+              {surfaceMode === "brief" ? "Live Brief" : "Idea Canvas"}
+            </span>
             <div className="flex items-center gap-2">
-              <select
-                value={templateId}
-                onChange={(e) => applyTemplate(e.target.value)}
-                className="px-3 py-1 bg-surface rounded-full text-xs text-primary border border-auralis hover:bg-surface-variant cursor-pointer focus:outline-none focus:ring-1 focus:ring-primary max-w-[120px]"
-                aria-label="Thinking template"
-                title="Select thinking template"
+              <div
+                className="flex h-8 items-center rounded-full border border-auralis bg-surface p-0.5"
+                role="tablist"
+                aria-label="Canvas mode"
               >
-                {Object.values(TEMPLATES).map((t) => (
-                  <option key={t.id} value={t.id} disabled={!t.available}>
-                    {t.name}
-                  </option>
+                {(["brief", "map"] as const).map((mode) => (
+                  <button
+                    key={mode}
+                    type="button"
+                    onClick={() => setSurfaceMode(mode)}
+                    className={`h-7 rounded-full px-3 text-xs font-medium transition-colors ${
+                      surfaceMode === mode
+                        ? "bg-primary text-on-primary"
+                        : "text-secondary hover:bg-surface-variant hover:text-primary"
+                    }`}
+                    role="tab"
+                    aria-selected={surfaceMode === mode}
+                  >
+                    {mode === "brief" ? "Brief" : "Map"}
+                  </button>
                 ))}
-              </select>
+              </div>
               <select
                 value={model}
                 onChange={(e) => setModel(e.target.value as typeof model)}
@@ -1502,15 +1706,14 @@ function Workbench() {
               </span>
               <button
                 onClick={() => {
-                  const active = sessions.find((s) => s.id === activeSessionId);
-                  void exportBriefToDocx(doc, active?.title ?? "Live Brief").catch((e) =>
+                  void exportBriefToDocx(doc, activeSession?.title ?? "Live Brief").catch((e) =>
                     setError(e?.message ?? "Export failed"),
                   );
                 }}
-                disabled={blockCount === 0}
+                disabled={surfaceMode !== "brief" || blockCount === 0}
                 className="ml-3 px-3 py-1.5 rounded-full border border-auralis bg-surface text-primary text-xs font-medium hover:bg-surface-variant disabled:opacity-40 flex items-center gap-1.5"
                 aria-label="Export to Word"
-                title="Export to Word (.docx)"
+                title={surfaceMode === "brief" ? "Export to Word (.docx)" : "Use Export JSON inside Map"}
               >
                 <span className="material-symbols-outlined text-base">download</span>
                 Export
@@ -1538,16 +1741,29 @@ function Workbench() {
               ))}
             </div>
           )}
-          <div className="flex-1 overflow-y-auto p-8 min-h-0">
-            <BriefDocument
-              key={activeSessionId ?? "none"}
-              ref={briefDocRef}
-              sessionId={activeSessionId ?? ""}
-              doc={doc}
-              onPersistDelta={onPersistDelta}
-              onIsEditingChange={onIsEditingChange}
-              aiLoading={aiLoading}
-            />
+          <div className={`flex-1 min-h-0 ${surfaceMode === "brief" ? "overflow-y-auto p-8" : "overflow-hidden p-4"}`}>
+            {surfaceMode === "brief" ? (
+              <BriefDocument
+                key={activeSessionId ?? "none"}
+                ref={briefDocRef}
+                sessionId={activeSessionId ?? ""}
+                doc={doc}
+                onPersistDelta={onPersistDelta}
+                onIsEditingChange={onIsEditingChange}
+                onCreateMapFromSelection={appendMapFromText}
+                aiLoading={aiLoading}
+              />
+            ) : (
+              <IdeaCanvas
+                state={ideaCanvas}
+                sessionTitle={activeSession?.title ?? "Idea Canvas"}
+                loading={mapLoading}
+                autoGenerate={autoMapEnabled}
+                onChange={setIdeaCanvas}
+                onAutoGenerateChange={setAutoMapEnabled}
+                onGenerateFromBrief={generateMapFromBrief}
+              />
+            )}
           </div>
           <footer className="h-10 px-6 flex items-center justify-between border-t border-auralis text-xs text-secondary shrink-0">
             <span>

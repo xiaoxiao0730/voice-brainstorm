@@ -35,6 +35,7 @@ type Props = {
   doc: BriefDoc;
   onPersistDelta: (delta: Delta) => void;
   onIsEditingChange?: (editing: boolean) => void;
+  onCreateMapFromSelection?: (selection: { text: string; context: string }) => void;
   aiLoading: boolean;
 };
 
@@ -117,7 +118,7 @@ function readLineHtml(el: HTMLElement): { html: string; text: string } {
 }
 
 export const BriefDocument = forwardRef<BriefDocumentHandle, Props>(function BriefDocument(
-  { sessionId, doc, onPersistDelta, onIsEditingChange, aiLoading },
+  { sessionId, doc, onPersistDelta, onIsEditingChange, onCreateMapFromSelection, aiLoading },
   ref,
 ) {
   const editorRef = useRef<HTMLDivElement>(null);
@@ -711,7 +712,8 @@ export const BriefDocument = forwardRef<BriefDocumentHandle, Props>(function Bri
             type="button"
             onClick={() => {
               const ctx = editorRef.current?.innerText?.slice(0, 2000) ?? "";
-              setMindMap({ text: bubble.text, context: ctx });
+              if (onCreateMapFromSelection) onCreateMapFromSelection({ text: bubble.text, context: ctx });
+              else setMindMap({ text: bubble.text, context: ctx });
               setBubble(null);
               window.getSelection()?.removeAllRanges();
             }}
