@@ -2,7 +2,7 @@
 // long-form ThoughtTurn. Emits one `thought_turn.finalized` SessionEvent per
 // turn, not one per segment.
 //
-// Boundary algorithm (see .lovable/plan.md §3):
+// Boundary algorithm:
 //   - CHECKPOINT_MS = 30s  → internal-only progress snapshot (no UI Pending)
 //   - HARD_LIMIT_MS = 120s → force finalize
 //   - SEMANTIC_PAUSE_MS = 2.5s → user yielded

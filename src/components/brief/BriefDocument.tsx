@@ -10,13 +10,11 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent,
 } from "react";
+import { useServerFn } from "@tanstack/react-start";
 import type { BriefBlock, BriefDoc } from "@/lib/pipeline/types";
 import { between } from "@/lib/pipeline/orderKey";
-import { supabase } from "@/integrations/supabase/client";
 import { MindMapModal } from "@/components/brief/MindMapModal";
-
-const IMAGE_BUCKET = "brief-images";
-const SIGNED_URL_TTL_SECONDS = 60 * 60 * 24 * 365 * 10; // ~10 years
+import { uploadBriefImage } from "@/lib/storage.functions";
 
 export type BriefDocumentHandle = {
   /**
@@ -55,6 +53,13 @@ const INLINE_SIZES: Array<{ label: string; value: string }> = [
   { label: "Larger", value: "1.25em" },
 ];
 
+const IMAGE_SIZES: Array<{ label: string; width: string }> = [
+  { label: "Small", width: "35%" },
+  { label: "Medium", width: "60%" },
+  { label: "Large", width: "80%" },
+  { label: "Full", width: "100%" },
+];
+
 function blockKind(b: BriefBlock): LineKind {
   return b.level === 2 ? "h2" : "p";
 }
@@ -69,6 +74,22 @@ function escapeHtml(s: string): string {
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;");
+}
+
+function fileToBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(reader.error ?? new Error("Could not read file."));
+    reader.onload = () => {
+      const result = reader.result;
+      if (typeof result !== "string") {
+        reject(new Error("Could not encode file."));
+        return;
+      }
+      resolve(result);
+    };
+    reader.readAsDataURL(file);
+  });
 }
 
 function renderLineHtml(block: BriefBlock, options?: { escapeText?: boolean }): string {
@@ -100,11 +121,14 @@ export const BriefDocument = forwardRef<BriefDocumentHandle, Props>(function Bri
   ref,
 ) {
   const editorRef = useRef<HTMLDivElement>(null);
+  const uploadImage = useServerFn(uploadBriefImage);
   const [isEmpty, setIsEmpty] = useState(true);
   const composingRef = useRef(false);
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastSnapshotRef = useRef<Map<string, BriefBlock>>(new Map());
   const sessionIdRef = useRef(sessionId);
+  const selectedImageRef = useRef<HTMLImageElement | null>(null);
+  const [imageToolbar, setImageToolbar] = useState<{ x: number; y: number; width: string } | null>(null);
 
   const [docSize, setDocSize] = useState<DocSize>(() => {
     if (typeof window === "undefined") return "md";
@@ -293,35 +317,18 @@ export const BriefDocument = forwardRef<BriefDocumentHandle, Props>(function Bri
       const el = editorRef.current;
       if (!el) return;
       const sid = sessionIdRef.current;
-      const auth = await supabase.auth.getUser();
-      const userId = auth.data.user?.id;
-      if (!userId) {
-        console.warn("[image-paste] not authenticated");
-        return;
-      }
-      // Folder must start with the user's id to satisfy storage RLS.
-      const ext =
-        file.type === "image/png"
-          ? "png"
-          : file.type === "image/webp"
-            ? "webp"
-            : file.type === "image/gif"
-              ? "gif"
-              : file.type === "image/svg+xml"
-                ? "svg"
-                : "jpg";
-      const key = `${userId}/${sid || "no-session"}/${crypto.randomUUID()}.${ext}`;
       setUploadingImages((n) => n + 1);
       try {
-        const { error: upErr } = await supabase.storage
-          .from(IMAGE_BUCKET)
-          .upload(key, file, { contentType: file.type || "image/jpeg", upsert: false });
-        if (upErr) throw upErr;
-        const { data: signed, error: sErr } = await supabase.storage
-          .from(IMAGE_BUCKET)
-          .createSignedUrl(key, SIGNED_URL_TTL_SECONDS);
-        if (sErr || !signed?.signedUrl) throw sErr ?? new Error("signed url failed");
-        const url = signed.signedUrl;
+        const uploaded = await uploadImage({
+          data: {
+            sessionId: sid,
+            name: file.name,
+            mime: file.type || "image/jpeg",
+            size: file.size,
+            contentBase64: await fileToBase64(file),
+          },
+        });
+        const url = uploaded.signedUrl;
 
         // Append a new paragraph block at end carrying the <img>.
         const childs = Array.from(el.children) as HTMLElement[];
@@ -333,7 +340,7 @@ export const BriefDocument = forwardRef<BriefDocumentHandle, Props>(function Bri
         const p = document.createElement("p");
         p.dataset.lineId = id;
         p.dataset.orderKey = orderKey;
-        p.innerHTML = `<img src="${safeUrl}" alt="pasted image" style="max-width:100%;height:auto;border-radius:6px;" />`;
+        p.innerHTML = `<img src="${safeUrl}" alt="pasted image" style="width:100%;max-width:100%;height:auto;border-radius:6px;" />`;
         el.appendChild(p);
         recomputeEmpty();
         scheduleSave();
@@ -343,7 +350,7 @@ export const BriefDocument = forwardRef<BriefDocumentHandle, Props>(function Bri
         setUploadingImages((n) => Math.max(0, n - 1));
       }
     },
-    [recomputeEmpty, scheduleSave],
+    [recomputeEmpty, scheduleSave, uploadImage],
   );
 
   const extractImageFiles = (items: DataTransferItemList | null, files: FileList | null): File[] => {
@@ -485,6 +492,43 @@ export const BriefDocument = forwardRef<BriefDocumentHandle, Props>(function Bri
     [scheduleSave],
   );
 
+  const showImageToolbar = useCallback((img: HTMLImageElement) => {
+    const rect = img.getBoundingClientRect();
+    selectedImageRef.current = img;
+    setBubble(null);
+    setImageToolbar({
+      x: rect.left + rect.width / 2,
+      y: rect.top - 8,
+      width: img.style.width || "100%",
+    });
+  }, []);
+
+  const applyImageSize = useCallback(
+    (width: string) => {
+      const img = selectedImageRef.current;
+      if (!img) return;
+      img.style.width = width;
+      img.style.maxWidth = "100%";
+      img.style.height = "auto";
+      setImageToolbar((prev) => (prev ? { ...prev, width } : prev));
+      scheduleSave();
+    },
+    [scheduleSave],
+  );
+
+  const onEditorClick = useCallback(
+    (e: ReactMouseEvent<HTMLDivElement>) => {
+      const target = e.target;
+      if (target instanceof HTMLImageElement) {
+        showImageToolbar(target);
+        return;
+      }
+      selectedImageRef.current = null;
+      setImageToolbar(null);
+    },
+    [showImageToolbar],
+  );
+
   const onKeyDown = (e: ReactKeyboardEvent<HTMLDivElement>) => {
     if ((e.metaKey || e.ctrlKey) && !e.altKey) {
       const k = e.key.toLowerCase();
@@ -598,6 +642,7 @@ export const BriefDocument = forwardRef<BriefDocumentHandle, Props>(function Bri
           }}
           onFocus={() => onIsEditingChange?.(true)}
           onKeyDown={onKeyDown}
+          onClick={onEditorClick}
           onPaste={onPaste}
           onDrop={onDrop}
           onDragOver={onDragOver}
@@ -631,6 +676,30 @@ export const BriefDocument = forwardRef<BriefDocumentHandle, Props>(function Bri
           </div>
         )}
       </div>
+
+      {imageToolbar && (
+        <div
+          className="fixed z-[75] -translate-x-1/2 -translate-y-full rounded-md border border-auralis bg-surface shadow-lg px-1.5 py-1 flex items-center gap-1"
+          style={{ left: imageToolbar.x, top: imageToolbar.y }}
+          onMouseDown={(e) => e.preventDefault()}
+        >
+          {IMAGE_SIZES.map((size) => (
+            <button
+              key={size.width}
+              type="button"
+              onClick={() => applyImageSize(size.width)}
+              className={`h-7 px-2 rounded text-xs ${
+                imageToolbar.width === size.width
+                  ? "bg-primary text-on-primary"
+                  : "text-primary hover:bg-surface-variant"
+              }`}
+              title={`Set image ${size.label.toLowerCase()}`}
+            >
+              {size.label}
+            </button>
+          ))}
+        </div>
+      )}
 
       {bubble && (
         <div

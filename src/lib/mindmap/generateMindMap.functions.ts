@@ -6,7 +6,7 @@ import { generateText } from "ai";
 import { z } from "zod";
 
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
-import { createLovableAiGatewayProvider } from "@/lib/ai-gateway.server";
+import { createOpenAIProvider, normalizeAiModel, requireOpenAIKey } from "@/lib/ai-gateway.server";
 
 const InputSchema = z.object({
   selectedText: z.string().min(1).max(8000),
@@ -66,17 +66,17 @@ export const generateMindMap = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator((input: unknown) => InputSchema.parse(input))
   .handler(async ({ data }) => {
-    const key = process.env.LOVABLE_API_KEY;
-    if (!key) throw new Error("Missing LOVABLE_API_KEY");
+    const key = requireOpenAIKey();
+    if (!key) throw new Error("Missing OPENAI_API_KEY");
 
-    const gateway = createLovableAiGatewayProvider(key);
+    const gateway = createOpenAIProvider(key);
     const userPrompt = `SELECTED SNIPPET:\n${data.selectedText}\n\n${
       data.context ? `SURROUNDING CONTEXT (for disambiguation only):\n${data.context}\n\n` : ""
     }Build the mind map JSON now.`;
 
     try {
       const { text } = await generateText({
-        model: gateway(data.model),
+        model: gateway(normalizeAiModel(data.model)),
         system: SYSTEM,
         prompt: userPrompt,
       });

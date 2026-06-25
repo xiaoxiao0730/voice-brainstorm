@@ -1,4 +1,4 @@
-// Lovable AI Gateway — Gemini call returning a research note for a query.
+// OpenAI model call returning a research note for a query.
 //
 // MVP: relies on model's prior knowledge plus an explicit "based on what
 // you know; if uncertain, say so" instruction. Later we can promote this
@@ -9,7 +9,7 @@ import { generateText } from "ai";
 import { z } from "zod";
 
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
-import { createLovableAiGatewayProvider } from "@/lib/ai-gateway.server";
+import { createOpenAIProvider, normalizeAiModel, requireOpenAIKey } from "@/lib/ai-gateway.server";
 
 const InputSchema = z.object({
   query: z.string().min(1),
@@ -29,12 +29,12 @@ export const webSearch = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator((input: unknown) => InputSchema.parse(input))
   .handler(async ({ data }) => {
-    const key = process.env.LOVABLE_API_KEY;
-    if (!key) throw new Error("Missing LOVABLE_API_KEY");
-    const gateway = createLovableAiGatewayProvider(key);
+    const key = requireOpenAIKey();
+    if (!key) throw new Error("Missing OPENAI_API_KEY");
+    const gateway = createOpenAIProvider(key);
     try {
       const { text } = await generateText({
-        model: gateway(data.model),
+        model: gateway(normalizeAiModel(data.model)),
         system: buildSystem(),
         prompt: `Query: ${data.query}\n\nWrite the research notes now.`,
       });

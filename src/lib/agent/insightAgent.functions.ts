@@ -17,7 +17,7 @@ import { generateText } from "ai";
 import { z } from "zod";
 
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
-import { createLovableAiGatewayProvider } from "@/lib/ai-gateway.server";
+import { createOpenAIProvider, normalizeAiModel, requireOpenAIKey } from "@/lib/ai-gateway.server";
 
 const SnapshotLine = z.object({
   id: z.string(),
@@ -86,8 +86,8 @@ export const insightAgent = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator((input: unknown) => InputSchema.parse(input))
   .handler(async ({ data }) => {
-    const key = process.env.LOVABLE_API_KEY;
-    if (!key) throw new Error("Missing LOVABLE_API_KEY");
+    const key = requireOpenAIKey();
+    if (!key) throw new Error("Missing OPENAI_API_KEY");
 
     const docStr = data.snapshot.length
       ? data.snapshot
@@ -123,10 +123,10 @@ ${researchStr}
 
 Return STRICT JSON only. Empty packets array is acceptable.`;
 
-    const gateway = createLovableAiGatewayProvider(key);
+    const gateway = createOpenAIProvider(key);
     try {
       const { text } = await generateText({
-        model: gateway(data.model),
+        model: gateway(normalizeAiModel(data.model)),
         system: SYSTEM,
         prompt: userPrompt,
       });

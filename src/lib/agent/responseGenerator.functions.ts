@@ -9,7 +9,7 @@ import { Output, generateText } from "ai";
 import { z } from "zod";
 
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
-import { createLovableAiGatewayProvider } from "@/lib/ai-gateway.server";
+import { createOpenAIProvider, normalizeAiModel, requireOpenAIKey } from "@/lib/ai-gateway.server";
 
 const SnapshotLine = z.object({
   kind: z.enum(["h2", "p"]),
@@ -63,8 +63,8 @@ export const generateIntervention = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator((input: unknown) => InputSchema.parse(input))
   .handler(async ({ data }) => {
-    const apiKey = process.env.LOVABLE_API_KEY;
-    if (!apiKey) throw new Error("Missing LOVABLE_API_KEY");
+    const apiKey = requireOpenAIKey();
+    if (!apiKey) throw new Error("Missing OPENAI_API_KEY");
 
     const docStr = data.snapshot.length
       ? data.snapshot
@@ -86,13 +86,13 @@ export const generateIntervention = createServerFn({ method: "POST" })
           .join("\n")}`
       : "Template: (none — free-form document)";
 
-    const gateway = createLovableAiGatewayProvider(apiKey);
+    const gateway = createOpenAIProvider(apiKey);
 
     const userPrompt = `${tplStr}\n\nLIVE BRIEF (in order):\n${docStr}\n\nRECENT USER SPEECH: ${recentStr}\nLATEST USER SEGMENT: ${data.latestText}\nRECENT USER SIGNALS: ${signalsStr}\n\nPropose ONE pending line (h2 heading or p paragraph) appended to the end, or set emit=false.`;
 
     try {
       const { experimental_output } = await generateText({
-        model: gateway(data.model),
+        model: gateway(normalizeAiModel(data.model)),
         system: SYSTEM_CANVAS,
         prompt: userPrompt,
         experimental_output: Output.object({ schema: CanvasPatchSchema }),

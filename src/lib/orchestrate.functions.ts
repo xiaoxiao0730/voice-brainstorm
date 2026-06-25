@@ -2,6 +2,7 @@ import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
 import { generateText } from "ai";
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
+import { createOpenAIProvider, normalizeAiModel, requireOpenAIKey } from "@/lib/ai-gateway.server";
 import type { BriefPatch, BriefBlockLevel } from "./pipeline/types";
 
 const SnapshotBlock = z.object({
@@ -170,13 +171,12 @@ export const orchestrateSegment = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator((input: unknown) => InputSchema.parse(input))
   .handler(async ({ data, context }) => {
-    const lovableApiKey = process.env.LOVABLE_API_KEY;
-    if (!lovableApiKey) {
-      return { patches: [] as BriefPatch[], error: "Missing LOVABLE_API_KEY" };
+    const apiKey = requireOpenAIKey();
+    if (!apiKey) {
+      return { patches: [] as BriefPatch[], error: "Missing OPENAI_API_KEY" };
     }
-    const { createLovableAiGatewayProvider } = await import("./ai-gateway.server");
-    const gateway = createLovableAiGatewayProvider(lovableApiKey);
-    const model = gateway(data.model ?? DEFAULT_MODEL);
+    const gateway = createOpenAIProvider(apiKey);
+    const model = gateway(normalizeAiModel(data.model ?? DEFAULT_MODEL));
 
     const lockedIds = data.snapshot.filter((b) => b.locked).map((b) => b.id);
     const userEditedExcerpts = data.snapshot

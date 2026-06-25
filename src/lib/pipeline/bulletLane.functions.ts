@@ -18,7 +18,7 @@ import { generateText } from "ai";
 import { z } from "zod";
 
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
-import { createLovableAiGatewayProvider } from "@/lib/ai-gateway.server";
+import { createOpenAIProvider, normalizeAiModel, requireOpenAIKey } from "@/lib/ai-gateway.server";
 
 const InputSchema = z.object({
   segmentText: z.string().min(1),
@@ -53,8 +53,8 @@ export const bulletLane = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator((input: unknown) => InputSchema.parse(input))
   .handler(async ({ data }) => {
-    const key = process.env.LOVABLE_API_KEY;
-    if (!key) throw new Error("Missing LOVABLE_API_KEY");
+    const key = requireOpenAIKey();
+    if (!key) throw new Error("Missing OPENAI_API_KEY");
 
     const prompt = `RECENT BULLETS (already pinned, do not repeat):
 ${data.recentBullets.length ? data.recentBullets.map((b) => `- ${b}`).join("\n") : "(none)"}
@@ -69,10 +69,10 @@ Return STRICT JSON only:
 { "bullets": [ { "text": "..." } ] }
 If nothing pinnable, return { "bullets": [] }.`;
 
-    const gateway = createLovableAiGatewayProvider(key);
+    const gateway = createOpenAIProvider(key);
     try {
       const { text } = await generateText({
-        model: gateway(data.model),
+        model: gateway(normalizeAiModel(data.model)),
         system: SYSTEM,
         prompt,
       });

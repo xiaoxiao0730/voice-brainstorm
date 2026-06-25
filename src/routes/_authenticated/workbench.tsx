@@ -3,7 +3,6 @@ import { useServerFn } from "@tanstack/react-start";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { BriefDocument, type BriefDocumentHandle } from "@/components/brief/BriefDocument";
-import { supabase } from "@/integrations/supabase/client";
 
 import { between } from "@/lib/pipeline/orderKey";
 import { applyBriefPatch } from "@/lib/pipeline/applyBriefPatch";
@@ -129,12 +128,10 @@ function Workbench() {
   const [userEmail, setUserEmail] = useState<string | null>(null);
 
   const MODEL_OPTIONS = [
-    { id: "google/gemini-3-flash-preview", label: "Gemini 3 Flash" },
-    { id: "google/gemini-2.5-pro", label: "Gemini 2.5 Pro" },
-    { id: "openai/gpt-5", label: "GPT-5" },
-    { id: "openai/gpt-5-mini", label: "GPT-5 Mini" },
+    { id: "openai/gpt-4o-mini", label: "GPT-4o Mini" },
+    { id: "openai/gpt-4o", label: "GPT-4o" },
   ] as const;
-  const [model, setModel] = useState<(typeof MODEL_OPTIONS)[number]["id"]>("google/gemini-3-flash-preview");
+  const [model, setModel] = useState<(typeof MODEL_OPTIONS)[number]["id"]>("openai/gpt-4o-mini");
   const modelRef = useRef(model);
   useEffect(() => {
     modelRef.current = model;
@@ -261,11 +258,9 @@ function Workbench() {
   }, [doc, agentEnabled, agentStatus]);
 
 
-  // Fetch user email
+  // Local no-auth mode.
   useEffect(() => {
-    supabase.auth.getUser().then(({ data }) => {
-      setUserEmail(data.user?.email ?? null);
-    });
+    setUserEmail("local mode");
   }, []);
 
   // Sign out
@@ -275,8 +270,7 @@ function Workbench() {
     } catch {
       /* ignore */
     }
-    await supabase.auth.signOut();
-    navigate({ to: "/auth" });
+    navigate({ to: "/" });
   };
 
   // Load session list
@@ -453,7 +447,7 @@ function Workbench() {
             text: (b.level === 2 ? b.heading : b.body) ?? "",
             locked: b.locked,
           })),
-      getModel: () => "openai/gpt-5-mini",
+      getModel: () => modelRef.current,
     });
 
 
