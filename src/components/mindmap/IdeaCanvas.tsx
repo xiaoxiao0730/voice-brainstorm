@@ -2,7 +2,9 @@ import { useCallback, useMemo } from "react";
 import {
   Background,
   Controls,
+  Handle,
   MiniMap,
+  Position,
   ReactFlow,
   addEdge,
   applyEdgeChanges,
@@ -38,13 +40,14 @@ type Props = {
   state: IdeaCanvasState;
   sessionTitle?: string;
   loading?: boolean;
-  autoGenerate?: boolean;
   onChange: (next: IdeaCanvasState) => void;
-  onAutoGenerateChange?: (enabled: boolean) => void;
   onGenerateFromBrief?: () => void;
 };
 
-const KIND_STYLE: Record<IdeaNodeKind, { label: string; border: string; bg: string; accent: string }> = {
+const KIND_STYLE: Record<
+  IdeaNodeKind,
+  { label: string; border: string; bg: string; accent: string }
+> = {
   focus: { label: "Focus", border: "#111827", bg: "#fffdf7", accent: "#111827" },
   idea: { label: "Idea", border: "#7c8b73", bg: "#fbfdf8", accent: "#7c8b73" },
   question: { label: "Question", border: "#6f7f99", bg: "#f8fbff", accent: "#6f7f99" },
@@ -78,7 +81,8 @@ function safeFilename(input: string) {
 }
 
 function nextId(prefix = "idea") {
-  if (typeof crypto !== "undefined" && "randomUUID" in crypto) return `${prefix}-${crypto.randomUUID()}`;
+  if (typeof crypto !== "undefined" && "randomUUID" in crypto)
+    return `${prefix}-${crypto.randomUUID()}`;
   return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
 
@@ -91,6 +95,16 @@ function IdeaNode({ id, data, selected }: NodeProps<IdeaFlowNode>) {
       }`}
       style={{ borderColor: style.border, background: style.bg }}
     >
+      <Handle
+        type="target"
+        position={Position.Left}
+        style={{ width: 9, height: 9, background: style.accent, border: "2px solid #fff" }}
+      />
+      <Handle
+        type="source"
+        position={Position.Right}
+        style={{ width: 9, height: 9, background: style.accent, border: "2px solid #fff" }}
+      />
       <div className="flex items-center justify-between gap-2 border-b border-black/10 px-2.5 py-1.5">
         <select
           className="nodrag min-w-0 bg-transparent text-[10px] font-medium uppercase text-secondary focus:outline-none"
@@ -124,7 +138,10 @@ function IdeaNode({ id, data, selected }: NodeProps<IdeaFlowNode>) {
 
 const nodeTypes = { ideaNode: IdeaNode };
 
-export function treeToIdeaCanvas(root: MindMapNode, options?: { originX?: number; originY?: number }): IdeaCanvasState {
+export function treeToIdeaCanvas(
+  root: MindMapNode,
+  options?: { originX?: number; originY?: number },
+): IdeaCanvasState {
   const nodes: IdeaFlowNode[] = [];
   const edges: Edge[] = [];
   const originX = options?.originX ?? 80;
@@ -167,6 +184,11 @@ export function treeToIdeaCanvas(root: MindMapNode, options?: { originX?: number
         source: parentId,
         target: id,
         type: "smoothstep",
+        label: node.relation || undefined,
+        labelStyle: { fontSize: 10, fill: "#6b7280", fontWeight: 500 },
+        labelBgStyle: { fill: "#fbfaf7", fillOpacity: 0.9 },
+        labelBgPadding: [4, 2],
+        labelBgBorderRadius: 3,
         style: { stroke: "#9ca3af", strokeWidth: 1.2 },
       });
     }
@@ -177,7 +199,10 @@ export function treeToIdeaCanvas(root: MindMapNode, options?: { originX?: number
   return { nodes, edges };
 }
 
-export function mergeIdeaCanvas(current: IdeaCanvasState, incoming: IdeaCanvasState): IdeaCanvasState {
+export function mergeIdeaCanvas(
+  current: IdeaCanvasState,
+  incoming: IdeaCanvasState,
+): IdeaCanvasState {
   if (current.nodes.length === 0) return incoming;
   const maxX = Math.max(...current.nodes.map((node) => node.position.x));
   const shiftedNodes = incoming.nodes.map((node) => ({
@@ -194,9 +219,7 @@ export function IdeaCanvas({
   state,
   sessionTitle,
   loading,
-  autoGenerate,
   onChange,
-  onAutoGenerateChange,
   onGenerateFromBrief,
 }: Props) {
   const updateNodeData = useCallback(
@@ -317,20 +340,6 @@ export function IdeaCanvas({
               className="ml-2 h-7 rounded-md border border-auralis bg-surface px-2.5 text-xs font-medium text-primary hover:bg-surface-variant disabled:opacity-40"
             >
               {loading ? "Generating..." : "Generate"}
-            </button>
-          )}
-          {onAutoGenerateChange && (
-            <button
-              type="button"
-              onClick={() => onAutoGenerateChange(!autoGenerate)}
-              className={`h-7 rounded-md border px-2.5 text-xs font-medium ${
-                autoGenerate
-                  ? "border-primary bg-primary text-on-primary"
-                  : "border-auralis bg-surface text-secondary hover:bg-surface-variant hover:text-primary"
-              }`}
-              title="Auto-generate from each spoken thought turn"
-            >
-              {autoGenerate ? "Auto on" : "Auto off"}
             </button>
           )}
         </div>

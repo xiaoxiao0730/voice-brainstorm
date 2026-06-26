@@ -1,15 +1,18 @@
-// ThoughtTurn buffer: aggregates Azure final TranscriptSegments into a single
-// long-form ThoughtTurn. Emits one `thought_turn.finalized` SessionEvent per
-// turn, not one per segment.
+// ThoughtTurn buffer: aggregates Azure final TranscriptSegments into short
+// "mini-batch" ThoughtTurns. Emits a `thought_turn.finalized` SessionEvent as
+// soon as EITHER enough segments have accumulated OR a brief pause elapses —
+// so the brief grows in near-real-time while you keep talking, not only after
+// you stop. decideBrief still receives the full brief snapshot each time, so
+// quality stays high (it appends/updates incrementally instead of fragmenting).
 //
 // Boundary algorithm:
-//   - CHECKPOINT_MS = 30s  → internal-only progress snapshot (no UI Pending)
-//   - HARD_LIMIT_MS = 120s → force finalize
-//   - SEMANTIC_PAUSE_MS = 2.5s → user yielded
+//   - MAX_SEGMENTS = 2    → flush as soon as this many segments accumulate (real-time)
+//   - SEMANTIC_PAUSE_MS = 1.2s → user paused briefly → flush what we have
+//   - HARD_LIMIT_MS = 60s → force finalize a runaway turn
 //   - MAX_GAP_MS = 8s → segment too old → start a new turn
 //
-// Finalization triggers: semantic-pause timer, voice.response_started event,
-// manual stop, or hard limit.
+// Finalization triggers: segment-count threshold, semantic-pause timer,
+// voice.response_started event, manual stop, or hard limit.
 
 import type {
   SessionEvent,
@@ -21,9 +24,9 @@ import type { SessionEventBus } from "@/lib/orchestrator/sessionEvents";
 import { pipelineTracer } from "@/lib/debug/pipelineTracer";
 
 export const THOUGHT_TURN_CONSTANTS = {
-  CHECKPOINT_MS: 30_000,
-  HARD_LIMIT_MS: 120_000,
-  SEMANTIC_PAUSE_MS: 2_500,
+  MAX_SEGMENTS: 2,
+  HARD_LIMIT_MS: 60_000,
+  SEMANTIC_PAUSE_MS: 1_200,
   MAX_GAP_MS: 8_000,
 };
 
@@ -139,18 +142,16 @@ export function createThoughtTurnBuffer(
       current.segments.push(segment);
       current.lastSegmentAt = t;
 
-      // Internal checkpoint at 30s elapsed — bump revision, no UI.
       const elapsed = t - current.startedAt;
       if (elapsed >= THOUGHT_TURN_CONSTANTS.HARD_LIMIT_MS) {
         finalize("hard_limit");
         return;
       }
-      if (
-        elapsed >= THOUGHT_TURN_CONSTANTS.CHECKPOINT_MS &&
-        current.lastCheckpointRevision !== current.revision
-      ) {
-        current.revision += 1;
-        current.lastCheckpointRevision = current.revision;
+      // Mini-batch: flush as soon as we have enough segments, so the brief
+      // grows while the user is still talking (not only on a pause).
+      if (current.segments.length >= THOUGHT_TURN_CONSTANTS.MAX_SEGMENTS) {
+        finalize("hard_limit");
+        return;
       }
       schedulePause();
     },

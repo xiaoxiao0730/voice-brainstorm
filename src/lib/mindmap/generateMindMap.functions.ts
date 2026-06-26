@@ -17,12 +17,14 @@ const InputSchema = z.object({
 export type MindMapNode = {
   id: string;
   label: string;
+  relation?: string; // short relation word describing the link from the PARENT to this node
   children: MindMapNode[];
 };
 
 type MindMapNodeInput = {
   id?: string;
   label?: string;
+  relation?: string;
   children?: MindMapNodeInput[];
 };
 
@@ -30,6 +32,7 @@ const NodeSchema: z.ZodType<MindMapNodeInput> = z.lazy(() =>
   z.object({
     id: z.string().optional(),
     label: z.string().optional(),
+    relation: z.string().optional(),
     children: z.array(NodeSchema).optional(),
   }),
 );
@@ -43,24 +46,35 @@ function ensureIds(node: MindMapNodeInput, path = "r"): MindMapNode {
   return {
     id,
     label: (node.label ?? "").trim() || "·",
+    relation: node.relation?.trim() || undefined,
     children: (node.children ?? []).map((c, i) => ensureIds(c, `${path}-${i}`)),
   };
 }
 
-const SYSTEM = `You convert a snippet of working notes into a compact MIND MAP tree.
+const SYSTEM = `You turn a user's working notes / brief into a clear, structured MIND MAP that captures and organizes their thinking. You are SYNTHESIZING and SUMMARIZING — not copying text.
 
-RULES
-- Output ONE root node that captures the central topic in 2–6 words.
-- 2 to 5 first-level branches, each 2–6 words.
-- Each branch may have 0–4 short children (2–8 words each); max depth 3 below root.
+STRUCTURE
+- ONE root node = the single central topic, summarized in 2–6 words.
+- 3 to 6 first-level branches radiating from the root = the main aspects / threads of the thinking.
+- Each branch may have 0–4 children (sub-points); max depth 3 below the root.
+
+NODE LABELS — summarize, never transcribe
+- Every label is a TIGHT summary of the point: a noun phrase or short clause, 2–8 words.
+- NEVER paste raw sentences from the notes. Distill the idea into its essence.
 - Use the user's language. Keep technical/product terms in their original form (usually English).
+
+RELATIONS — label every edge
+- For EVERY non-root node, set "relation": a SHORT word/phrase (1–4 words) describing how it relates to its PARENT.
+- Examples: 包含 / 导致 / 依赖 / 对比 / 解决 / 风险 / 前提 / 例子 / 子任务 / leads to / part of / blocks / vs.
+- Pick the relation that genuinely fits the logic. The root node has no relation.
+
+QUALITY
 - Group by semantic relationship, not speaking order. Merge near-duplicates.
-- Be faithful — do not invent facts the snippet doesn't support.
-- No sentences, no punctuation except hyphens/slashes when natural.
+- Be faithful — do not invent facts the notes don't support.
+- Aim for a map that helps the user SEE the structure of their own thinking at a glance.
 
 Return STRICT JSON only, no prose, no code fences:
-{ "root": { "id": "r", "label": "...", "children": [ { "id": "n1", "label": "...", "children": [ ... ] } ] } }`;
-
+{ "root": { "id": "r", "label": "...", "children": [ { "id": "n1", "label": "...", "relation": "...", "children": [ { "id": "n1a", "label": "...", "relation": "...", "children": [] } ] } ] } }`;
 
 export const generateMindMap = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])

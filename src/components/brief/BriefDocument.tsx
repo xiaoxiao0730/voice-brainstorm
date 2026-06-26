@@ -127,6 +127,7 @@ export const BriefDocument = forwardRef<BriefDocumentHandle, Props>(function Bri
   const composingRef = useRef(false);
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastSnapshotRef = useRef<Map<string, BriefBlock>>(new Map());
+  const looseNodeSnapshotRef = useRef<WeakMap<Node, { id: string; orderKey: string }>>(new WeakMap());
   const sessionIdRef = useRef(sessionId);
   const selectedImageRef = useRef<HTMLImageElement | null>(null);
   const [imageToolbar, setImageToolbar] = useState<{ x: number; y: number; width: string } | null>(null);
@@ -157,37 +158,63 @@ export const BriefDocument = forwardRef<BriefDocumentHandle, Props>(function Bri
     const el = editorRef.current;
     if (!el) return [];
     const sid = sessionIdRef.current;
-    const children = Array.from(el.children) as HTMLElement[];
+    const nodes = Array.from(el.childNodes);
     const out: BriefBlock[] = [];
     let prevKey: string | null = null;
-    for (let i = 0; i < children.length; i++) {
-      const ch = children[i];
-      const { html, text } = readLineHtml(ch);
-      const hasImg = !!ch.querySelector("img");
-      if (!text && !hasImg) continue;
-      let id = ch.dataset.lineId;
-      if (!id) {
-        id = (crypto as Crypto).randomUUID();
-        ch.dataset.lineId = id;
-      }
-      let orderKey = ch.dataset.orderKey;
-      if (!orderKey) {
-        let nextKey: string | null = null;
-        for (let j = i + 1; j < children.length; j++) {
-          const k = children[j].dataset.orderKey;
-          if (k) {
-            nextKey = k;
-            break;
-          }
+    for (let i = 0; i < nodes.length; i++) {
+      const node = nodes[i];
+      let id: string | undefined;
+      let orderKey: string | undefined;
+      let kind: LineKind = "p";
+      let html = "";
+      let text = "";
+      let hasImg = false;
+
+      if (node instanceof HTMLElement) {
+        const ch = node;
+        const read = readLineHtml(ch);
+        html = read.html;
+        text = read.text;
+        hasImg = !!ch.querySelector("img");
+        id = ch.dataset.lineId;
+        orderKey = ch.dataset.orderKey;
+        kind = ch.tagName === "H2" ? "h2" : "p";
+        if (!id) {
+          id = (crypto as Crypto).randomUUID();
+          ch.dataset.lineId = id;
         }
-        orderKey = between(prevKey, nextKey);
-        ch.dataset.orderKey = orderKey;
+        if (!orderKey) {
+          let nextKey: string | null = null;
+          for (let j = i + 1; j < nodes.length; j++) {
+            const next = nodes[j];
+            if (next instanceof HTMLElement && next.dataset.orderKey) {
+              nextKey = next.dataset.orderKey;
+              break;
+            }
+          }
+          orderKey = between(prevKey, nextKey);
+          ch.dataset.orderKey = orderKey;
+        }
+        ch.removeAttribute("data-pending");
+        ch.querySelectorAll("[data-control]").forEach((n) => n.remove());
+      } else if (node.nodeType === Node.TEXT_NODE) {
+        text = (node.textContent ?? "")
+          .replace(/\u00a0/g, " ")
+          .replace(/\u200b/g, "")
+          .trim();
+        html = escapeHtml(text);
+        const existing = looseNodeSnapshotRef.current.get(node);
+        id = existing?.id;
+        orderKey = existing?.orderKey;
+        if (!id) id = (crypto as Crypto).randomUUID();
+        if (!orderKey) orderKey = between(prevKey, null);
+        looseNodeSnapshotRef.current.set(node, { id, orderKey });
+      } else {
+        continue;
       }
+
+      if (!text && !hasImg) continue;
       prevKey = orderKey;
-      const kind: LineKind = ch.tagName === "H2" ? "h2" : "p";
-      // Once user touches a line, it's no longer pending.
-      ch.removeAttribute("data-pending");
-      ch.querySelectorAll("[data-control]").forEach((n) => n.remove());
       out.push({
         id,
         sessionId: sid,
@@ -210,6 +237,10 @@ export const BriefDocument = forwardRef<BriefDocumentHandle, Props>(function Bri
       saveTimerRef.current = null;
     }
     if (composingRef.current) return;
+    // If the editor element is gone (e.g. the component is unmounting because
+    // the user switched to the Map tab), reading the DOM would yield an empty
+    // list and falsely delete every block. Skip — there's nothing new to flush.
+    if (!editorRef.current) return;
     const lines = readDom();
     const prev = lastSnapshotRef.current;
     const nextMap = new Map(lines.map((l) => [l.id, l]));

@@ -27,11 +27,18 @@ import {
 import { getSpeechToken } from "@/lib/speech.functions";
 import { startAzureRecognizer, type SpeechRecognizerHandle } from "@/lib/speech/azureRecognizer";
 
-import { createSession, deleteSession, endSession, getSessionContext, listSessions } from "@/lib/session.functions";
+import {
+  createSession,
+  deleteSession,
+  endSession,
+  getSessionContext,
+  listSessions,
+} from "@/lib/session.functions";
 
 import {
   deleteBriefNode,
   loadBrief,
+  loadTranscript,
   persistChunks,
   persistSegment,
   upsertBriefNode,
@@ -45,17 +52,28 @@ import { generateIntervention } from "@/lib/agent/responseGenerator.functions";
 import { logIntervention } from "@/lib/agent/interventionLog.functions";
 import { createPolicyEngine } from "@/lib/agent/interventionPolicy";
 import { assessDensity } from "@/lib/agent/segmentGate";
-import { publish as publishSignal, snapshot as signalSnapshot, summarizeForInject } from "@/lib/agent/signalBus";
+import {
+  publish as publishSignal,
+  snapshot as signalSnapshot,
+  summarizeForInject,
+} from "@/lib/agent/signalBus";
 import { DEFAULT_TEMPLATE_ID, getTemplate, TEMPLATES } from "@/lib/pipeline/thinkingTemplate";
 import { type AgentStatus } from "@/components/agent/AgentPanel";
 import { sessionStore } from "@/lib/orchestrator/sessionStore";
-import { attachCoordinator } from "@/lib/orchestrator/coordinator";
 import { attachInsightCoordinator } from "@/lib/orchestrator/insightCoordinator";
-import { bulletLane } from "@/lib/pipeline/bulletLane.functions";
 import { pipelineTracer } from "@/lib/debug/pipelineTracer";
 import { PipelineInspector } from "@/components/debug/PipelineInspector";
 import { generateMindMap } from "@/lib/mindmap/generateMindMap.functions";
 import { loadIdeaCanvas, saveIdeaCanvas } from "@/lib/ideaCanvas.functions";
+import {
+  planThoughtTurnContract,
+  type ThoughtTurnCanvasOp,
+} from "@/lib/orchestrator/thoughtTurnContract.functions";
+import {
+  formatThinkingState,
+  loadThinkingState,
+  type SessionThinkingState,
+} from "@/lib/agent/thinkingState.functions";
 
 export const Route = createFileRoute("/_authenticated/workbench")({
   validateSearch: (search: Record<string, unknown>) => ({
@@ -64,7 +82,10 @@ export const Route = createFileRoute("/_authenticated/workbench")({
   head: () => ({
     meta: [
       { title: "Murmur — Co-thinking Workbench" },
-      { name: "description", content: "Voice-driven AI co-thinking workbench with a live brief canvas." },
+      {
+        name: "description",
+        content: "Voice-driven AI co-thinking workbench with a live brief canvas.",
+      },
     ],
     links: [
       { rel: "preconnect", href: "https://fonts.googleapis.com" },
@@ -73,14 +94,33 @@ export const Route = createFileRoute("/_authenticated/workbench")({
         rel: "stylesheet",
         href: "https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Inter:wght@400;500;600&display=swap",
       },
-      { rel: "stylesheet", href: "https://fonts.googleapis.com/icon?family=Material+Symbols+Outlined" },
+      {
+        rel: "stylesheet",
+        href: "https://fonts.googleapis.com/icon?family=Material+Symbols+Outlined",
+      },
     ],
   }),
   component: Workbench,
 });
 
-type SessionRow = { id: string; title: string; status: string; started_at: string; ended_at: string | null };
+type SessionRow = {
+  id: string;
+  title: string;
+  status: string;
+  started_at: string;
+  ended_at: string | null;
+};
 type SurfaceMode = "brief" | "map";
+
+const EMPTY_THINKING_STATE: SessionThinkingState = {
+  current_goal: "",
+  user_intent: "",
+  assumptions: [],
+  open_questions: [],
+  promising_directions: [],
+  decision_points: [],
+  last_turn_id: null,
+};
 
 function relative(ts: string) {
   const diff = (Date.now() - new Date(ts).getTime()) / 1000;
@@ -101,6 +141,25 @@ function briefDocToPlainText(doc: BriefDoc) {
     .join("\n\n");
 }
 
+function ideaCanvasToPlainText(canvas: IdeaCanvasState) {
+  return canvas.nodes
+    .map((node) => {
+      const title = node.data.title?.trim();
+      const body = node.data.body?.trim();
+      return [title, body].filter(Boolean).join(": ");
+    })
+    .filter(Boolean)
+    .slice(-30)
+    .join("\n");
+}
+
+function nextIdeaId(prefix = "contract") {
+  if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
+    return `${prefix}-${crypto.randomUUID()}`;
+  }
+  return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
 function Workbench() {
   const navigate = useNavigate();
 
@@ -116,18 +175,20 @@ function Workbench() {
 
   const getToken = useServerFn(getSpeechToken);
   const loadB = useServerFn(loadBrief);
+  const loadT = useServerFn(loadTranscript);
   const upsertN = useServerFn(upsertBriefNode);
   const deleteN = useServerFn(deleteBriefNode);
   const acceptN = useServerFn(acceptPendingBlock);
   const saveChunks = useServerFn(persistChunks);
   const saveSegment = useServerFn(persistSegment);
-  const runBulletLane = useServerFn(bulletLane);
   const generateNudge = useServerFn(generateIntervention);
   const logIntv = useServerFn(logIntervention);
   const mintRealtime = useServerFn(getRealtimeSession);
   const genMindMap = useServerFn(generateMindMap);
   const loadCanvas = useServerFn(loadIdeaCanvas);
   const saveCanvas = useServerFn(saveIdeaCanvas);
+  const planContract = useServerFn(planThoughtTurnContract);
+  const loadState = useServerFn(loadThinkingState);
 
   // UI state
   const [sessions, setSessions] = useState<SessionRow[]>([]);
@@ -145,7 +206,7 @@ function Workbench() {
   const [surfaceMode, setSurfaceMode] = useState<SurfaceMode>("brief");
   const [ideaCanvas, setIdeaCanvas] = useState<IdeaCanvasState>({ nodes: [], edges: [] });
   const [mapLoading, setMapLoading] = useState(false);
-  const [autoMapEnabled, setAutoMapEnabled] = useState(true);
+  const [thinkingState, setThinkingState] = useState<SessionThinkingState>(EMPTY_THINKING_STATE);
 
   // Agent state — Realtime voice lane only. Background canvas lane runs
   // whenever `listening` is true, independent of `agentEnabled`.
@@ -180,14 +241,15 @@ function Workbench() {
   const streamRef = useRef<MediaStream | null>(null);
   const rafRef = useRef<number | null>(null);
   const docRef = useRef(doc);
+  const ideaCanvasRef = useRef(ideaCanvas);
+  const thinkingStateRef = useRef<SessionThinkingState>(EMPTY_THINKING_STATE);
   const activeSessionRef = useRef(activeSessionId);
 
   // Agent refs
   const realtimeRef = useRef<RealtimeClient | null>(null);
   const policyRef = useRef(createPolicyEngine(null));
   const recentTextsRef = useRef<string[]>([]);
-  // Fast-lane: bullets emitted recently (last ~8) so the bullet lane avoids repeats.
-  const recentBulletsRef = useRef<string[]>([]);
+  const recentThoughtTurnsRef = useRef<string[]>([]);
   const listeningRef = useRef(listening);
   const agentConnectedAtRef = useRef(Date.now());
   const isEditingRef = useRef(false);
@@ -197,39 +259,44 @@ function Workbench() {
   const skipIdeaCanvasSaveRef = useRef(false);
   const loadedIdeaCanvasSessionRef = useRef<string | null>(null);
   const ideaCanvasSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const openSessionSeqRef = useRef(0);
+  const pendingBriefWritesRef = useRef<Set<Promise<unknown>>>(new Set());
   const surfaceModeRef = useRef<SurfaceMode>("brief");
-  const mapLoadingRef = useRef(false);
-  const autoMapEnabledRef = useRef(true);
-  const autoMappedTurnIdsRef = useRef<Set<string>>(new Set());
   const lastAutoMapAtRef = useRef(0);
+  const coThinkingTurnIdsRef = useRef<Set<string>>(new Set());
   const [appliedTemplateId, setAppliedTemplateId] = useState<string>(DEFAULT_TEMPLATE_ID);
 
   // Stage 4: running research tasks (taskId → query) for the active session.
   const [researchRunning, setResearchRunning] = useState<Record<string, string>>({});
 
+  // True while the slow lane (decideBrief) is working on a finalized turn —
+  // drives the canvas "AI is thinking…" indicator.
+  const [briefThinking, setBriefThinking] = useState(false);
+
   useEffect(() => {
     docRef.current = doc;
   }, [doc]);
   useEffect(() => {
+    ideaCanvasRef.current = ideaCanvas;
+  }, [ideaCanvas]);
+  useEffect(() => {
+    thinkingStateRef.current = thinkingState;
+  }, [thinkingState]);
+  useEffect(() => {
     activeSessionRef.current = activeSessionId;
     policyRef.current = createPolicyEngine(activeSessionId);
     recentTextsRef.current = [];
-    recentBulletsRef.current = [];
-    autoMappedTurnIdsRef.current.clear();
+    recentThoughtTurnsRef.current = [];
+    coThinkingTurnIdsRef.current.clear();
     lastAutoMapAtRef.current = 0;
   }, [activeSessionId]);
+
   useEffect(() => {
     listeningRef.current = listening;
   }, [listening]);
   useEffect(() => {
     surfaceModeRef.current = surfaceMode;
   }, [surfaceMode]);
-  useEffect(() => {
-    mapLoadingRef.current = mapLoading;
-  }, [mapLoading]);
-  useEffect(() => {
-    autoMapEnabledRef.current = autoMapEnabled;
-  }, [autoMapEnabled]);
 
   // Persist template + applied-template per session.
   useEffect(() => {
@@ -273,22 +340,30 @@ function Workbench() {
     const emptyCanvas: IdeaCanvasState = { nodes: [], edges: [] };
     void (async () => {
       try {
-        const fromDb = (await loadCanvas({ data: { sessionId: activeSessionId } })) as IdeaCanvasState;
+        const fromDb = (await loadCanvas({
+          data: { sessionId: activeSessionId },
+        })) as IdeaCanvasState;
         if (cancelled) return;
         const localCanvas = readLocalCanvas();
         const hasDbCanvas = (fromDb.nodes?.length ?? 0) > 0 || (fromDb.edges?.length ?? 0) > 0;
-        const hasLocalCanvas = (localCanvas?.nodes.length ?? 0) > 0 || (localCanvas?.edges.length ?? 0) > 0;
+        const hasLocalCanvas =
+          (localCanvas?.nodes.length ?? 0) > 0 || (localCanvas?.edges.length ?? 0) > 0;
         const next = hasDbCanvas ? fromDb : hasLocalCanvas ? localCanvas! : emptyCanvas;
         setIdeaCanvas(next);
         loadedIdeaCanvasSessionRef.current = activeSessionId;
         if (!hasDbCanvas && hasLocalCanvas) {
-          void saveCanvas({
-            data: {
-              sessionId: activeSessionId,
-              nodes: localCanvas!.nodes,
-              edges: localCanvas!.edges,
-            },
-          }).catch((e) => console.warn("[ideaCanvas] seed local canvas failed", e));
+          void sessionStore
+            .getOrCreate(activeSessionId)
+            .canvasQueue.run(() =>
+              saveCanvas({
+                data: {
+                  sessionId: activeSessionId,
+                  nodes: localCanvas!.nodes,
+                  edges: localCanvas!.edges,
+                },
+              }),
+            )
+            .catch((e) => console.warn("[ideaCanvas] seed local canvas failed", e));
         }
       } catch (e) {
         if (cancelled) return;
@@ -307,7 +382,10 @@ function Workbench() {
     if (!activeSessionId) return;
     if (loadedIdeaCanvasSessionRef.current !== activeSessionId) return;
     if (typeof window !== "undefined") {
-      window.localStorage.setItem(`murmur.ideaCanvas.${activeSessionId}`, JSON.stringify(ideaCanvas));
+      window.localStorage.setItem(
+        `murmur.ideaCanvas.${activeSessionId}`,
+        JSON.stringify(ideaCanvas),
+      );
     }
     if (skipIdeaCanvasSaveRef.current) {
       skipIdeaCanvasSaveRef.current = false;
@@ -315,13 +393,17 @@ function Workbench() {
     }
     if (ideaCanvasSaveTimerRef.current) clearTimeout(ideaCanvasSaveTimerRef.current);
     ideaCanvasSaveTimerRef.current = setTimeout(() => {
-      void saveCanvas({
-        data: {
-          sessionId: activeSessionId,
-          nodes: ideaCanvas.nodes,
-          edges: ideaCanvas.edges,
-        },
-      }).catch((e) => console.warn("[ideaCanvas] save failed", e));
+      const sid = activeSessionId;
+      const snapshot = { nodes: ideaCanvas.nodes, edges: ideaCanvas.edges };
+      // Serialize through the per-session canvas queue: saveIdeaCanvas is a
+      // non-atomic delete-then-insert, so overlapping saves could interleave
+      // and corrupt/drop nodes. The mutex guarantees one save at a time.
+      void sessionStore
+        .getOrCreate(sid)
+        .canvasQueue.run(() =>
+          saveCanvas({ data: { sessionId: sid, nodes: snapshot.nodes, edges: snapshot.edges } }),
+        )
+        .catch((e) => console.warn("[ideaCanvas] save failed", e));
     }, 700);
     return () => {
       if (ideaCanvasSaveTimerRef.current) {
@@ -348,6 +430,31 @@ function Workbench() {
       }
     }, 3000);
   }, []);
+
+  useEffect(() => {
+    if (!activeSessionId) {
+      setThinkingState(EMPTY_THINKING_STATE);
+      thinkingStateRef.current = EMPTY_THINKING_STATE;
+      return;
+    }
+    let cancelled = false;
+    void loadState({ data: { sessionId: activeSessionId } })
+      .then((state) => {
+        if (cancelled) return;
+        setThinkingState(state);
+        thinkingStateRef.current = state;
+        scheduleInject(`[session thinking state]\n${formatThinkingState(state)}`);
+      })
+      .catch((e) => {
+        if (cancelled) return;
+        console.warn("[thinkingState] load failed", e);
+        setThinkingState(EMPTY_THINKING_STATE);
+        thinkingStateRef.current = EMPTY_THINKING_STATE;
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeSessionId, loadState, scheduleInject]);
 
   // ── Shared Thinking State ─────────────────────────────────────────────
   // Whenever the Live Brief canvas changes (slow-lane patches, research
@@ -385,7 +492,6 @@ function Workbench() {
     };
   }, [doc, agentEnabled, agentStatus]);
 
-
   // Local no-auth mode.
   useEffect(() => {
     setUserEmail("local mode");
@@ -412,6 +518,17 @@ function Workbench() {
       return [];
     }
   }, [list]);
+
+  const trackBriefWrite = useCallback((write: Promise<unknown>) => {
+    pendingBriefWritesRef.current.add(write);
+    write.finally(() => pendingBriefWritesRef.current.delete(write));
+  }, []);
+
+  const drainBriefWrites = useCallback(async () => {
+    const writes = Array.from(pendingBriefWritesRef.current);
+    if (writes.length === 0) return;
+    await Promise.allSettled(writes);
+  }, []);
 
   // Initial load — honor ?session=… first, else open most recent or create new
   useEffect(() => {
@@ -466,11 +583,7 @@ function Workbench() {
   );
 
   const applyResearchResult = useCallback(
-    (
-      sessionId: string,
-      operationId: string | undefined,
-      result: ResearchResult,
-    ) => {
+    (sessionId: string, operationId: string | undefined, result: ResearchResult) => {
       const opId = operationId ?? crypto.randomUUID();
       const allKeys = Object.values(docRef.current)
         .map((b) => b.orderKey)
@@ -479,9 +592,7 @@ function Workbench() {
       const appended: BriefBlock[] = [];
 
       // Heading text — escape only (no markdown formatting expected here).
-      const headingHtml = renderMarkdownToSafeHtml(
-        `Research: ${result.title || result.query}`,
-      );
+      const headingHtml = renderMarkdownToSafeHtml(`Research: ${result.title || result.query}`);
       const mkHeading = (html: string): BriefBlock => {
         lastKey = between(lastKey, null);
         return {
@@ -542,6 +653,88 @@ function Workbench() {
     [],
   );
 
+  const applyCanvasOps = useCallback((ops: ThoughtTurnCanvasOp[]) => {
+    const meaningful = ops.filter((op) => op.action !== "none");
+    if (meaningful.length === 0) return;
+
+    setIdeaCanvas((current) => {
+      const nodes = [...current.nodes];
+      const edges = [...current.edges];
+      const byTitle = new Map(
+        nodes
+          .map((node) => [node.data.title.trim().toLowerCase(), node] as const)
+          .filter(([title]) => title.length > 0),
+      );
+      const kindCol: Record<ThoughtTurnCanvasOp["kind"], number> = {
+        focus: 0,
+        idea: 1,
+        question: 2,
+        risk: 3,
+        decision: 4,
+        next: 5,
+      };
+
+      for (const op of meaningful) {
+        const title = op.title.trim();
+        const titleKey = title.toLowerCase();
+        if ((op.action === "add_card" || op.action === "update_card") && title) {
+          const existing = byTitle.get(titleKey);
+          if (existing) {
+            nodes.splice(
+              nodes.findIndex((node) => node.id === existing.id),
+              1,
+              {
+                ...existing,
+                data: {
+                  ...existing.data,
+                  kind: op.kind,
+                  body: op.body.trim() || existing.data.body || "",
+                },
+              },
+            );
+            continue;
+          }
+
+          const sameKindCount = nodes.filter((node) => node.data.kind === op.kind).length;
+          const id = nextIdeaId(`contract-${op.kind}`);
+          const node = {
+            id,
+            type: "ideaNode",
+            position: {
+              x: 80 + kindCol[op.kind] * 260,
+              y: 100 + sameKindCount * 130,
+            },
+            data: {
+              title,
+              body: op.body.trim(),
+              kind: op.kind,
+            },
+          };
+          nodes.push(node);
+          byTitle.set(titleKey, node);
+          continue;
+        }
+
+        if (op.action === "connect") {
+          const source = byTitle.get(op.sourceTitle.trim().toLowerCase());
+          const target = byTitle.get(op.targetTitle.trim().toLowerCase());
+          if (!source || !target || source.id === target.id) continue;
+          const id = `${source.id}-${target.id}`;
+          if (edges.some((edge) => edge.id === id)) continue;
+          edges.push({
+            id,
+            source: source.id,
+            target: target.id,
+            type: "smoothstep",
+            label: op.label.trim() || undefined,
+          });
+        }
+      }
+
+      return { nodes, edges };
+    });
+  }, []);
+
   // Stage 4: sync sessionStore + attach slow-lane coordinator to the active session.
   // Also subscribe to brief.proposed / research.requested / research.completed.
   useEffect(() => {
@@ -552,18 +745,9 @@ function Workbench() {
     sessionStore.setActive(activeSessionId);
     const slot = sessionStore.getOrCreate(activeSessionId);
 
-    const detach = attachCoordinator(activeSessionId, {
-      getSnapshot: () =>
-        Object.values(docRef.current)
-          .sort((a, b) => a.orderKey.localeCompare(b.orderKey))
-          .map((b) => ({
-            id: b.id,
-            kind: (b.level === 2 ? "h2" : "p") as "h2" | "p",
-            text: (b.level === 2 ? b.heading : b.body) ?? "",
-            locked: b.locked,
-          })),
-      getModel: () => modelRef.current,
-    });
+    // The Thought Turn Contract now owns brief writing for each finalized turn.
+    // Keep the old brief coordinator detached to avoid duplicate brief patches.
+    const detach = () => undefined;
 
     const detachInsight = attachInsightCoordinator(activeSessionId, {
       getSnapshot: () =>
@@ -578,13 +762,25 @@ function Workbench() {
       getModel: () => modelRef.current,
     });
 
+    // Slow-lane "AI is thinking…" indicator: a finalized turn kicks off
+    // decideBrief; clear when it proposes patches, or after a safety timeout
+    // (decideBrief may return zero patches and never emit brief.proposed).
+    let thinkingTimer: ReturnType<typeof setTimeout> | null = null;
+    const offThinking = slot.bus.on("thought_turn.finalized", (e) => {
+      if (e.sessionId !== activeSessionRef.current) return;
+      setBriefThinking(true);
+      if (thinkingTimer) clearTimeout(thinkingTimer);
+      thinkingTimer = setTimeout(() => setBriefThinking(false), 6000);
+    });
 
     const offProposed = slot.bus.on("brief.proposed", (e) => {
-      if (e.sessionId !== activeSessionRef.current) return;
+      if (e.sessionId !== activeSessionId) return;
+      setBriefThinking(false);
+      if (thinkingTimer) clearTimeout(thinkingTimer);
       applyProposedPatches(e.sessionId, e.operationId, e.patches);
     });
     const offResearchReq = slot.bus.on("research.requested", (e) => {
-      if (e.sessionId !== activeSessionRef.current) return;
+      if (e.sessionId !== activeSessionId) return;
       setResearchRunning((m) => ({ ...m, [e.taskId]: e.query }));
     });
     const offResearchDone = slot.bus.on("research.completed", (e) => {
@@ -593,34 +789,40 @@ function Workbench() {
         delete next[e.taskId];
         return next;
       });
-      if (e.sessionId !== activeSessionRef.current) return;
+      if (e.sessionId !== activeSessionId) return;
       applyResearchResult(e.sessionId, e.operationId, e.result);
     });
 
     return () => {
       detach();
       detachInsight();
+      offThinking();
       offProposed();
       offResearchReq();
       offResearchDone();
+      if (thinkingTimer) clearTimeout(thinkingTimer);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeSessionId]);
 
-
-
   const openSession = useCallback(
     async (id: string) => {
+      const seq = ++openSessionSeqRef.current;
       try {
         await stopListening();
       } catch {
         /* ignore */
       }
-      setActiveSessionId(id);
+      briefDocRef.current?.flush();
+      await drainBriefWrites();
       setFinals([]);
       setPartial("");
       try {
-        const briefNodes = await loadB({ data: { sessionId: id } });
+        const [briefNodes, transcriptRows] = await Promise.all([
+          loadB({ data: { sessionId: id } }),
+          loadT({ data: { sessionId: id } }),
+        ]);
+        if (seq !== openSessionSeqRef.current) return;
         const map: BriefDoc = {};
         // Legacy split: a row with BOTH heading and body becomes 2 lines
         // (heading first, body next) so the continuous document keeps both.
@@ -665,19 +867,40 @@ function Workbench() {
                 sourceChunkIds: [],
               };
               map[seeded.id] = seeded;
-              void upsertN({ data: blockToNodeUpsert(seeded) }).catch((e) => console.warn("seed upsert failed", e));
+              void upsertN({ data: blockToNodeUpsert(seeded) }).catch((e) =>
+                console.warn("seed upsert failed", e),
+              );
             }
           } catch (e) {
             console.warn("getCtx failed", e);
           }
         }
+        if (seq !== openSessionSeqRef.current) return;
         setDoc(map);
+        docRef.current = map;
+        setFinals(
+          transcriptRows
+            .filter((row) => row.isFinal && row.text.trim())
+            .map((row) => ({ id: row.id, text: row.text })),
+        );
+        setPartial("");
+        setActiveSessionId(id);
+        // Mirror the active session into the URL so a refresh re-opens the SAME
+        // session (the init effect honors ?session=… first). replace: true keeps
+        // session switches out of the back/forward history.
+        navigate({ to: "/workbench", search: { session: id }, replace: true });
+        setError(null);
       } catch (e: any) {
+        if (seq !== openSessionSeqRef.current) return;
+        setDoc({});
+        docRef.current = {};
+        setActiveSessionId(id);
+        navigate({ to: "/workbench", search: { session: id }, replace: true });
         setError(e.message);
       }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [loadB, getCtx, upsertN],
+    [loadB, loadT, getCtx, upsertN, navigate, drainBriefWrites],
   );
 
   const newSession = async () => {
@@ -690,7 +913,8 @@ function Workbench() {
     async (id: string) => {
       const target = sessions.find((s) => s.id === id);
       const label = target?.title ?? "this session";
-      if (!window.confirm(`Delete "${label}"? This permanently removes its transcript and brief.`)) return;
+      if (!window.confirm(`Delete "${label}"? This permanently removes its transcript and brief.`))
+        return;
       setMenuOpenFor(null);
       try {
         await deleteS({ data: { sessionId: id } });
@@ -719,7 +943,9 @@ function Workbench() {
 
   const persistBlock = useCallback(
     async (block: BriefBlock) => {
-      await upsertN({ data: blockToNodeUpsert(block) }).catch((e) => console.warn("upsert failed", e));
+      await upsertN({ data: blockToNodeUpsert(block) }).catch((e) =>
+        console.warn("upsert failed", e),
+      );
     },
     [upsertN],
   );
@@ -751,74 +977,15 @@ function Workbench() {
         console.warn("persistSegment failed", e);
       }
 
-      // Stage 4: feed long-form ThoughtTurn buffer (slow-lane coordinator).
+      // Feed the long-form ThoughtTurn buffer. The slow-lane coordinator
+      // (decideBrief) runs when this buffer finalizes a turn (~1.8s pause).
       try {
         sessionStore.getOrCreate(segment.sessionId).thoughtTurnBuffer.ingest(segment);
       } catch (e) {
         console.warn("thoughtTurnBuffer.ingest failed", e);
       }
-
-      // Stage A1 — FAST LANE: per-segment bullet extraction. Runs in parallel
-      // with the slow-lane decideBrief (which only fires at ThoughtTurn
-      // boundaries). Fire-and-forget; failures are silent.
-      if (segment.rawText.trim().length >= 8) {
-        const sid = segment.sessionId;
-        const briefHints = Object.values(docRef.current)
-          .sort((a, b) => a.orderKey.localeCompare(b.orderKey))
-          .map((b) => (b.level === 2 ? b.heading : b.body)?.trim() || "")
-          .filter((t) => t.length > 0)
-          .slice(-12);
-        const recentBullets = recentBulletsRef.current.slice(-8);
-        const endSpan = pipelineTracer.startSpan({
-          sessionId: sid,
-          kind: "bulletLane.start",
-          endKind: "bulletLane.end",
-          key: segment.segmentId,
-          meta: { chars: segment.rawText.length },
-        });
-        void runBulletLane({
-          data: {
-            segmentText: segment.rawText,
-            recentBullets,
-            briefHints,
-          },
-        })
-          .then((res) => {
-            endSpan({ bullets: res.bullets.length });
-            if (!res.bullets.length) return;
-            if (sessionStore.getActive() !== sid) return;
-            const slot = sessionStore.get(sid);
-            if (!slot) return;
-            // Dedupe against recently-emitted bullet text.
-            const fresh = res.bullets.filter(
-              (b) => !recentBulletsRef.current.includes(b.text),
-            );
-            if (!fresh.length) return;
-            recentBulletsRef.current = [
-              ...recentBulletsRef.current,
-              ...fresh.map((b) => b.text),
-            ].slice(-16);
-            slot.bus.emit({
-              type: "brief.proposed",
-              sessionId: sid,
-              operationId: crypto.randomUUID(),
-              patches: fresh.map((b) => ({
-                action: "append_block" as const,
-                blockId: null,
-                level: 3 as const,
-                heading: "",
-                bodyMarkdown: b.text,
-                sourceChunkIds: segment.chunkIds,
-              })),
-            });
-          })
-          .catch((err) => {
-            endSpan({ error: err instanceof Error ? err.message : String(err) });
-          });
-      }
     },
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [saveSegment, runBulletLane],
+    [saveSegment],
   );
 
   // ---- BACKGROUND CANVAS LANE ----
@@ -879,7 +1046,11 @@ function Workbench() {
       setAiLoading(true);
 
       let result:
-        | { emit: true; line: { kind: "h2" | "p"; text: string; rationale: string }; insight?: string }
+        | {
+            emit: true;
+            line: { kind: "h2" | "p"; text: string; rationale: string };
+            insight?: string;
+          }
         | { emit: false; insight?: string; error?: string };
       try {
         result = (await generateNudge({
@@ -904,7 +1075,11 @@ function Workbench() {
       if (!result.emit) {
         try {
           await logIntv({
-            data: { sessionId: segment.sessionId, segmentId: segment.segmentId, decision: "silent" },
+            data: {
+              sessionId: segment.sessionId,
+              segmentId: segment.segmentId,
+              decision: "silent",
+            },
           });
         } catch {
           /* best effort */
@@ -940,7 +1115,12 @@ function Workbench() {
       await persistBlock(newBlock);
       policyRef.current.recordCanvas();
 
-      publishSignal({ type: "pending_appear", slotId: "", heading: newBlock.heading, body: newBlock.body });
+      publishSignal({
+        type: "pending_appear",
+        slotId: "",
+        heading: newBlock.heading,
+        body: newBlock.body,
+      });
       scheduleInject(
         summarizeForInject({
           type: "pending_appear",
@@ -1021,6 +1201,11 @@ function Workbench() {
             const chunkId = crypto.randomUUID();
             setPartial("");
             setFinals((f) => [...f, { id: chunkId, text: e.text }]);
+            pipelineTracer.log({
+              sessionId,
+              kind: "azure.final_chunk",
+              meta: { chars: e.text.length, sample: e.text.slice(0, 60) },
+            });
             // Persist chunk + push to buffer
             const endMs = Math.round(e.offsetMs + e.durationMs);
             saveChunks({
@@ -1221,34 +1406,61 @@ function Workbench() {
       setDoc(map);
       docRef.current = map;
       for (const b of upserts) {
-        void persistBlock(b);
+        trackBriefWrite(persistBlock(b));
         publishSignal({ type: "edit", slotId: "", heading: b.heading, body: b.body });
         scheduleInject(
-          summarizeForInject({ type: "edit", slotId: "", heading: b.heading, body: b.body, ts: Date.now() }),
+          summarizeForInject({
+            type: "edit",
+            slotId: "",
+            heading: b.heading,
+            body: b.body,
+            ts: Date.now(),
+          }),
         );
       }
       for (const id of deletedIds) {
-        void deleteN({ data: { id } }).catch((e) => console.warn("delete failed", e));
+        const sessionId = activeSessionRef.current;
+        if (!sessionId) continue;
+        trackBriefWrite(
+          deleteN({ data: { id, sessionId } }).catch((e) => console.warn("delete failed", e)),
+        );
       }
     },
-    [persistBlock, deleteN, scheduleInject],
+    [persistBlock, deleteN, scheduleInject, trackBriefWrite],
   );
 
   const onAcceptPending = useCallback(
     async (id: string) => {
       const existing = docRef.current[id];
       if (!existing) return;
-      const next: BriefBlock = { ...existing, isPending: false, locked: true, lastEditedBy: "user" };
+      const next: BriefBlock = {
+        ...existing,
+        isPending: false,
+        locked: true,
+        lastEditedBy: "user",
+      };
       const map = { ...docRef.current, [id]: next };
       setDoc(map);
       docRef.current = map;
-      await acceptN({ data: { id } }).catch((e) => console.warn("accept failed", e));
+      await acceptN({ data: { id, sessionId: next.sessionId } }).catch((e) =>
+        console.warn("accept failed", e),
+      );
       publishSignal({ type: "accept", slotId: "", heading: next.heading, body: next.body });
       scheduleInject(
-        summarizeForInject({ type: "accept", slotId: "", heading: next.heading, body: next.body, ts: Date.now() }),
+        summarizeForInject({
+          type: "accept",
+          slotId: "",
+          heading: next.heading,
+          body: next.body,
+          ts: Date.now(),
+        }),
       );
       void logIntv({
-        data: { sessionId: next.sessionId, decision: "accept", responseText: next.body || next.heading },
+        data: {
+          sessionId: next.sessionId,
+          decision: "accept",
+          responseText: next.body || next.heading,
+        },
       }).catch(() => undefined);
     },
     [acceptN, logIntv, scheduleInject],
@@ -1261,9 +1473,18 @@ function Workbench() {
       delete next[id];
       setDoc(next);
       docRef.current = next;
-      await deleteN({ data: { id } }).catch((e) => console.warn("reject failed", e));
       if (existing) {
-        publishSignal({ type: "reject", slotId: "", heading: existing.heading, body: existing.body });
+        await deleteN({ data: { id, sessionId: existing.sessionId } }).catch((e) =>
+          console.warn("reject failed", e),
+        );
+      }
+      if (existing) {
+        publishSignal({
+          type: "reject",
+          slotId: "",
+          heading: existing.heading,
+          body: existing.body,
+        });
         scheduleInject(
           summarizeForInject({
             type: "reject",
@@ -1274,7 +1495,11 @@ function Workbench() {
           }),
         );
         void logIntv({
-          data: { sessionId: existing.sessionId, decision: "reject", responseText: existing.body || existing.heading },
+          data: {
+            sessionId: existing.sessionId,
+            decision: "reject",
+            responseText: existing.body || existing.heading,
+          },
         }).catch(() => undefined);
       }
     },
@@ -1298,7 +1523,9 @@ function Workbench() {
       const existingKeys = Object.values(docRef.current)
         .map((b) => b.orderKey)
         .sort();
-      let lastKey: string | null = existingKeys.length ? existingKeys[existingKeys.length - 1] : null;
+      let lastKey: string | null = existingKeys.length
+        ? existingKeys[existingKeys.length - 1]
+        : null;
       const newBlocks: BriefBlock[] = [];
       for (const h of tpl.headings) {
         lastKey = between(lastKey, null);
@@ -1325,13 +1552,14 @@ function Workbench() {
     [appliedTemplateId, activeSessionId, persistBlock],
   );
 
-  const liveText = useMemo(() => (finals.map((f) => f.text).join(" ") + " " + partial).trim(), [finals, partial]);
-
-  const briefPlainText = useMemo(
-    () => briefDocToPlainText(doc),
-    [doc],
+  const liveText = useMemo(
+    () => (finals.map((f) => f.text).join(" ") + " " + partial).trim(),
+    [finals, partial],
   );
 
+  const briefPlainText = useMemo(() => briefDocToPlainText(doc), [doc]);
+
+  // Selection → mind map: APPEND a small map from a highlighted snippet.
   const appendMapFromText = useCallback(
     async ({ text, context }: { text: string; context: string }) => {
       const selectedText = text.trim();
@@ -1358,38 +1586,109 @@ function Workbench() {
     [genMindMap],
   );
 
+  // Generate button: REBUILD one structured mind map from the WHOLE brief,
+  // replacing the current canvas. This is the "summarize my whole thinking"
+  // path — a central topic radiating out into labeled branches.
   const generateMapFromBrief = useCallback(() => {
-    void appendMapFromText({
-      text: briefPlainText || liveText || "Untitled idea",
-      context: briefPlainText.slice(0, 4000),
-    });
-  }, [appendMapFromText, briefPlainText, liveText]);
+    const full = briefPlainText || liveText || "";
+    if (!full.trim()) {
+      setError("Nothing to map yet — capture some thoughts in the brief first.");
+      return;
+    }
+    setSurfaceMode("map");
+    setMapLoading(true);
+    setError(null);
+    void genMindMap({
+      data: {
+        selectedText: full.slice(0, 8000),
+        context: "",
+        model: modelRef.current,
+      },
+    })
+      .then((res) => {
+        setIdeaCanvas(treeToIdeaCanvas(res.root));
+      })
+      .catch((e) => {
+        setError(e instanceof Error ? e.message : String(e));
+      })
+      .finally(() => {
+        setMapLoading(false);
+      });
+  }, [genMindMap, briefPlainText, liveText]);
 
+  // Per-turn: the Thought Turn Contract is the main co-thinking orchestrator.
+  // One model call decides state, brief ops, canvas ops, next directions, and a
+  // grounding hint for the realtime voice agent.
   useEffect(() => {
     if (!activeSessionId) return;
     const slot = sessionStore.getOrCreate(activeSessionId);
-    const offAutoMap = slot.bus.on("thought_turn.finalized", (e) => {
+    const offTurn = slot.bus.on("thought_turn.finalized", (e) => {
       if (e.sessionId !== activeSessionRef.current) return;
-      if (surfaceModeRef.current !== "map" || !autoMapEnabledRef.current) return;
-      if (mapLoadingRef.current) return;
-      if (autoMappedTurnIdsRef.current.has(e.turnId)) return;
+      if (coThinkingTurnIdsRef.current.has(e.turnId)) return;
 
       const text = e.thoughtTurn.combinedText.trim();
       if (text.length < 16) return;
 
       const now = Date.now();
-      if (now - lastAutoMapAtRef.current < 8000) return;
+      if (now - lastAutoMapAtRef.current < 5000) return;
       lastAutoMapAtRef.current = now;
-      autoMappedTurnIdsRef.current.add(e.turnId);
+      coThinkingTurnIdsRef.current.add(e.turnId);
 
-      void appendMapFromText({
-        text,
-        context: briefDocToPlainText(docRef.current).slice(0, 4000),
-      });
+      const briefText = briefDocToPlainText(docRef.current).slice(0, 6000);
+      const mapContext = ideaCanvasToPlainText(ideaCanvasRef.current).slice(0, 4000);
+      const recentTurns = recentThoughtTurnsRef.current.slice(-6);
+      recentThoughtTurnsRef.current = [...recentTurns, text].slice(-8);
+
+      setBriefThinking(true);
+      void planContract({
+        data: {
+          sessionId: e.sessionId,
+          turnId: e.turnId,
+          userTurn: text,
+          currentThinkingState: thinkingStateRef.current,
+          briefText,
+          canvasText: mapContext,
+          recentTurns,
+          model: modelRef.current,
+        },
+      })
+        .then((contract) => {
+          setThinkingState(contract.thinkingState);
+          thinkingStateRef.current = contract.thinkingState;
+
+          const operationId = crypto.randomUUID();
+          const briefOps = contract.briefOps.map((patch) => ({
+            ...patch,
+            sourceChunkIds: e.thoughtTurn.chunkIds,
+          }));
+          if (briefOps.length > 0) {
+            applyProposedPatches(e.sessionId, operationId, briefOps);
+          }
+          if (contract.canvasOps.length > 0) {
+            applyCanvasOps(contract.canvasOps);
+          }
+
+          const voiceContext = [
+            `Intent: ${contract.intent}`,
+            `Update kind: ${contract.updateKind}`,
+            `Mode: ${contract.replyMode}`,
+            `Thinking state:\n${formatThinkingState(contract.thinkingState)}`,
+            contract.nextDirections.length ? "Next directions:" : "",
+            ...contract.nextDirections.map((d, i) => `${i + 1}. ${d.title}${d.why ? ` - ${d.why}` : ""}`),
+            contract.voiceReplyHint ? `Voice hint: ${contract.voiceReplyHint}` : "",
+          ].join("\n");
+          scheduleInject(`[thought turn contract]\n${voiceContext}`);
+        })
+        .catch((err) => {
+          console.warn("[thoughtTurnContract] planning failed", err);
+        })
+        .finally(() => {
+          setBriefThinking(false);
+        });
     });
 
-    return () => offAutoMap();
-  }, [activeSessionId, appendMapFromText]);
+    return () => offTurn();
+  }, [activeSessionId, applyCanvasOps, applyProposedPatches, planContract, scheduleInject]);
 
   const blockCount = Object.keys(doc).length;
   const activeSession = sessions.find((s) => s.id === activeSessionId);
@@ -1421,7 +1720,6 @@ function Workbench() {
     },
     [onRejectPending],
   );
-
 
   // ============= UI =============
 
@@ -1455,7 +1753,9 @@ function Workbench() {
         {sidebarOpen && (
           <>
             <div className="px-4 pt-4 pb-2">
-              <span className="text-[10px] uppercase tracking-[0.18em] text-secondary">Sessions</span>
+              <span className="text-[10px] uppercase tracking-[0.18em] text-secondary">
+                Sessions
+              </span>
             </div>
             <nav className="flex-1 overflow-y-auto px-2 pb-4 space-y-0.5">
               {sessions.map((s) => (
@@ -1467,9 +1767,14 @@ function Workbench() {
                       : "text-secondary hover:bg-surface-variant/60 hover:text-primary"
                   }`}
                 >
-                  <button onClick={() => openSession(s.id)} className="w-full text-left px-3 py-2 pr-9">
+                  <button
+                    onClick={() => openSession(s.id)}
+                    className="w-full text-left px-3 py-2 pr-9"
+                  >
                     <div className="text-sm font-medium truncate">{s.title}</div>
-                    <div className="text-[11px] text-secondary mt-0.5">{relative(s.started_at)}</div>
+                    <div className="text-[11px] text-secondary mt-0.5">
+                      {relative(s.started_at)}
+                    </div>
                   </button>
                   <button
                     onClick={(e) => {
@@ -1477,7 +1782,9 @@ function Workbench() {
                       setMenuOpenFor((cur) => (cur === s.id ? null : s.id));
                     }}
                     className={`absolute top-1.5 right-1.5 w-7 h-7 rounded-md flex items-center justify-center text-secondary hover:bg-surface hover:text-primary ${
-                      menuOpenFor === s.id ? "opacity-100" : "opacity-0 group-hover:opacity-100 focus:opacity-100"
+                      menuOpenFor === s.id
+                        ? "opacity-100"
+                        : "opacity-0 group-hover:opacity-100 focus:opacity-100"
                     }`}
                     aria-label="Session options"
                     aria-haspopup="menu"
@@ -1487,7 +1794,11 @@ function Workbench() {
                   </button>
                   {menuOpenFor === s.id && (
                     <>
-                      <div className="fixed inset-0 z-10" onClick={() => setMenuOpenFor(null)} aria-hidden="true" />
+                      <div
+                        className="fixed inset-0 z-10"
+                        onClick={() => setMenuOpenFor(null)}
+                        aria-hidden="true"
+                      />
                       <div
                         role="menu"
                         className="absolute z-20 top-9 right-1.5 min-w-[140px] rounded-md border border-auralis bg-surface shadow-lg py-1"
@@ -1512,9 +1823,15 @@ function Workbench() {
             <div className="border-t border-auralis p-3 flex items-center justify-between">
               <div className="flex items-center gap-2">
                 <div className="w-7 h-7 rounded-full bg-gradient-to-tr from-rose-400 via-indigo-300 to-emerald-300" />
-                <span className="text-xs text-primary font-medium truncate max-w-[140px]">{userEmail ?? "Murmur"}</span>
+                <span className="text-xs text-primary font-medium truncate max-w-[140px]">
+                  {userEmail ?? "Murmur"}
+                </span>
               </div>
-              <button onClick={signOut} className="text-[11px] text-secondary hover:text-primary" title="Sign out">
+              <button
+                onClick={signOut}
+                className="text-[11px] text-secondary hover:text-primary"
+                title="Sign out"
+              >
                 Sign out
               </button>
             </div>
@@ -1527,8 +1844,12 @@ function Workbench() {
         {/* AUDIO PANEL */}
         <section className="w-[380px] xl:w-[420px] shrink-0 border-r border-auralis flex flex-col min-h-0">
           <header className="h-14 px-5 flex items-center justify-between border-b border-auralis shrink-0">
-            <span className="text-xs uppercase tracking-[0.18em] text-secondary">Audio Interaction</span>
-            <span className={`text-xs flex items-center gap-2 ${listening ? "text-emerald-600" : "text-secondary"}`}>
+            <span className="text-xs uppercase tracking-[0.18em] text-secondary">
+              Audio Interaction
+            </span>
+            <span
+              className={`text-xs flex items-center gap-2 ${listening ? "text-emerald-600" : "text-secondary"}`}
+            >
               <span
                 className={`w-1.5 h-1.5 rounded-full ${listening ? "bg-emerald-500 animate-pulse" : "bg-secondary"}`}
               />
@@ -1606,15 +1927,21 @@ function Workbench() {
                   : "bg-primary text-on-primary"
               }`}
             >
-              <span className="material-symbols-outlined text-base">{listening ? "stop" : "mic"}</span>
+              <span className="material-symbols-outlined text-base">
+                {listening ? "stop" : "mic"}
+              </span>
               {listening ? "Stop" : "Start"}
             </button>
           </div>
           <div className="px-5 pb-3 flex items-center justify-center shrink-0">
             <span className="text-[11px] text-secondary">
-              <kbd className="px-1.5 py-0.5 rounded border border-auralis bg-surface text-[10px] font-mono">T</kbd>{" "}
+              <kbd className="px-1.5 py-0.5 rounded border border-auralis bg-surface text-[10px] font-mono">
+                T
+              </kbd>{" "}
               {listening ? "stop" : "start"} ·{" "}
-              <kbd className="px-1.5 py-0.5 rounded border border-auralis bg-surface text-[10px] font-mono">S</kbd>{" "}
+              <kbd className="px-1.5 py-0.5 rounded border border-auralis bg-surface text-[10px] font-mono">
+                S
+              </kbd>{" "}
               {agentStatus === "speaking" ? "silence agent" : "ask agent to speak"}
             </span>
           </div>
@@ -1637,7 +1964,9 @@ function Workbench() {
               <div className="overflow-hidden">
                 <div className="px-5 pb-4 max-h-48 overflow-y-auto text-sm leading-relaxed text-primary">
                   {finals.length === 0 && !partial && (
-                    <p className="text-secondary italic">Start speaking to see live transcription here…</p>
+                    <p className="text-secondary italic">
+                      Start speaking to see live transcription here…
+                    </p>
                   )}
                   {finals.map((f) => (
                     <p key={f.id} className="mb-1">
@@ -1696,7 +2025,8 @@ function Workbench() {
               <span className="text-xs text-secondary ml-3 flex items-center gap-1.5">
                 {aiLoading ? (
                   <>
-                    <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse" /> Thinking…
+                    <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse" />{" "}
+                    Thinking…
                   </>
                 ) : (
                   <>
@@ -1713,7 +2043,9 @@ function Workbench() {
                 disabled={surfaceMode !== "brief" || blockCount === 0}
                 className="ml-3 px-3 py-1.5 rounded-full border border-auralis bg-surface text-primary text-xs font-medium hover:bg-surface-variant disabled:opacity-40 flex items-center gap-1.5"
                 aria-label="Export to Word"
-                title={surfaceMode === "brief" ? "Export to Word (.docx)" : "Use Export JSON inside Map"}
+                title={
+                  surfaceMode === "brief" ? "Export to Word (.docx)" : "Use Export JSON inside Map"
+                }
               >
                 <span className="material-symbols-outlined text-base">download</span>
                 Export
@@ -1723,25 +2055,17 @@ function Workbench() {
           {error && (
             <div className="px-6 py-2 bg-rose-500/10 border-b border-rose-500/20 text-xs text-rose-500 flex items-center justify-between">
               <span>{error}</span>
-              <button onClick={() => setError(null)} className="text-rose-500/70 hover:text-rose-500">
+              <button
+                onClick={() => setError(null)}
+                className="text-rose-500/70 hover:text-rose-500"
+              >
                 ✕
               </button>
             </div>
           )}
-          {Object.keys(researchRunning).length > 0 && (
-            <div className="px-6 pt-3 pb-1 flex flex-col gap-1.5 shrink-0">
-              {Object.entries(researchRunning).map(([taskId, q]) => (
-                <div
-                  key={taskId}
-                  className="flex items-center gap-2 text-xs text-secondary bg-surface border border-auralis rounded-md px-3 py-1.5"
-                >
-                  <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse" />
-                  <span className="truncate">Researching: {q}</span>
-                </div>
-              ))}
-            </div>
-          )}
-          <div className={`flex-1 min-h-0 ${surfaceMode === "brief" ? "overflow-y-auto p-8" : "overflow-hidden p-4"}`}>
+          <div
+            className={`relative flex-1 min-h-0 ${surfaceMode === "brief" ? "overflow-y-auto p-8" : "overflow-hidden p-4"}`}
+          >
             {surfaceMode === "brief" ? (
               <BriefDocument
                 key={activeSessionId ?? "none"}
@@ -1758,12 +2082,25 @@ function Workbench() {
                 state={ideaCanvas}
                 sessionTitle={activeSession?.title ?? "Idea Canvas"}
                 loading={mapLoading}
-                autoGenerate={autoMapEnabled}
                 onChange={setIdeaCanvas}
-                onAutoGenerateChange={setAutoMapEnabled}
                 onGenerateFromBrief={generateMapFromBrief}
               />
             )}
+            {/* AI status indicators — pinned to the lower area of the canvas. */}
+            <div className="pointer-events-none sticky bottom-4 z-10 flex flex-col items-start gap-1.5 px-2">
+              {Object.entries(researchRunning).map(([taskId, q]) => (
+                <div key={taskId} className="flex items-center gap-2 text-xs text-secondary">
+                  <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse" />
+                  <span className="truncate max-w-[280px]">Researching: {q}</span>
+                </div>
+              ))}
+              {surfaceMode === "brief" && (briefThinking || aiLoading) && (
+                <div className="flex items-center gap-2 text-xs text-secondary">
+                  <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse" />
+                  <span>AI is thinking…</span>
+                </div>
+              )}
+            </div>
           </div>
           <footer className="h-10 px-6 flex items-center justify-between border-t border-auralis text-xs text-secondary shrink-0">
             <span>
@@ -1778,7 +2115,8 @@ function Workbench() {
           </footer>
         </section>
       </main>
-      {(import.meta.env.DEV || typeof window !== "undefined" && window.location.search.includes("debug=1")) && (
+      {(import.meta.env.DEV ||
+        (typeof window !== "undefined" && window.location.search.includes("debug=1"))) && (
         <PipelineInspector sessionId={activeSessionId} />
       )}
     </div>
