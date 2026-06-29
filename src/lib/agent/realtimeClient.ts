@@ -28,6 +28,18 @@ export type RealtimeEvents = {
   onResearchRequested?: (args: { query: string; reason?: string; callId: string }) => void;
   /** Fired when the agent invokes the stay_silent tool. */
   onStaySilent?: (reason: string) => void;
+  /** Fired when the agent proposes canvas writes. Workbench validates/applies them. */
+  onCanvasOpsProposed?: (args: { reason?: string; ops: CanvasToolOp[]; callId: string }) => void;
+};
+
+export type CanvasToolOp = {
+  action: "add_card" | "update_card" | "connect";
+  kind?: "focus" | "idea" | "question" | "decision" | "risk" | "next";
+  title?: string;
+  body?: string;
+  targetTitle?: string;
+  sourceTitle?: string;
+  label?: string;
 };
 
 export type RealtimeClient = {
@@ -103,6 +115,14 @@ SHARED THINKING STATE (CRITICAL)
 TOOLS
 - stay_silent({ reason }): call this when you detect the user is still developing their thought and you would otherwise interrupt. Pass a short reason ("mid-list", "trailing off", etc.).
 - request_research({ query, reason }): call this when answering well requires fresh external facts (specific numbers, recent events, current pricing, named sources, technical details you're not confident about). Say a brief acknowledgment out loud like "Let me look that up" — then stop. The research result will appear in the Live Brief; you do not need to read it aloud unless the user asks.
+- propose_canvas_ops({ reason, ops }): call this only when the user explicitly asks you to add, update, or connect cards on the canvas. Keep changes small and grounded in [Current Canvas Context]. Prefer exact existing card titles for targetTitle/sourceTitle.
+
+CANVAS WRITING RULES
+- Use add_card for new user-requested notes.
+- Use update_card only when targetTitle exactly names an existing card from [Current Canvas Context].
+- Use connect only when sourceTitle and targetTitle exactly match visible card titles.
+- If you cannot find the requested target on the canvas, say you don't see it instead of inventing one.
+- Do not write to the canvas merely because you have a suggestion; speak first unless the user gave a command.
 
 WHEN A RESEARCH RESULT COMES BACK
 - Speak only the conclusion, the key piece of evidence, and one implication.
@@ -136,6 +156,33 @@ ${SOCRATIC_INSTRUCTIONS_BASE}
 ${formatCanvasBlock(canvasText)}`;
 }
 
+function parseCanvasToolOps(value: unknown): CanvasToolOp[] {
+  if (!Array.isArray(value)) return [];
+  const validKinds = new Set(["focus", "idea", "question", "decision", "risk", "next"]);
+  const validActions = new Set(["add_card", "update_card", "connect"]);
+  return value
+    .slice(0, 5)
+    .map((item) => (typeof item === "object" && item ? (item as Record<string, unknown>) : null))
+    .filter((item): item is Record<string, unknown> => !!item)
+    .flatMap((item) => {
+      const action = typeof item.action === "string" ? item.action : "";
+      if (!validActions.has(action)) return [];
+      const kind =
+        typeof item.kind === "string" && validKinds.has(item.kind) ? item.kind : undefined;
+      return [
+        {
+          action: action as CanvasToolOp["action"],
+          ...(kind ? { kind: kind as NonNullable<CanvasToolOp["kind"]> } : {}),
+          ...(typeof item.title === "string" ? { title: item.title.trim() } : {}),
+          ...(typeof item.body === "string" ? { body: item.body.trim() } : {}),
+          ...(typeof item.targetTitle === "string" ? { targetTitle: item.targetTitle.trim() } : {}),
+          ...(typeof item.sourceTitle === "string" ? { sourceTitle: item.sourceTitle.trim() } : {}),
+          ...(typeof item.label === "string" ? { label: item.label.trim() } : {}),
+        },
+      ];
+    });
+}
+
 const TOOLS = [
   {
     type: "function" as const,
@@ -162,6 +209,45 @@ const TOOLS = [
         reason: { type: "string", description: "Why this needs external research." },
       },
       required: ["query"],
+    },
+  },
+  {
+    type: "function" as const,
+    name: "propose_canvas_ops",
+    description:
+      "Propose small canvas write operations when the user explicitly commands you to add, update, or connect canvas cards.",
+    parameters: {
+      type: "object",
+      properties: {
+        reason: { type: "string", description: "Brief reason for these canvas changes." },
+        ops: {
+          type: "array",
+          maxItems: 5,
+          items: {
+            type: "object",
+            properties: {
+              action: { type: "string", enum: ["add_card", "update_card", "connect"] },
+              kind: {
+                type: "string",
+                enum: ["focus", "idea", "question", "decision", "risk", "next"],
+              },
+              title: { type: "string", description: "Card title for add/update." },
+              body: { type: "string", description: "Card body/detail." },
+              targetTitle: {
+                type: "string",
+                description: "Existing card title to update or connect to.",
+              },
+              sourceTitle: {
+                type: "string",
+                description: "Existing source card title for connect.",
+              },
+              label: { type: "string", description: "Relationship label for connect." },
+            },
+            required: ["action"],
+          },
+        },
+      },
+      required: ["ops"],
     },
   },
 ];
@@ -254,7 +340,11 @@ export async function connectRealtime(opts: ConnectOptions): Promise<RealtimeCli
       // Return a noop tool output so the model doesn't hang on it.
       send({
         type: "conversation.item.create",
-        item: { type: "function_call_output", call_id: callId, output: JSON.stringify({ ok: true }) },
+        item: {
+          type: "function_call_output",
+          call_id: callId,
+          output: JSON.stringify({ ok: true }),
+        },
       });
       return;
     }
@@ -284,13 +374,43 @@ export async function connectRealtime(opts: ConnectOptions): Promise<RealtimeCli
         item: {
           type: "function_call_output",
           call_id: callId,
-          output: JSON.stringify({ ok: true, taskId, note: "Research queued. Result will appear in the Live Brief." }),
+          output: JSON.stringify({
+            ok: true,
+            taskId,
+            note: "Research queued. Result will appear in the Live Brief.",
+          }),
         },
       });
       // The model already spoke its short acknowledgment in the same
       // response that emitted this tool call. Do NOT call response.create —
       // it would start a second concurrent audio response and the user
       // would hear two voices replying at once.
+      return;
+    }
+
+    if (name === "propose_canvas_ops") {
+      const ops = parseCanvasToolOps(args.ops);
+      const reason = typeof args.reason === "string" ? args.reason.trim() : undefined;
+      if (ops.length === 0) {
+        send({
+          type: "conversation.item.create",
+          item: {
+            type: "function_call_output",
+            call_id: callId,
+            output: JSON.stringify({ ok: false, error: "missing valid canvas ops" }),
+          },
+        });
+        return;
+      }
+      events.onCanvasOpsProposed?.({ reason, ops, callId });
+      send({
+        type: "conversation.item.create",
+        item: {
+          type: "function_call_output",
+          call_id: callId,
+          output: JSON.stringify({ ok: true, applied: ops.length }),
+        },
+      });
       return;
     }
 
@@ -356,7 +476,8 @@ export async function connectRealtime(opts: ConnectOptions): Promise<RealtimeCli
         if (!callId) break;
         const buf = pendingToolArgs.get(callId);
         const name = nameFromEvt ?? buf?.name;
-        const argsStr = typeof finalArgs === "string" && finalArgs.length > 0 ? finalArgs : (buf?.args ?? "");
+        const argsStr =
+          typeof finalArgs === "string" && finalArgs.length > 0 ? finalArgs : (buf?.args ?? "");
         pendingToolArgs.delete(callId);
         if (name) handleToolCall(name, argsStr, callId);
         break;
@@ -374,10 +495,12 @@ export async function connectRealtime(opts: ConnectOptions): Promise<RealtimeCli
         }
         break;
       case "error": {
-        const errorObj = (evt as any).error;
+        const errorObj = (evt as { error?: { code?: unknown } }).error;
         // 过滤因打断时差导致的 response.cancel 报错（此时已经没有活动响应在运行）
         if (errorObj?.code === "response_cancel_not_active") {
-          console.debug("[Realtime] Mild race condition: response.cancel sent but no active response was running.");
+          console.debug(
+            "[Realtime] Mild race condition: response.cancel sent but no active response was running.",
+          );
           return;
         }
 
@@ -397,14 +520,17 @@ export async function connectRealtime(opts: ConnectOptions): Promise<RealtimeCli
   const offer = await pc.createOffer();
   await pc.setLocalDescription(offer);
 
-  const sdpRes = await fetch(`https://api.openai.com/v1/realtime/calls?model=${encodeURIComponent(model)}`, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${clientSecret}`,
-      "Content-Type": "application/sdp",
+  const sdpRes = await fetch(
+    `https://api.openai.com/v1/realtime/calls?model=${encodeURIComponent(model)}`,
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${clientSecret}`,
+        "Content-Type": "application/sdp",
+      },
+      body: offer.sdp,
     },
-    body: offer.sdp,
-  });
+  );
 
   if (!sdpRes.ok) {
     const body = await sdpRes.text().catch(() => "");

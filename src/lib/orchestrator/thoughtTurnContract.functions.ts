@@ -1,5 +1,5 @@
 import { createServerFn } from "@tanstack/react-start";
-import { Output, generateText } from "ai";
+import { generateText } from "ai";
 import { z } from "zod";
 
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
@@ -92,7 +92,7 @@ const SYSTEM = `You are the THOUGHT TURN ORCHESTRATOR for a live voice co-thinki
 You receive one finalized user thought. Return ONE turn contract that coordinates:
 1. session thinking state,
 2. Live Brief updates,
-3. Idea Canvas card updates,
+3. Thinking Board card updates,
 4. the realtime voice agent's next reply hint.
 
 IMPORTANT PRODUCT BEHAVIOR
@@ -121,9 +121,17 @@ BRIEF OPS
 - For brainstorm, use structured headings/notes such as Current Goal, Open Questions, Possible Directions, Risks, Next Step when helpful.
 - If nothing useful should be written, return shouldWriteBrief=false and no briefOps.
 
-CANVAS OPS
+BOARD / CANVAS OPS
+- The board is a mixed-media thinking board with zones: Focus, Open questions, Promising paths, Risks / tensions, Decisions, Next moves.
+- Map kind to zone:
+  - focus → Focus
+  - question → Open questions
+  - idea → Promising paths
+  - risk → Risks / tensions
+  - decision → Decisions
+  - next → Next moves
 - Use add_card only for important entities/directions/questions/risks/next steps.
-- Prefer 0-2 cards per turn. The canvas should stay clear.
+- Prefer 0-2 cards per turn. The board should stay clear.
 - Use connect only when sourceTitle and targetTitle are clear.
 
 VOICE HINT
@@ -132,6 +140,18 @@ VOICE HINT
 - Keep it concise and natural.
 
 Return strict JSON only.`;
+
+// Azure's structured-output (response_format) rejects schemas with optional/
+// defaulted fields, so we ask for JSON in the prompt and parse it ourselves.
+function extractJSON(raw: string): unknown {
+  let cleaned = (raw ?? "").trim();
+  const fence = cleaned.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  if (fence) cleaned = fence[1].trim();
+  const first = cleaned.indexOf("{");
+  const last = cleaned.lastIndexOf("}");
+  if (first >= 0 && last > first) cleaned = cleaned.slice(first, last + 1);
+  return JSON.parse(cleaned);
+}
 
 function normalizeContract(input: unknown, turnId: string, currentState: SessionThinkingState) {
   const parsed = ContractSchema.safeParse(input);
@@ -184,20 +204,19 @@ ${data.agentReply?.trim() || "(not available yet)"}
 LIVE BRIEF:
 ${data.briefText || "(empty)"}
 
-IDEA CANVAS:
+THINKING BOARD:
 ${data.canvasText || "(empty)"}
 
 Create the thought turn contract.`;
 
     let contract;
     try {
-      const { experimental_output } = await generateText({
+      const { text } = await generateText({
         model: gateway(normalizeAiModel(data.model)),
         system: SYSTEM,
         prompt,
-        experimental_output: Output.object({ schema: ContractSchema }),
       });
-      contract = normalizeContract(experimental_output, data.turnId, data.currentThinkingState);
+      contract = normalizeContract(extractJSON(text), data.turnId, data.currentThinkingState);
     } catch (e) {
       console.warn("[thoughtTurnContract] failed", e instanceof Error ? e.message : String(e));
       const text = data.userTurn.trim();

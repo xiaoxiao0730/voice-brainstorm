@@ -1,13 +1,15 @@
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useServerFn } from "@tanstack/react-start";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { PanelLeftClose } from "lucide-react";
 
-import { BriefDocument, type BriefDocumentHandle } from "@/components/brief/BriefDocument";
+import type { BriefDocumentHandle } from "@/components/brief/BriefDocument";
 import {
-  IdeaCanvas,
   mergeIdeaCanvas,
   treeToIdeaCanvas,
+  type IdeaFlowNode,
   type IdeaCanvasState,
+  type IdeaNodeKind,
 } from "@/components/mindmap/IdeaCanvas";
 
 import { between } from "@/lib/pipeline/orderKey";
@@ -47,7 +49,12 @@ import {
 import { exportBriefToDocx } from "@/lib/exportDocx";
 
 import { getRealtimeSession } from "@/lib/agent/realtime.functions";
-import { connectRealtime, type RealtimeClient } from "@/lib/agent/realtimeClient";
+import {
+  connectRealtime,
+  type CanvasToolOp,
+  type RealtimeClient,
+} from "@/lib/agent/realtimeClient";
+import { formatAgentCanvasContext } from "@/lib/agent/canvasContext";
 import { generateIntervention } from "@/lib/agent/responseGenerator.functions";
 import { logIntervention } from "@/lib/agent/interventionLog.functions";
 import { createPolicyEngine } from "@/lib/agent/interventionPolicy";
@@ -62,7 +69,6 @@ import { type AgentStatus } from "@/components/agent/AgentPanel";
 import { sessionStore } from "@/lib/orchestrator/sessionStore";
 import { attachInsightCoordinator } from "@/lib/orchestrator/insightCoordinator";
 import { pipelineTracer } from "@/lib/debug/pipelineTracer";
-import { PipelineInspector } from "@/components/debug/PipelineInspector";
 import { generateMindMap } from "@/lib/mindmap/generateMindMap.functions";
 import { loadIdeaCanvas, saveIdeaCanvas } from "@/lib/ideaCanvas.functions";
 import {
@@ -70,10 +76,17 @@ import {
   type ThoughtTurnCanvasOp,
 } from "@/lib/orchestrator/thoughtTurnContract.functions";
 import {
+  structureVoiceToCanvas,
+  type StructuredVoiceCanvas,
+} from "@/lib/orchestrator/structureVoiceToCanvas.functions";
+import { cleanVoiceCapture } from "@/lib/orchestrator/cleanVoiceCapture.functions";
+import {
   formatThinkingState,
   loadThinkingState,
   type SessionThinkingState,
 } from "@/lib/agent/thinkingState.functions";
+import { AgentDock } from "@/components/agent/AgentDock";
+import { FullscreenBoard, ThinkingBoard } from "@/components/board/FullscreenBoard";
 
 export const Route = createFileRoute("/_authenticated/workbench")({
   validateSearch: (search: Record<string, unknown>) => ({
@@ -110,7 +123,7 @@ type SessionRow = {
   started_at: string;
   ended_at: string | null;
 };
-type SurfaceMode = "brief" | "map";
+type VoiceMode = "idle" | "canvas_capture" | "inline_dictation" | "conversation";
 
 const EMPTY_THINKING_STATE: SessionThinkingState = {
   current_goal: "",
@@ -130,6 +143,15 @@ function relative(ts: string) {
   return `${Math.floor(diff / 86400)}d ago`;
 }
 
+function errorMessage(error: unknown, fallback = "Something went wrong") {
+  if (error instanceof Error) return error.message;
+  if (typeof error === "object" && error && "message" in error) {
+    const message = (error as { message?: unknown }).message;
+    if (typeof message === "string" && message.trim()) return message;
+  }
+  return fallback;
+}
+
 function briefDocToPlainText(doc: BriefDoc) {
   return Object.values(doc)
     .sort((a, b) => a.orderKey.localeCompare(b.orderKey))
@@ -139,6 +161,139 @@ function briefDocToPlainText(doc: BriefDoc) {
     })
     .filter(Boolean)
     .join("\n\n");
+}
+
+function htmlToCanvasText(value: string) {
+  return value
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<\/(?:p|div|h[1-6]|li)>/gi, "\n")
+    .replace(/<li[^>]*>/gi, "• ")
+    .replace(/<[^>]+>/g, "")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/gi, "'")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+const BRIEF_NODE_PREFIX = "brief-block-";
+const MANUAL_CANVAS_CAPTURE = true;
+
+function mergeBriefIntoCanvas(doc: BriefDoc, canvas: IdeaCanvasState): IdeaCanvasState {
+  if (MANUAL_CANVAS_CAPTURE) {
+    return stripBriefMirrorNodes(canvas);
+  }
+
+  const blocks = Object.values(doc).sort((a, b) => a.orderKey.localeCompare(b.orderKey));
+  if (blocks.length === 0) return canvas;
+
+  const byId = new Map(canvas.nodes.map((node) => [node.id, node]));
+  let y = 100;
+  const briefNodes = blocks.map((block) => {
+    const id = `${BRIEF_NODE_PREFIX}${block.id}`;
+    const heading = htmlToCanvasText(block.heading ?? "");
+    const body = htmlToCanvasText(block.body ?? "");
+    const existing = byId.get(id);
+    const title = heading || body.split("\n")[0] || "";
+    const remainder = heading ? body : body.split("\n").slice(1).join("\n");
+    const node = {
+      id,
+      type: "textNode",
+      position: existing?.position ?? { x: 120, y },
+      data: {
+        ...existing?.data,
+        title,
+        body: remainder,
+        kind: block.level === 2 ? ("focus" as const) : ("idea" as const),
+        width: existing?.data.width ?? (block.level === 2 ? 620 : 560),
+        textSize:
+          existing?.data.textSize ?? (block.level === 2 ? ("large" as const) : ("normal" as const)),
+        bold: existing?.data.bold ?? block.level === 2,
+        italic: existing?.data.italic ?? false,
+        textAlign: existing?.data.textAlign ?? ("left" as const),
+      },
+    };
+    y += block.level === 2 ? 118 : 96;
+    return node;
+  });
+  const briefIds = new Set(briefNodes.map((node) => node.id));
+  return {
+    ...canvas,
+    nodes: [...briefNodes, ...canvas.nodes.filter((node) => !briefIds.has(node.id))],
+  };
+}
+
+function stripBriefMirrorNodes(canvas: IdeaCanvasState): IdeaCanvasState {
+  const nodes = canvas.nodes.filter((node) => !node.id.startsWith(BRIEF_NODE_PREFIX));
+  const nodeIds = new Set(nodes.map((node) => node.id));
+  return {
+    ...canvas,
+    nodes,
+    edges: canvas.edges.filter((edge) => nodeIds.has(edge.source) && nodeIds.has(edge.target)),
+  };
+}
+
+function didRemoveCanvasItems(previous: IdeaCanvasState, next: IdeaCanvasState) {
+  const nextNodeIds = new Set(next.nodes.map((node) => node.id));
+  const nextEdgeIds = new Set(next.edges.map((edge) => edge.id));
+  return (
+    previous.nodes.some((node) => !nextNodeIds.has(node.id)) ||
+    previous.edges.some((edge) => !nextEdgeIds.has(edge.id))
+  );
+}
+
+type IdeaCanvasCache = {
+  version: 2;
+  updatedAt: number;
+  syncedAt: number;
+  state: IdeaCanvasState;
+};
+
+function ideaCanvasCacheKey(sessionId: string) {
+  return `murmur.ideaCanvas.${sessionId}`;
+}
+
+function readIdeaCanvasCache(sessionId: string): IdeaCanvasCache | null {
+  if (typeof window === "undefined") return null;
+  const saved = window.localStorage.getItem(ideaCanvasCacheKey(sessionId));
+  if (!saved) return null;
+  try {
+    const parsed = JSON.parse(saved) as Partial<IdeaCanvasCache>;
+    if (parsed.version !== 2 || !parsed.state) return null;
+    return {
+      version: 2,
+      updatedAt: Number(parsed.updatedAt) || 0,
+      syncedAt: Number(parsed.syncedAt) || 0,
+      state: stripBriefMirrorNodes({
+        nodes: Array.isArray(parsed.state.nodes) ? parsed.state.nodes : [],
+        edges: Array.isArray(parsed.state.edges) ? parsed.state.edges : [],
+      }),
+    };
+  } catch {
+    return null;
+  }
+}
+
+function writeIdeaCanvasCache(
+  sessionId: string,
+  state: IdeaCanvasState,
+  meta: { updatedAt: number; syncedAt: number },
+) {
+  if (typeof window === "undefined") return;
+  const snapshot = stripBriefMirrorNodes(state);
+  window.localStorage.setItem(
+    ideaCanvasCacheKey(sessionId),
+    JSON.stringify({ version: 2, ...meta, state: snapshot } satisfies IdeaCanvasCache),
+  );
+}
+
+function markIdeaCanvasCacheSynced(sessionId: string, state: IdeaCanvasState, syncedAt: number) {
+  const current = readIdeaCanvasCache(sessionId);
+  if (current && current.updatedAt > syncedAt) return;
+  writeIdeaCanvasCache(sessionId, state, { updatedAt: syncedAt, syncedAt });
 }
 
 function ideaCanvasToPlainText(canvas: IdeaCanvasState) {
@@ -153,11 +308,202 @@ function ideaCanvasToPlainText(canvas: IdeaCanvasState) {
     .join("\n");
 }
 
+function ideaCanvasExistingCards(canvas: IdeaCanvasState) {
+  return canvas.nodes
+    .filter((node) => !node.id.startsWith(BRIEF_NODE_PREFIX) && node.data.title?.trim())
+    .map((node) => ({
+      title: node.data.title.trim(),
+      body: (node.data.body ?? "").trim(),
+      kind: node.data.kind,
+    }))
+    .slice(-80);
+}
+
+function normalizeTitleKey(value: string) {
+  return value.trim().toLowerCase().replace(/\s+/g, " ");
+}
+
 function nextIdeaId(prefix = "contract") {
   if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
     return `${prefix}-${crypto.randomUUID()}`;
   }
   return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+function estimateNodeWidth(node: IdeaFlowNode) {
+  return Number(node.data.width ?? (node.type === "textNode" ? 520 : 260));
+}
+
+function estimateNodeHeight(node: IdeaFlowNode) {
+  return Number(node.data.height ?? (node.type === "textNode" ? 132 : 178));
+}
+
+function findOpenCanvasPosition(
+  nodes: IdeaFlowNode[],
+  desired: { x: number; y: number },
+  width = 260,
+  height = 178,
+) {
+  const candidates = [
+    desired,
+    { x: desired.x + 320, y: desired.y },
+    { x: desired.x, y: desired.y + 230 },
+    { x: desired.x + 320, y: desired.y + 230 },
+    { x: desired.x - 320, y: desired.y },
+    { x: desired.x, y: desired.y - 230 },
+    { x: desired.x + 640, y: desired.y },
+    { x: desired.x + 320, y: desired.y - 230 },
+    { x: desired.x - 320, y: desired.y + 230 },
+  ];
+
+  for (const candidate of candidates) {
+    const overlaps = nodes.some((node) => {
+      const nodeWidth = estimateNodeWidth(node);
+      const nodeHeight = estimateNodeHeight(node);
+      return !(
+        candidate.x + width + 28 < node.position.x ||
+        candidate.x > node.position.x + nodeWidth + 28 ||
+        candidate.y + height + 28 < node.position.y ||
+        candidate.y > node.position.y + nodeHeight + 28
+      );
+    });
+    if (!overlaps) return { x: Math.round(candidate.x), y: Math.round(candidate.y) };
+  }
+
+  return { x: Math.round(desired.x + 96), y: Math.round(desired.y + 96) };
+}
+
+function snapCanvasPosition(position: { x: number; y: number }, grid = 24) {
+  return {
+    x: Math.round(position.x / grid) * grid,
+    y: Math.round(position.y / grid) * grid,
+  };
+}
+
+const STRUCTURED_KIND_COLUMN: Record<IdeaNodeKind, number> = {
+  focus: 0,
+  question: 1,
+  idea: 2,
+  risk: 3,
+  decision: 4,
+  next: 5,
+};
+
+function defaultCanvasCaptureAnchor(canvas: IdeaCanvasState) {
+  const visibleNodes = canvas.nodes.filter((node) => !node.id.startsWith(BRIEF_NODE_PREFIX));
+  if (visibleNodes.length === 0) return { x: 260, y: 180 };
+  const right = Math.max(...visibleNodes.map((node) => node.position.x + estimateNodeWidth(node)));
+  const top = Math.min(...visibleNodes.map((node) => node.position.y));
+  return { x: Math.round(right + 240), y: Math.round(Math.max(160, top + 80)) };
+}
+
+function mergeStructuredCanvasCapture(
+  current: IdeaCanvasState,
+  result: StructuredVoiceCanvas,
+  origin: { x: number; y: number },
+): IdeaCanvasState {
+  const nodes: IdeaFlowNode[] = current.nodes.map((node) => ({ ...node, selected: false }));
+  const edges: IdeaCanvasState["edges"] = [...current.edges];
+  const byTitle = new Map<string, IdeaFlowNode>();
+  for (const node of nodes) {
+    const key = normalizeTitleKey(node.data.title ?? "");
+    if (key) byTitle.set(key, node);
+  }
+
+  const added: IdeaFlowNode[] = [];
+  const localKindCounts: Record<IdeaNodeKind, number> = {
+    focus: 0,
+    question: 0,
+    idea: 0,
+    risk: 0,
+    decision: 0,
+    next: 0,
+  };
+  const attachedCounts = new Map<string, number>();
+  const edgeExists = (source: string, target: string, label?: string) =>
+    edges.some(
+      (edge) =>
+        edge.source === source &&
+        edge.target === target &&
+        String(edge.label ?? "") === String(label ?? ""),
+    );
+
+  result.cards.forEach((card, index) => {
+    const title = card.title.trim();
+    if (!title) return;
+    const titleKey = normalizeTitleKey(title);
+    const existing = byTitle.get(titleKey);
+    if (existing) return;
+
+    const attachTo = byTitle.get(normalizeTitleKey(card.attachToTitle));
+    const width = card.kind === "focus" ? 300 : 260;
+    const kind = card.kind as IdeaNodeKind;
+    const desired = attachTo
+      ? (() => {
+          const count = attachedCounts.get(attachTo.id) ?? 0;
+          attachedCounts.set(attachTo.id, count + 1);
+          return snapCanvasPosition({
+            x: attachTo.position.x + estimateNodeWidth(attachTo) + 144,
+            y: attachTo.position.y + count * 216,
+          });
+        })()
+      : (() => {
+          const count = localKindCounts[kind];
+          localKindCounts[kind] += 1;
+          const col = STRUCTURED_KIND_COLUMN[kind] ?? STRUCTURED_KIND_COLUMN.idea;
+          return snapCanvasPosition({
+            x: origin.x - 150 + col * 312,
+            y: origin.y - 96 + count * 216,
+          });
+        })();
+    const position = findOpenCanvasPosition([...nodes, ...added], desired, width, 178);
+    const node: IdeaFlowNode = {
+      id: nextIdeaId(`voice-${card.kind}`),
+      type: "ideaNode",
+      position,
+      selected: added.length === 0,
+      data: {
+        title,
+        body: card.body.trim(),
+        kind,
+        width,
+      },
+    };
+    added.push(node);
+    byTitle.set(titleKey, node);
+
+    const relation = card.relation.trim() || undefined;
+    if (attachTo && !edgeExists(attachTo.id, node.id, relation)) {
+      edges.push({
+        id: nextIdeaId("voice-edge"),
+        source: attachTo.id,
+        target: node.id,
+        sourceHandle: "right",
+        targetHandle: "left",
+        type: "editable",
+        label: relation,
+      });
+    }
+  });
+
+  for (const edge of result.edges) {
+    const source = byTitle.get(normalizeTitleKey(edge.sourceTitle));
+    const target = byTitle.get(normalizeTitleKey(edge.targetTitle));
+    if (!source || !target || source.id === target.id) continue;
+    const label = edge.label.trim() || undefined;
+    if (edgeExists(source.id, target.id, label)) continue;
+    edges.push({
+      id: nextIdeaId("voice-edge"),
+      source: source.id,
+      target: target.id,
+      sourceHandle: "right",
+      targetHandle: "left",
+      type: "editable",
+      label,
+    });
+  }
+
+  return { nodes: [...nodes, ...added], edges };
 }
 
 function Workbench() {
@@ -188,6 +534,8 @@ function Workbench() {
   const loadCanvas = useServerFn(loadIdeaCanvas);
   const saveCanvas = useServerFn(saveIdeaCanvas);
   const planContract = useServerFn(planThoughtTurnContract);
+  const structureCanvasCapture = useServerFn(structureVoiceToCanvas);
+  const cleanCapture = useServerFn(cleanVoiceCapture);
   const loadState = useServerFn(loadThinkingState);
 
   // UI state
@@ -203,10 +551,28 @@ function Workbench() {
   const [doc, setDoc] = useState<BriefDoc>({});
   const [aiLoading, setAiLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [surfaceMode, setSurfaceMode] = useState<SurfaceMode>("brief");
   const [ideaCanvas, setIdeaCanvas] = useState<IdeaCanvasState>({ nodes: [], edges: [] });
   const [mapLoading, setMapLoading] = useState(false);
   const [thinkingState, setThinkingState] = useState<SessionThinkingState>(EMPTY_THINKING_STATE);
+
+  // The audio panel and floating dock share one realtime session.
+  const [audioCollapsed, setAudioCollapsed] = useState(() => {
+    if (typeof window === "undefined") return false;
+    return window.localStorage.getItem("audio-panel-collapsed") === "true";
+  });
+  const [agentDockCollapsed, setAgentDockCollapsed] = useState(false);
+  const [boardFullscreen, setBoardFullscreen] = useState(false);
+  const [captureAnchor, setCaptureAnchor] = useState<{ x: number; y: number } | null>(null);
+  const [captureActive, setCaptureActive] = useState(false);
+  const [voiceMode, setVoiceMode] = useState<VoiceMode>("idle");
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem("audio-panel-collapsed", String(audioCollapsed));
+    } catch {
+      /* ignore */
+    }
+  }, [audioCollapsed]);
 
   // Agent state — Realtime voice lane only. Background canvas lane runs
   // whenever `listening` is true, independent of `agentEnabled`.
@@ -255,13 +621,17 @@ function Workbench() {
   const isEditingRef = useRef(false);
   const injectDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendingInjectRef = useRef<string | null>(null);
+  const captureAnchorRef = useRef<{ x: number; y: number } | null>(null);
+  const captureTextsRef = useRef<string[]>([]);
+  const captureActiveRef = useRef(false);
+  const voiceModeRef = useRef<VoiceMode>("idle");
   const briefDocRef = useRef<BriefDocumentHandle | null>(null);
   const skipIdeaCanvasSaveRef = useRef(false);
   const loadedIdeaCanvasSessionRef = useRef<string | null>(null);
   const ideaCanvasSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastPersistedIdeaCanvasRef = useRef<IdeaCanvasState>({ nodes: [], edges: [] });
   const openSessionSeqRef = useRef(0);
   const pendingBriefWritesRef = useRef<Set<Promise<unknown>>>(new Set());
-  const surfaceModeRef = useRef<SurfaceMode>("brief");
   const lastAutoMapAtRef = useRef(0);
   const coThinkingTurnIdsRef = useRef<Set<string>>(new Set());
   const [appliedTemplateId, setAppliedTemplateId] = useState<string>(DEFAULT_TEMPLATE_ID);
@@ -289,14 +659,24 @@ function Workbench() {
     recentThoughtTurnsRef.current = [];
     coThinkingTurnIdsRef.current.clear();
     lastAutoMapAtRef.current = 0;
+    captureAnchorRef.current = null;
+    captureTextsRef.current = [];
+    captureActiveRef.current = false;
+    voiceModeRef.current = "idle";
+    setCaptureAnchor(null);
+    setCaptureActive(false);
+    setVoiceMode("idle");
   }, [activeSessionId]);
+
+  const selectCaptureAnchor = useCallback((position: { x: number; y: number }) => {
+    if (captureActiveRef.current) return;
+    captureAnchorRef.current = position;
+    setCaptureAnchor(position);
+  }, []);
 
   useEffect(() => {
     listeningRef.current = listening;
   }, [listening]);
-  useEffect(() => {
-    surfaceModeRef.current = surfaceMode;
-  }, [surfaceMode]);
 
   // Persist template + applied-template per session.
   useEffect(() => {
@@ -321,21 +701,7 @@ function Workbench() {
     let cancelled = false;
     skipIdeaCanvasSaveRef.current = true;
     loadedIdeaCanvasSessionRef.current = null;
-
-    const readLocalCanvas = (): IdeaCanvasState | null => {
-      if (typeof window === "undefined") return null;
-      const saved = window.localStorage.getItem(`murmur.ideaCanvas.${activeSessionId}`);
-      if (!saved) return null;
-      try {
-        const parsed = JSON.parse(saved) as IdeaCanvasState;
-        return {
-          nodes: Array.isArray(parsed.nodes) ? parsed.nodes : [],
-          edges: Array.isArray(parsed.edges) ? parsed.edges : [],
-        };
-      } catch {
-        return null;
-      }
-    };
+    lastPersistedIdeaCanvasRef.current = { nodes: [], edges: [] };
 
     const emptyCanvas: IdeaCanvasState = { nodes: [], edges: [] };
     void (async () => {
@@ -344,31 +710,41 @@ function Workbench() {
           data: { sessionId: activeSessionId },
         })) as IdeaCanvasState;
         if (cancelled) return;
-        const localCanvas = readLocalCanvas();
-        const hasDbCanvas = (fromDb.nodes?.length ?? 0) > 0 || (fromDb.edges?.length ?? 0) > 0;
-        const hasLocalCanvas =
-          (localCanvas?.nodes.length ?? 0) > 0 || (localCanvas?.edges.length ?? 0) > 0;
-        const next = hasDbCanvas ? fromDb : hasLocalCanvas ? localCanvas! : emptyCanvas;
-        setIdeaCanvas(next);
+        const next = stripBriefMirrorNodes({
+          nodes: Array.isArray(fromDb.nodes) ? fromDb.nodes : [],
+          edges: Array.isArray(fromDb.edges) ? fromDb.edges : [],
+        });
+        const localCache = readIdeaCanvasCache(activeSessionId);
+        const hasUnsyncedLocal = !!localCache && localCache.updatedAt > localCache.syncedAt;
+        const restored = hasUnsyncedLocal ? localCache.state : next;
+        lastPersistedIdeaCanvasRef.current = next;
+        setIdeaCanvas(mergeBriefIntoCanvas(docRef.current, restored));
         loadedIdeaCanvasSessionRef.current = activeSessionId;
-        if (!hasDbCanvas && hasLocalCanvas) {
+        if (hasUnsyncedLocal) {
           void sessionStore
             .getOrCreate(activeSessionId)
-            .canvasQueue.run(() =>
-              saveCanvas({
+            .canvasQueue.run(async () => {
+              await saveCanvas({
                 data: {
                   sessionId: activeSessionId,
-                  nodes: localCanvas!.nodes,
-                  edges: localCanvas!.edges,
+                  nodes: restored.nodes,
+                  edges: restored.edges,
                 },
-              }),
-            )
-            .catch((e) => console.warn("[ideaCanvas] seed local canvas failed", e));
+              });
+              if (loadedIdeaCanvasSessionRef.current === activeSessionId) {
+                lastPersistedIdeaCanvasRef.current = restored;
+              }
+              markIdeaCanvasCacheSynced(activeSessionId, restored, localCache.updatedAt);
+            })
+            .catch((e) => console.warn("[ideaCanvas] restore unsynced local canvas failed", e));
+        } else {
+          markIdeaCanvasCacheSynced(activeSessionId, next, Date.now());
         }
       } catch (e) {
         if (cancelled) return;
-        console.warn("[ideaCanvas] load failed, using local fallback", e);
-        setIdeaCanvas(readLocalCanvas() ?? emptyCanvas);
+        console.warn("[ideaCanvas] load failed, using empty canvas fallback", e);
+        lastPersistedIdeaCanvasRef.current = emptyCanvas;
+        setIdeaCanvas(mergeBriefIntoCanvas(docRef.current, emptyCanvas));
         loadedIdeaCanvasSessionRef.current = activeSessionId;
       }
     })();
@@ -380,30 +756,56 @@ function Workbench() {
 
   useEffect(() => {
     if (!activeSessionId) return;
+    setIdeaCanvas((current) => mergeBriefIntoCanvas(doc, current));
+  }, [activeSessionId, doc]);
+
+  const persistIdeaCanvasSnapshot = useCallback(
+    (sessionId: string, snapshot: IdeaCanvasState, snapshotUpdatedAt: number) =>
+      sessionStore
+        .getOrCreate(sessionId)
+        .canvasQueue.run(async () => {
+          await saveCanvas({
+            data: { sessionId, nodes: snapshot.nodes, edges: snapshot.edges },
+          });
+          if (loadedIdeaCanvasSessionRef.current === sessionId) {
+            lastPersistedIdeaCanvasRef.current = snapshot;
+          }
+          markIdeaCanvasCacheSynced(sessionId, snapshot, snapshotUpdatedAt);
+        })
+        .catch((e) => console.warn("[ideaCanvas] save failed", e)),
+    [saveCanvas],
+  );
+
+  useEffect(() => {
+    if (!activeSessionId) return;
     if (loadedIdeaCanvasSessionRef.current !== activeSessionId) return;
-    if (typeof window !== "undefined") {
-      window.localStorage.setItem(
-        `murmur.ideaCanvas.${activeSessionId}`,
-        JSON.stringify(ideaCanvas),
-      );
-    }
+    const snapshot = stripBriefMirrorNodes(ideaCanvas);
     if (skipIdeaCanvasSaveRef.current) {
       skipIdeaCanvasSaveRef.current = false;
       return;
     }
+    const updatedAt = Date.now();
+    const currentCache = readIdeaCanvasCache(activeSessionId);
+    writeIdeaCanvasCache(activeSessionId, snapshot, {
+      updatedAt,
+      syncedAt: currentCache?.syncedAt ?? 0,
+    });
+    const shouldSaveImmediately = didRemoveCanvasItems(
+      lastPersistedIdeaCanvasRef.current,
+      snapshot,
+    );
     if (ideaCanvasSaveTimerRef.current) clearTimeout(ideaCanvasSaveTimerRef.current);
+    if (shouldSaveImmediately) {
+      ideaCanvasSaveTimerRef.current = null;
+      void persistIdeaCanvasSnapshot(activeSessionId, snapshot, updatedAt);
+      return;
+    }
     ideaCanvasSaveTimerRef.current = setTimeout(() => {
       const sid = activeSessionId;
-      const snapshot = { nodes: ideaCanvas.nodes, edges: ideaCanvas.edges };
       // Serialize through the per-session canvas queue: saveIdeaCanvas is a
       // non-atomic delete-then-insert, so overlapping saves could interleave
       // and corrupt/drop nodes. The mutex guarantees one save at a time.
-      void sessionStore
-        .getOrCreate(sid)
-        .canvasQueue.run(() =>
-          saveCanvas({ data: { sessionId: sid, nodes: snapshot.nodes, edges: snapshot.edges } }),
-        )
-        .catch((e) => console.warn("[ideaCanvas] save failed", e));
+      void persistIdeaCanvasSnapshot(sid, snapshot, updatedAt);
     }, 700);
     return () => {
       if (ideaCanvasSaveTimerRef.current) {
@@ -411,7 +813,7 @@ function Workbench() {
         ideaCanvasSaveTimerRef.current = null;
       }
     };
-  }, [activeSessionId, ideaCanvas, saveCanvas]);
+  }, [activeSessionId, ideaCanvas, persistIdeaCanvasSnapshot]);
 
   // Debounced injectContext: only fire after 3s of canvas/edit quiet.
   const scheduleInject = useCallback((note: string) => {
@@ -467,17 +869,10 @@ function Workbench() {
     canvasPushDebounceRef.current = setTimeout(() => {
       const client = realtimeRef.current;
       if (!client) return;
-      const ordered = Object.values(docRef.current).sort((a, b) =>
-        a.orderKey.localeCompare(b.orderKey),
-      );
-      const text = ordered
-        .map((b) => {
-          if (b.level === 2) return `## ${(b.heading ?? "").trim()}`;
-          const body = (b.body ?? "").trim();
-          return body ? body : "";
-        })
-        .filter(Boolean)
-        .join("\n\n");
+      const text = formatAgentCanvasContext({
+        canvas: ideaCanvasRef.current,
+        recentTranscript: finals.map((item) => item.text),
+      });
       try {
         client.updateCanvasSnapshot(text);
       } catch (err) {
@@ -490,7 +885,7 @@ function Workbench() {
         canvasPushDebounceRef.current = null;
       }
     };
-  }, [doc, agentEnabled, agentStatus]);
+  }, [agentEnabled, agentStatus, finals, ideaCanvas]);
 
   // Local no-auth mode.
   useEffect(() => {
@@ -513,8 +908,8 @@ function Workbench() {
       const rows = await list();
       setSessions(rows as SessionRow[]);
       return rows as SessionRow[];
-    } catch (e: any) {
-      setError(e.message);
+    } catch (e: unknown) {
+      setError(errorMessage(e));
       return [];
     }
   }, [list]);
@@ -648,6 +1043,44 @@ function Workbench() {
       docRef.current = map;
       briefDocRef.current?.appendLines(appended, { asHtml: true });
       for (const b of appended) void persistBlock(b);
+      const sources = result.links
+        .slice(0, 3)
+        .map((link) => `Source: ${link.title || link.url}\n${link.url}`)
+        .join("\n\n");
+      const body = [
+        result.summary?.trim(),
+        result.findings.length ? result.findings.map((finding) => `- ${finding}`).join("\n") : "",
+        sources,
+      ]
+        .filter(Boolean)
+        .join("\n\n")
+        .slice(0, 1400);
+      setIdeaCanvas((current) => {
+        const title = `Research: ${result.title || result.query}`.slice(0, 120);
+        const key = title.trim().toLowerCase();
+        if (current.nodes.some((node) => node.data.title.trim().toLowerCase() === key)) {
+          return current;
+        }
+        const sameKindCount = current.nodes.filter((node) => node.data.kind === "idea").length;
+        return {
+          ...current,
+          nodes: [
+            ...current.nodes.map((node) => ({ ...node, selected: false })),
+            {
+              id: nextIdeaId("research"),
+              type: "ideaNode",
+              position: { x: 80 + sameKindCount * 34, y: 120 + sameKindCount * 132 },
+              selected: true,
+              data: {
+                title,
+                body,
+                kind: "idea",
+                width: 340,
+              },
+            },
+          ],
+        };
+      });
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [],
@@ -725,7 +1158,9 @@ function Workbench() {
             id,
             source: source.id,
             target: target.id,
-            type: "smoothstep",
+            sourceHandle: "right",
+            targetHandle: "left",
+            type: "editable",
             label: op.label.trim() || undefined,
           });
         }
@@ -734,6 +1169,45 @@ function Workbench() {
       return { nodes, edges };
     });
   }, []);
+
+  const applyAgentCanvasOps = useCallback(
+    (ops: CanvasToolOp[]) => {
+      const normalized: ThoughtTurnCanvasOp[] = [];
+      for (const op of ops) {
+        if (op.action === "add_card" || op.action === "update_card") {
+          const title = (op.title ?? op.targetTitle ?? "").trim();
+          if (!title) continue;
+          normalized.push({
+            action: op.action,
+            kind: op.kind ?? "idea",
+            title,
+            body: (op.body ?? "").trim(),
+            sourceTitle: "",
+            targetTitle: "",
+            label: "",
+          });
+          continue;
+        }
+        if (op.action === "connect") {
+          const sourceTitle = (op.sourceTitle ?? "").trim();
+          const targetTitle = (op.targetTitle ?? "").trim();
+          if (!sourceTitle || !targetTitle) continue;
+          normalized.push({
+            action: "connect",
+            kind: op.kind ?? "idea",
+            title: "",
+            body: "",
+            sourceTitle,
+            targetTitle,
+            label: (op.label ?? "").trim(),
+          });
+        }
+      }
+      if (normalized.length === 0) return;
+      applyCanvasOps(normalized);
+    },
+    [applyCanvasOps],
+  );
 
   // Stage 4: sync sessionStore + attach slow-lane coordinator to the active session.
   // Also subscribe to brief.proposed / research.requested / research.completed.
@@ -749,29 +1223,33 @@ function Workbench() {
     // Keep the old brief coordinator detached to avoid duplicate brief patches.
     const detach = () => undefined;
 
-    const detachInsight = attachInsightCoordinator(activeSessionId, {
-      getSnapshot: () =>
-        Object.values(docRef.current)
-          .sort((a, b) => a.orderKey.localeCompare(b.orderKey))
-          .map((b) => ({
-            id: b.id,
-            kind: (b.level === 2 ? "h2" : "p") as "h2" | "p",
-            text: (b.level === 2 ? b.heading : b.body) ?? "",
-            locked: b.locked,
-          })),
-      getModel: () => modelRef.current,
-    });
+    const detachInsight = MANUAL_CANVAS_CAPTURE
+      ? () => undefined
+      : attachInsightCoordinator(activeSessionId, {
+          getSnapshot: () =>
+            Object.values(docRef.current)
+              .sort((a, b) => a.orderKey.localeCompare(b.orderKey))
+              .map((b) => ({
+                id: b.id,
+                kind: (b.level === 2 ? "h2" : "p") as "h2" | "p",
+                text: (b.level === 2 ? b.heading : b.body) ?? "",
+                locked: b.locked,
+              })),
+          getModel: () => modelRef.current,
+        });
 
     // Slow-lane "AI is thinking…" indicator: a finalized turn kicks off
     // decideBrief; clear when it proposes patches, or after a safety timeout
     // (decideBrief may return zero patches and never emit brief.proposed).
     let thinkingTimer: ReturnType<typeof setTimeout> | null = null;
-    const offThinking = slot.bus.on("thought_turn.finalized", (e) => {
-      if (e.sessionId !== activeSessionRef.current) return;
-      setBriefThinking(true);
-      if (thinkingTimer) clearTimeout(thinkingTimer);
-      thinkingTimer = setTimeout(() => setBriefThinking(false), 6000);
-    });
+    const offThinking = MANUAL_CANVAS_CAPTURE
+      ? () => undefined
+      : slot.bus.on("thought_turn.finalized", (e) => {
+          if (e.sessionId !== activeSessionRef.current) return;
+          setBriefThinking(true);
+          if (thinkingTimer) clearTimeout(thinkingTimer);
+          thinkingTimer = setTimeout(() => setBriefThinking(false), 6000);
+        });
 
     const offProposed = slot.bus.on("brief.proposed", (e) => {
       if (e.sessionId !== activeSessionId) return;
@@ -890,13 +1368,13 @@ function Workbench() {
         // session switches out of the back/forward history.
         navigate({ to: "/workbench", search: { session: id }, replace: true });
         setError(null);
-      } catch (e: any) {
+      } catch (e: unknown) {
         if (seq !== openSessionSeqRef.current) return;
         setDoc({});
         docRef.current = {};
         setActiveSessionId(id);
         navigate({ to: "/workbench", search: { session: id }, replace: true });
-        setError(e.message);
+        setError(errorMessage(e));
       }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -920,6 +1398,7 @@ function Workbench() {
         await deleteS({ data: { sessionId: id } });
         if (typeof window !== "undefined") {
           window.localStorage.removeItem(`murmur.agent.policy.${id}`);
+          window.localStorage.removeItem(`murmur.ideaCanvas.${id}`);
         }
         const rows = await refreshSessions();
         if (activeSessionId === id) {
@@ -931,8 +1410,8 @@ function Workbench() {
             await openSession(created.id);
           }
         }
-      } catch (e: any) {
-        setError(e?.message ?? "Delete failed");
+      } catch (e: unknown) {
+        setError(errorMessage(e, "Delete failed"));
       }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -973,7 +1452,7 @@ function Workbench() {
             boundaryReason: segment.boundaryReason,
           },
         });
-      } catch (e: any) {
+      } catch (e: unknown) {
         console.warn("persistSegment failed", e);
       }
 
@@ -1147,20 +1626,81 @@ function Workbench() {
       setAgentStatus((s) => (s === "speaking" ? s : realtimeRef.current ? "listening" : "off"));
       setAiLoading(false);
     },
-    // eslint-disable-next-line react-hooks/exhaustive-deps
     [generateNudge, logIntv, persistBlock, scheduleInject],
   );
 
-  const startListening = async () => {
+  const commitCanvasVoiceCapture = useCallback(
+    async (rawText: string, position: { x: number; y: number }) => {
+      const source = rawText.trim();
+      if (!source) return;
+      setBriefThinking(true);
+      setMapLoading(true);
+      try {
+        const result = await structureCanvasCapture({
+          data: {
+            rawTranscript: source.slice(0, 6000),
+            existingCards: ideaCanvasExistingCards(ideaCanvasRef.current),
+            model: modelRef.current,
+          },
+        });
+
+        setIdeaCanvas((current) => ({
+          ...current,
+          ...mergeStructuredCanvasCapture(current, result, position),
+        }));
+        scheduleInject(
+          `[canvas voice capture]\n${result.summary || result.title}\nRaw transcript was used as source material for the structured cards.`,
+        );
+      } catch (captureError) {
+        setError(
+          captureError instanceof Error
+            ? captureError.message
+            : "Could not structure the voice capture.",
+        );
+      } finally {
+        setBriefThinking(false);
+        setMapLoading(false);
+        captureAnchorRef.current = null;
+        setCaptureAnchor(null);
+      }
+    },
+    [scheduleInject, structureCanvasCapture],
+  );
+
+  const startListening = async (options?: {
+    connectRealtime?: boolean;
+    captureToCanvas?: boolean;
+    inlineDictation?: boolean;
+  }) => {
     if (listening || !activeSessionId) return;
     setError(null);
+    const captureToCanvas = options?.captureToCanvas ?? false;
+    const inlineDictation = options?.inlineDictation ?? false;
+    const nextVoiceMode: VoiceMode = inlineDictation
+      ? "inline_dictation"
+      : captureToCanvas
+        ? "canvas_capture"
+        : "conversation";
+    if (captureToCanvas && !captureAnchorRef.current) {
+      const anchor = defaultCanvasCaptureAnchor(ideaCanvasRef.current);
+      captureAnchorRef.current = anchor;
+      setCaptureAnchor(anchor);
+    }
+    captureActiveRef.current = captureToCanvas || inlineDictation;
+    captureTextsRef.current = [];
+    voiceModeRef.current = nextVoiceMode;
+    setCaptureActive(captureToCanvas || inlineDictation);
+    setVoiceMode(nextVoiceMode);
     try {
       const { token, region } = await getToken();
 
       // Mic level meter
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       streamRef.current = stream;
-      const Ctx = window.AudioContext || (window as any).webkitAudioContext;
+      const Ctx =
+        window.AudioContext ||
+        (window as Window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+      if (!Ctx) throw new Error("AudioContext is not supported in this browser.");
       const ctx = new Ctx();
       audioCtxRef.current = ctx;
       const src = ctx.createMediaStreamSource(stream);
@@ -1201,6 +1741,9 @@ function Workbench() {
             const chunkId = crypto.randomUUID();
             setPartial("");
             setFinals((f) => [...f, { id: chunkId, text: e.text }]);
+            if (captureActiveRef.current && e.text.trim()) {
+              captureTextsRef.current.push(e.text.trim());
+            }
             pipelineTracer.log({
               sessionId,
               kind: "azure.final_chunk",
@@ -1223,6 +1766,7 @@ function Workbench() {
                 ],
               },
             }).catch((err) => console.warn("persistChunks failed", err));
+            if (captureActiveRef.current) return;
             buf.pushFinal({
               id: chunkId,
               text: e.text,
@@ -1237,16 +1781,22 @@ function Workbench() {
       });
       recognizerRef.current = handle;
       setListening(true);
-      // Auto-join the realtime voice agent — Start owns the full session.
-      setAgentEnabled(true);
-      void connectAgent();
-    } catch (e: any) {
-      setError(e.message);
+      if (options?.connectRealtime !== false) {
+        setAgentEnabled(true);
+        void connectAgent();
+      } else {
+        setAgentStatus("off");
+      }
+    } catch (e: unknown) {
+      setError(errorMessage(e));
       await stopListening();
     }
   };
 
-  const stopListening = useCallback(async () => {
+  const stopListening = useCallback(async (): Promise<string> => {
+    const shouldCommitCapture = captureActiveRef.current;
+    const capturePosition = captureAnchorRef.current;
+    const stoppingMode = voiceModeRef.current;
     setListening(false);
     if (rafRef.current) cancelAnimationFrame(rafRef.current);
     rafRef.current = null;
@@ -1271,7 +1821,7 @@ function Workbench() {
       recognizerRef.current = null;
     }
     if (bufferRef.current) {
-      bufferRef.current.forceFlush("manual_stop");
+      if (!shouldCommitCapture) bufferRef.current.forceFlush("manual_stop");
       bufferRef.current.dispose();
       bufferRef.current = null;
     }
@@ -1286,7 +1836,45 @@ function Workbench() {
     }
     setAgentEnabled(false);
     setAgentStatus("off");
-  }, []);
+    const captureText = captureTextsRef.current.join(" ").trim();
+    captureTextsRef.current = [];
+    captureActiveRef.current = false;
+    voiceModeRef.current = "idle";
+    setCaptureActive(false);
+    setVoiceMode("idle");
+    if (
+      stoppingMode === "canvas_capture" &&
+      shouldCommitCapture &&
+      capturePosition &&
+      captureText
+    ) {
+      await commitCanvasVoiceCapture(captureText, capturePosition);
+    }
+    return captureText;
+  }, [commitCanvasVoiceCapture]);
+
+  const startInlineDictation = async () => {
+    if (voiceModeRef.current !== "idle") return;
+    await startListening({ connectRealtime: false, inlineDictation: true });
+  };
+
+  const stopInlineDictation = useCallback(async () => {
+    if (voiceModeRef.current !== "inline_dictation") return "";
+    const rawText = await stopListening();
+    if (!rawText) return "";
+    try {
+      const result = await cleanCapture({
+        data: {
+          text: rawText.slice(0, 6000),
+          model: modelRef.current,
+        },
+      });
+      return result.text.trim();
+    } catch (error) {
+      console.warn("[inlineDictation] clean failed", error);
+      return rawText;
+    }
+  }, [cleanCapture, stopListening]);
 
   useEffect(
     () => () => {
@@ -1351,47 +1939,115 @@ function Workbench() {
             console.warn("realtime error", err);
             setAgentStatus("error");
           },
+          onCanvasOpsProposed: ({ reason, ops }) => {
+            applyAgentCanvasOps(ops);
+            scheduleInject(
+              `[agent canvas write]\n${reason || "Agent applied canvas changes."}\nOps: ${ops
+                .map((op) => op.action)
+                .join(", ")}`,
+            );
+          },
         },
       });
       realtimeRef.current = client;
-    } catch (e: any) {
-      setError(e.message ?? "Failed to connect agent");
+      client.updateCanvasSnapshot(
+        formatAgentCanvasContext({
+          canvas: ideaCanvasRef.current,
+          recentTranscript: finals.map((item) => item.text),
+        }),
+      );
+    } catch (e: unknown) {
+      setError(errorMessage(e, "Failed to connect agent"));
       setAgentStatus("error");
     }
-  }, [mintRealtime, saveChunks]);
+  }, [applyAgentCanvasOps, finals, mintRealtime, saveChunks, scheduleInject]);
+
+  const promptAgent = useCallback(() => {
+    const client = realtimeRef.current;
+    if (!client) return;
+    if (client.isAgentSpeaking()) client.cancel();
+    else client.promptResponse();
+  }, []);
+
+  const toggleAgentConversation = () => {
+    if (voiceModeRef.current === "canvas_capture") {
+      setError(
+        "Release Space or press T to finish the canvas capture before starting an AI conversation.",
+      );
+      return;
+    }
+    if (voiceModeRef.current === "conversation" || listening) {
+      void stopListening();
+      return;
+    }
+    void startListening({ connectRealtime: true, captureToCanvas: false });
+  };
 
   // Note: agent lifecycle is owned by startListening / stopListening.
 
   // Hotkeys (outside text inputs):
-  //   T → toggle voice listening (also brings the agent in/out via startListening)
+  //   Space hold → structure a spoken thought onto the canvas
+  //   T → compatibility toggle for canvas voice capture
   //   S → if agent is speaking, silence it; otherwise prompt it to speak now
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
+    const isTextTarget = (target: EventTarget | null) => {
+      const t = target as HTMLElement | null;
+      if (!t) return false;
+      const tag = t.tagName;
+      return tag === "INPUT" || tag === "TEXTAREA" || t.isContentEditable;
+    };
+
+    const beginCanvasCapture = () => {
+      const anchor = captureAnchorRef.current ?? defaultCanvasCaptureAnchor(ideaCanvasRef.current);
+      captureAnchorRef.current = anchor;
+      setCaptureAnchor(anchor);
+      void startListening({ connectRealtime: false, captureToCanvas: true });
+    };
+
+    const onKeyDown = (e: KeyboardEvent) => {
       if (e.repeat) return;
       if (e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
       const key = e.key.toLowerCase();
-      if (key !== "t" && key !== "s") return;
-      const t = e.target as HTMLElement | null;
-      if (t) {
-        const tag = t.tagName;
-        if (tag === "INPUT" || tag === "TEXTAREA" || t.isContentEditable) return;
-      }
+      if (key !== "t" && key !== "s" && e.code !== "Space") return;
+      if (isTextTarget(e.target)) return;
       e.preventDefault();
+
+      if (e.code === "Space") {
+        if (voiceModeRef.current === "canvas_capture" || voiceModeRef.current === "conversation")
+          return;
+        beginCanvasCapture();
+        return;
+      }
+
       if (key === "t") {
-        if (listening) void stopListening();
-        else void startListening();
+        if (voiceModeRef.current === "canvas_capture") {
+          void stopListening();
+        } else if (voiceModeRef.current === "conversation") {
+          setError("End the AI conversation from the Dock before starting a voice capture.");
+        } else {
+          beginCanvasCapture();
+        }
         return;
       }
       // "s": toggle agent voice
-      const client = realtimeRef.current;
-      if (!client) return;
-      if (client.isAgentSpeaking()) client.cancel();
-      else client.promptResponse();
+      promptAgent();
     };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+
+    const onKeyUp = (e: KeyboardEvent) => {
+      if (e.code !== "Space") return;
+      if (voiceModeRef.current !== "canvas_capture") return;
+      e.preventDefault();
+      void stopListening();
+    };
+
+    window.addEventListener("keydown", onKeyDown);
+    window.addEventListener("keyup", onKeyUp);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("keyup", onKeyUp);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [listening, stopListening, activeSessionId]);
+  }, [listening, stopListening, activeSessionId, promptAgent]);
 
   // ============= Document handlers =============
 
@@ -1427,6 +2083,48 @@ function Workbench() {
       }
     },
     [persistBlock, deleteN, scheduleInject, trackBriefWrite],
+  );
+
+  const onCanvasChange = useCallback(
+    (next: IdeaCanvasState) => {
+      ideaCanvasRef.current = next;
+      setIdeaCanvas(next);
+
+      let nextDoc = docRef.current;
+      let changed = false;
+      for (const node of next.nodes) {
+        if (!node.id.startsWith(BRIEF_NODE_PREFIX)) continue;
+        const blockId = node.id.slice(BRIEF_NODE_PREFIX.length);
+        const block = nextDoc[blockId];
+        if (!block) continue;
+
+        const nodeTitle = node.data.title.trim();
+        const nodeBody = (node.data.body ?? "").trim();
+        const previousTitle = htmlToCanvasText(block.heading ?? "");
+        const previousBody = htmlToCanvasText(block.body ?? "");
+        const nextTitle = block.level === 2 ? nodeTitle : "";
+        const nextBody =
+          block.level === 2 ? nodeBody : [nodeTitle, nodeBody].filter(Boolean).join("\n");
+        if (previousTitle === nextTitle && previousBody === nextBody) continue;
+
+        const updated: BriefBlock = {
+          ...block,
+          heading: nextTitle ? renderMarkdownToSafeHtml(nextTitle) : "",
+          body: nextBody ? renderMarkdownToSafeHtml(nextBody) : "",
+          lastEditedBy: "user",
+        };
+        if (!changed) nextDoc = { ...nextDoc };
+        nextDoc[blockId] = updated;
+        changed = true;
+        trackBriefWrite(persistBlock(updated));
+      }
+
+      if (changed) {
+        docRef.current = nextDoc;
+        setDoc(nextDoc);
+      }
+    },
+    [persistBlock, trackBriefWrite],
   );
 
   const onAcceptPending = useCallback(
@@ -1564,7 +2262,6 @@ function Workbench() {
     async ({ text, context }: { text: string; context: string }) => {
       const selectedText = text.trim();
       if (!selectedText) return;
-      setSurfaceMode("map");
       setMapLoading(true);
       setError(null);
       try {
@@ -1595,7 +2292,6 @@ function Workbench() {
       setError("Nothing to map yet — capture some thoughts in the brief first.");
       return;
     }
-    setSurfaceMode("map");
     setMapLoading(true);
     setError(null);
     void genMindMap({
@@ -1621,6 +2317,7 @@ function Workbench() {
   // grounding hint for the realtime voice agent.
   useEffect(() => {
     if (!activeSessionId) return;
+    if (MANUAL_CANVAS_CAPTURE) return;
     const slot = sessionStore.getOrCreate(activeSessionId);
     const offTurn = slot.bus.on("thought_turn.finalized", (e) => {
       if (e.sessionId !== activeSessionRef.current) return;
@@ -1674,7 +2371,9 @@ function Workbench() {
             `Mode: ${contract.replyMode}`,
             `Thinking state:\n${formatThinkingState(contract.thinkingState)}`,
             contract.nextDirections.length ? "Next directions:" : "",
-            ...contract.nextDirections.map((d, i) => `${i + 1}. ${d.title}${d.why ? ` - ${d.why}` : ""}`),
+            ...contract.nextDirections.map(
+              (d, i) => `${i + 1}. ${d.title}${d.why ? ` - ${d.why}` : ""}`,
+            ),
             contract.voiceReplyHint ? `Voice hint: ${contract.voiceReplyHint}` : "",
           ].join("\n");
           scheduleInject(`[thought turn contract]\n${voiceContext}`);
@@ -1692,6 +2391,20 @@ function Workbench() {
 
   const blockCount = Object.keys(doc).length;
   const activeSession = sessions.find((s) => s.id === activeSessionId);
+  const passiveInsight = useMemo(() => {
+    const clampText = (value: string) =>
+      value.length > 96 ? `${value.slice(0, 93).trimEnd()}...` : value;
+    const decision = thinkingState.decision_points.at(-1);
+    if (decision) return `You are reaching a conclusion: ${clampText(decision)}`;
+    const question = thinkingState.open_questions.at(-1);
+    if (question) return `An open question is emerging: ${clampText(question)}`;
+    const direction = thinkingState.promising_directions.at(-1);
+    if (direction) return `A promising direction is taking shape: ${clampText(direction)}`;
+    return "";
+  }, [thinkingState]);
+  const canvasAiWriting = briefThinking || aiLoading || mapLoading;
+  const conversationActive = voiceMode === "conversation";
+  const audioActive = voiceMode !== "idle";
 
   // Stage 4: group pending blocks by operationId for the grouped Keep/Undo toolbar.
   const pendingGroups = useMemo(() => {
@@ -1842,173 +2555,193 @@ function Workbench() {
       {/* MAIN */}
       <main className="flex-1 flex min-w-0">
         {/* AUDIO PANEL */}
-        <section className="w-[380px] xl:w-[420px] shrink-0 border-r border-auralis flex flex-col min-h-0">
-          <header className="h-14 px-5 flex items-center justify-between border-b border-auralis shrink-0">
-            <span className="text-xs uppercase tracking-[0.18em] text-secondary">
-              Audio Interaction
-            </span>
-            <span
-              className={`text-xs flex items-center gap-2 ${listening ? "text-emerald-600" : "text-secondary"}`}
-            >
-              <span
-                className={`w-1.5 h-1.5 rounded-full ${listening ? "bg-emerald-500 animate-pulse" : "bg-secondary"}`}
-              />
-              {listening ? "Listening" : "Idle"}
-            </span>
-          </header>
-
-          {/* Waveform */}
-          <div className="flex-1 flex items-center justify-center p-6 min-h-0 relative">
-            <div className="relative w-[260px] h-[260px] flex items-center justify-center">
-              <div
-                className={`absolute inset-0 rounded-full border border-auralis/25 blur-[2px] ${listening ? "animate-[ring-pulse_3.2s_ease-out_infinite]" : ""}`}
-              />
-              <div
-                className={`absolute inset-8 rounded-full border border-auralis/40 ${listening ? "animate-[ring-pulse_4.1s_ease-out_infinite_0.6s]" : ""}`}
-              />
-              <div
-                className={`absolute left-[50px] top-[80px] w-[50px] h-[100px] rounded-full bg-gradient-to-tr from-rose-400 to-orange-300 opacity-80 mix-blend-multiply blur-[6px] ${listening ? "animate-[orb-a_3s_ease-in-out_infinite]" : ""}`}
-                style={{ transform: `scale(${1 + level * 0.3})` }}
-              />
-              <div
-                className={`absolute right-[50px] top-[80px] w-[50px] h-[100px] rounded-full bg-gradient-to-tr from-emerald-300 to-teal-300 opacity-80 mix-blend-multiply blur-[6px] ${listening ? "animate-[orb-c_4.2s_ease-in-out_infinite]" : ""}`}
-                style={{ transform: `scale(${1 + level * 0.28})` }}
-              />
-              <div
-                className={`relative w-[65px] h-[130px] rounded-full bg-gradient-to-tr from-indigo-400 via-violet-400 to-purple-500 opacity-90 blur-[4px] ${listening ? "animate-[orb-b_3.6s_ease-in-out_infinite]" : ""}`}
-                style={{ transform: `scale(${1 + level * 0.35})` }}
-              />
-            </div>
-          </div>
-
-          {/* Controls */}
-          <div className="px-5 pb-4 flex flex-col items-center justify-center gap-2 shrink-0">
-            {/* Agent status line — replaces the old Talk with Agent button. */}
-            <div className="pb-2 flex items-center justify-center shrink-0">
-              <span className="text-xs text-secondary flex items-center gap-1.5">
+        {!audioCollapsed && (
+          <section className="w-[380px] xl:w-[420px] shrink-0 border-r border-auralis flex flex-col min-h-0">
+            <header className="h-14 px-5 flex items-center justify-between border-b border-auralis shrink-0">
+              <span className="text-xs uppercase tracking-[0.18em] text-secondary">
+                Audio Interaction
+              </span>
+              <div className="flex items-center gap-2">
                 <span
-                  className={`w-1.5 h-1.5 rounded-full ${
-                    agentStatus === "connecting"
-                      ? "bg-amber-400 animate-pulse"
-                      : agentStatus === "thinking"
-                        ? "bg-amber-500 animate-pulse"
-                        : agentStatus === "speaking"
-                          ? "bg-indigo-500 animate-pulse"
-                          : agentStatus === "listening"
-                            ? "bg-emerald-500"
-                            : agentStatus === "error"
-                              ? "bg-rose-500"
-                              : "bg-secondary"
-                  }`}
+                  className={`text-xs flex items-center gap-2 ${audioActive ? "text-emerald-600" : "text-secondary"}`}
+                >
+                  <span
+                    className={`w-1.5 h-1.5 rounded-full ${audioActive ? "bg-emerald-500 animate-pulse" : "bg-secondary"}`}
+                  />
+                  {voiceMode === "canvas_capture"
+                    ? "Structuring canvas"
+                    : voiceMode === "inline_dictation"
+                      ? "Dictating into note"
+                      : voiceMode === "conversation"
+                        ? "AI conversation"
+                        : "Idle"}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setAudioCollapsed(true)}
+                  className="flex h-8 w-8 items-center justify-center rounded-full text-secondary hover:bg-surface-variant hover:text-primary"
+                  title="Collapse Audio Interaction"
+                  aria-label="Collapse Audio Interaction"
+                >
+                  <PanelLeftClose size={16} />
+                </button>
+              </div>
+            </header>
+
+            {/* Waveform */}
+            <div className="flex-1 flex items-center justify-center p-6 min-h-0 relative">
+              <div className="relative w-[260px] h-[260px] flex items-center justify-center">
+                <div
+                  className={`absolute inset-0 rounded-full border border-auralis/25 blur-[2px] ${audioActive ? "animate-[ring-pulse_3.2s_ease-out_infinite]" : ""}`}
                 />
-                {agentStatus === "connecting"
-                  ? "Agent connecting…"
-                  : agentStatus === "thinking"
-                    ? "Agent thinking…"
-                    : agentStatus === "speaking"
-                      ? "Agent speaking…"
-                      : agentStatus === "listening"
-                        ? "Agent listening"
-                        : agentStatus === "error"
-                          ? "Agent error"
-                          : "Agent idle"}
+                <div
+                  className={`absolute inset-8 rounded-full border border-auralis/40 ${audioActive ? "animate-[ring-pulse_4.1s_ease-out_infinite_0.6s]" : ""}`}
+                />
+                <div
+                  className={`absolute left-[50px] top-[80px] w-[50px] h-[100px] rounded-full bg-gradient-to-tr from-rose-400 to-orange-300 opacity-80 mix-blend-multiply blur-[6px] ${audioActive ? "animate-[orb-a_3s_ease-in-out_infinite]" : ""}`}
+                  style={{ transform: `scale(${1 + level * 0.3})` }}
+                />
+                <div
+                  className={`absolute right-[50px] top-[80px] w-[50px] h-[100px] rounded-full bg-gradient-to-tr from-emerald-300 to-teal-300 opacity-80 mix-blend-multiply blur-[6px] ${audioActive ? "animate-[orb-c_4.2s_ease-in-out_infinite]" : ""}`}
+                  style={{ transform: `scale(${1 + level * 0.28})` }}
+                />
+                <div
+                  className={`relative w-[65px] h-[130px] rounded-full bg-gradient-to-tr from-indigo-400 via-violet-400 to-purple-500 opacity-90 blur-[4px] ${audioActive ? "animate-[orb-b_3.6s_ease-in-out_infinite]" : ""}`}
+                  style={{ transform: `scale(${1 + level * 0.35})` }}
+                />
+              </div>
+            </div>
+
+            {/* Controls */}
+            <div className="px-5 pb-4 flex flex-col items-center justify-center gap-2 shrink-0">
+              {/* Agent status line — replaces the old Talk with Agent button. */}
+              <div className="pb-2 flex items-center justify-center shrink-0">
+                <span className="text-xs text-secondary flex items-center gap-1.5">
+                  <span
+                    className={`w-1.5 h-1.5 rounded-full ${
+                      agentStatus === "connecting"
+                        ? "bg-amber-400 animate-pulse"
+                        : agentStatus === "thinking"
+                          ? "bg-amber-500 animate-pulse"
+                          : agentStatus === "speaking"
+                            ? "bg-indigo-500 animate-pulse"
+                            : agentStatus === "listening"
+                              ? "bg-emerald-500"
+                              : agentStatus === "error"
+                                ? "bg-rose-500"
+                                : "bg-secondary"
+                    }`}
+                  />
+                  {agentStatus === "connecting"
+                    ? "Agent connecting…"
+                    : agentStatus === "thinking"
+                      ? "Agent thinking…"
+                      : agentStatus === "speaking"
+                        ? "Agent speaking…"
+                        : agentStatus === "listening"
+                          ? "Agent listening"
+                          : agentStatus === "error"
+                            ? "Agent error"
+                            : "Agent idle"}
+                </span>
+              </div>
+
+              {/* Start / Stop toggle */}
+              <button
+                onClick={toggleAgentConversation}
+                disabled={!activeSessionId || captureActive}
+                className={`px-5 py-2.5 rounded-full text-sm font-medium disabled:opacity-40 hover:opacity-90 flex items-center gap-2 ${
+                  conversationActive
+                    ? "border border-auralis bg-surface text-primary hover:bg-surface-variant"
+                    : "bg-primary text-on-primary"
+                }`}
+                aria-label={
+                  captureActive
+                    ? voiceMode === "inline_dictation"
+                      ? "Inline dictation active"
+                      : "Canvas capture active"
+                    : conversationActive
+                      ? "Stop AI conversation"
+                      : "Start AI conversation"
+                }
+              >
+                <span className="material-symbols-outlined text-base">
+                  {captureActive ? "graphic_eq" : conversationActive ? "stop" : "mic"}
+                </span>
+                {captureActive
+                  ? voiceMode === "inline_dictation"
+                    ? "Dictating into note"
+                    : "Canvas capture active"
+                  : conversationActive
+                    ? "Stop conversation"
+                    : "Talk with Agent"}
+              </button>
+            </div>
+            <div className="px-5 pb-3 flex items-center justify-center shrink-0">
+              <span className="text-[11px] text-secondary">
+                <kbd className="px-1.5 py-0.5 rounded border border-auralis bg-surface text-[10px] font-mono">
+                  Space
+                </kbd>{" "}
+                hold to structure canvas ·{" "}
+                <kbd className="px-1.5 py-0.5 rounded border border-auralis bg-surface text-[10px] font-mono">
+                  T
+                </kbd>{" "}
+                toggle capture ·{" "}
+                <kbd className="px-1.5 py-0.5 rounded border border-auralis bg-surface text-[10px] font-mono">
+                  Option
+                </kbd>{" "}
+                in note: dictate ·{" "}
+                <kbd className="px-1.5 py-0.5 rounded border border-auralis bg-surface text-[10px] font-mono">
+                  S
+                </kbd>{" "}
+                {agentStatus === "speaking" ? "silence agent" : "ask agent to speak"}
               </span>
             </div>
 
-            {/* Start / Stop toggle */}
-            <button
-              onClick={() => {
-                listening ? void stopListening() : void startListening();
-              }}
-              disabled={!activeSessionId}
-              className={`px-5 py-2.5 rounded-full text-sm font-medium disabled:opacity-40 hover:opacity-90 flex items-center gap-2 ${
-                listening
-                  ? "border border-auralis bg-surface text-primary hover:bg-surface-variant"
-                  : "bg-primary text-on-primary"
-              }`}
-            >
-              <span className="material-symbols-outlined text-base">
-                {listening ? "stop" : "mic"}
-              </span>
-              {listening ? "Stop" : "Start"}
-            </button>
-          </div>
-          <div className="px-5 pb-3 flex items-center justify-center shrink-0">
-            <span className="text-[11px] text-secondary">
-              <kbd className="px-1.5 py-0.5 rounded border border-auralis bg-surface text-[10px] font-mono">
-                T
-              </kbd>{" "}
-              {listening ? "stop" : "start"} ·{" "}
-              <kbd className="px-1.5 py-0.5 rounded border border-auralis bg-surface text-[10px] font-mono">
-                S
-              </kbd>{" "}
-              {agentStatus === "speaking" ? "silence agent" : "ask agent to speak"}
-            </span>
-          </div>
-
-          {/* Transcript */}
-          <div className="border-t border-auralis bg-surface/60 shrink-0">
-            <button
-              onClick={() => setExpanded((v) => !v)}
-              className="w-full flex items-center justify-between px-5 py-3 hover:bg-surface-variant/40 transition-colors"
-            >
-              <span className="text-xs uppercase tracking-[0.18em] text-secondary">Transcript</span>
-              <span className="material-symbols-outlined text-secondary text-lg">
-                {expanded ? "expand_more" : "expand_less"}
-              </span>
-            </button>
-            <div
-              className="grid transition-all duration-300 ease-out"
-              style={{ gridTemplateRows: expanded ? "1fr" : "0fr" }}
-            >
-              <div className="overflow-hidden">
-                <div className="px-5 pb-4 max-h-48 overflow-y-auto text-sm leading-relaxed text-primary">
-                  {finals.length === 0 && !partial && (
-                    <p className="text-secondary italic">
-                      Start speaking to see live transcription here…
-                    </p>
-                  )}
-                  {finals.map((f) => (
-                    <p key={f.id} className="mb-1">
-                      {f.text}
-                    </p>
-                  ))}
-                  {partial && <p className="text-secondary">{partial}</p>}
+            {/* Transcript */}
+            <div className="border-t border-auralis bg-surface/60 shrink-0">
+              <button
+                onClick={() => setExpanded((v) => !v)}
+                className="w-full flex items-center justify-between px-5 py-3 hover:bg-surface-variant/40 transition-colors"
+              >
+                <span className="text-xs uppercase tracking-[0.18em] text-secondary">
+                  Transcript
+                </span>
+                <span className="material-symbols-outlined text-secondary text-lg">
+                  {expanded ? "expand_more" : "expand_less"}
+                </span>
+              </button>
+              <div
+                className="grid transition-all duration-300 ease-out"
+                style={{ gridTemplateRows: expanded ? "1fr" : "0fr" }}
+              >
+                <div className="overflow-hidden">
+                  <div className="px-5 pb-4 max-h-48 overflow-y-auto text-sm leading-relaxed text-primary">
+                    {finals.length === 0 && !partial && (
+                      <p className="text-secondary italic">
+                        Start speaking to see live transcription here…
+                      </p>
+                    )}
+                    {finals.map((f) => (
+                      <p key={f.id} className="mb-1">
+                        {f.text}
+                      </p>
+                    ))}
+                    {partial && <p className="text-secondary">{partial}</p>}
+                  </div>
                 </div>
               </div>
             </div>
-          </div>
-        </section>
+          </section>
+        )}
 
         {/* CANVAS PANEL */}
-        <section className="flex-1 flex flex-col min-w-0">
+        <section className="relative flex-1 flex flex-col min-w-0">
           <header className="h-14 px-6 flex items-center justify-between border-b border-auralis shrink-0">
             <span className="text-xs uppercase tracking-[0.18em] text-secondary">
-              {surfaceMode === "brief" ? "Live Brief" : "Idea Canvas"}
+              Co-thinking Canvas
             </span>
             <div className="flex items-center gap-2">
-              <div
-                className="flex h-8 items-center rounded-full border border-auralis bg-surface p-0.5"
-                role="tablist"
-                aria-label="Canvas mode"
-              >
-                {(["brief", "map"] as const).map((mode) => (
-                  <button
-                    key={mode}
-                    type="button"
-                    onClick={() => setSurfaceMode(mode)}
-                    className={`h-7 rounded-full px-3 text-xs font-medium transition-colors ${
-                      surfaceMode === mode
-                        ? "bg-primary text-on-primary"
-                        : "text-secondary hover:bg-surface-variant hover:text-primary"
-                    }`}
-                    role="tab"
-                    aria-selected={surfaceMode === mode}
-                  >
-                    {mode === "brief" ? "Brief" : "Map"}
-                  </button>
-                ))}
-              </div>
               <select
                 value={model}
                 onChange={(e) => setModel(e.target.value as typeof model)}
@@ -2040,12 +2773,10 @@ function Workbench() {
                     setError(e?.message ?? "Export failed"),
                   );
                 }}
-                disabled={surfaceMode !== "brief" || blockCount === 0}
+                disabled={blockCount === 0}
                 className="ml-3 px-3 py-1.5 rounded-full border border-auralis bg-surface text-primary text-xs font-medium hover:bg-surface-variant disabled:opacity-40 flex items-center gap-1.5"
                 aria-label="Export to Word"
-                title={
-                  surfaceMode === "brief" ? "Export to Word (.docx)" : "Use Export JSON inside Map"
-                }
+                title="Export structured canvas text to Word (.docx)"
               >
                 <span className="material-symbols-outlined text-base">download</span>
                 Export
@@ -2063,29 +2794,31 @@ function Workbench() {
               </button>
             </div>
           )}
-          <div
-            className={`relative flex-1 min-h-0 ${surfaceMode === "brief" ? "overflow-y-auto p-8" : "overflow-hidden p-4"}`}
-          >
-            {surfaceMode === "brief" ? (
-              <BriefDocument
-                key={activeSessionId ?? "none"}
-                ref={briefDocRef}
-                sessionId={activeSessionId ?? ""}
-                doc={doc}
-                onPersistDelta={onPersistDelta}
-                onIsEditingChange={onIsEditingChange}
-                onCreateMapFromSelection={appendMapFromText}
-                aiLoading={aiLoading}
-              />
-            ) : (
-              <IdeaCanvas
-                state={ideaCanvas}
-                sessionTitle={activeSession?.title ?? "Idea Canvas"}
-                loading={mapLoading}
-                onChange={setIdeaCanvas}
-                onGenerateFromBrief={generateMapFromBrief}
-              />
-            )}
+          <div className="relative flex-1 min-h-0 overflow-hidden">
+            <ThinkingBoard
+              state={ideaCanvas}
+              onChange={onCanvasChange}
+              onExit={() => undefined}
+              mode="embedded"
+              onEnterFullscreen={() => setBoardFullscreen(true)}
+              showAgentDock={false}
+              captureAnchor={captureAnchor}
+              captureActive={captureActive}
+              onCanvasPointSelect={selectCaptureAnchor}
+              agentStatus={agentStatus}
+              listening={conversationActive}
+              level={level}
+              partial={conversationActive ? partial : ""}
+              aiWriting={canvasAiWriting || mapLoading}
+              insight={passiveInsight}
+              agentDockCollapsed={agentDockCollapsed}
+              onToggleListening={toggleAgentConversation}
+              onPromptAgent={promptAgent}
+              onToggleAgentDock={() => setAgentDockCollapsed((value) => !value)}
+              onExpandAudio={() => setAudioCollapsed(false)}
+              onInlineDictationStart={startInlineDictation}
+              onInlineDictationStop={stopInlineDictation}
+            />
             {/* AI status indicators — pinned to the lower area of the canvas. */}
             <div className="pointer-events-none sticky bottom-4 z-10 flex flex-col items-start gap-1.5 px-2">
               {Object.entries(researchRunning).map(([taskId, q]) => (
@@ -2094,7 +2827,7 @@ function Workbench() {
                   <span className="truncate max-w-[280px]">Researching: {q}</span>
                 </div>
               ))}
-              {surfaceMode === "brief" && (briefThinking || aiLoading) && (
+              {(briefThinking || aiLoading) && (
                 <div className="flex items-center gap-2 text-xs text-secondary">
                   <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse" />
                   <span>AI is thinking…</span>
@@ -2113,11 +2846,51 @@ function Workbench() {
               </Link>
             </span>
           </footer>
+          {audioCollapsed && !boardFullscreen && (
+            <div className="absolute bottom-14 right-5 z-30">
+              <AgentDock
+                status={agentStatus}
+                listening={conversationActive}
+                level={level}
+                partial={conversationActive ? partial : ""}
+                aiWriting={canvasAiWriting}
+                insight={passiveInsight}
+                disabled={!activeSessionId || captureActive}
+                collapsed={agentDockCollapsed}
+                onToggleListening={toggleAgentConversation}
+                onPromptAgent={promptAgent}
+                onToggleDock={() => setAgentDockCollapsed((value) => !value)}
+                onExpandPanel={() => setAudioCollapsed(false)}
+              />
+            </div>
+          )}
         </section>
       </main>
-      {(import.meta.env.DEV ||
-        (typeof window !== "undefined" && window.location.search.includes("debug=1"))) && (
-        <PipelineInspector sessionId={activeSessionId} />
+      {boardFullscreen && (
+        <FullscreenBoard
+          state={ideaCanvas}
+          onChange={onCanvasChange}
+          onExit={() => setBoardFullscreen(false)}
+          agentStatus={agentStatus}
+          listening={conversationActive}
+          level={level}
+          partial={conversationActive ? partial : ""}
+          aiWriting={canvasAiWriting}
+          insight={passiveInsight}
+          captureAnchor={captureAnchor}
+          captureActive={captureActive}
+          onCanvasPointSelect={selectCaptureAnchor}
+          agentDockCollapsed={agentDockCollapsed}
+          onToggleListening={toggleAgentConversation}
+          onPromptAgent={promptAgent}
+          onToggleAgentDock={() => setAgentDockCollapsed((value) => !value)}
+          onInlineDictationStart={startInlineDictation}
+          onInlineDictationStop={stopInlineDictation}
+          onExpandAudio={() => {
+            setBoardFullscreen(false);
+            setAudioCollapsed(false);
+          }}
+        />
       )}
     </div>
   );
