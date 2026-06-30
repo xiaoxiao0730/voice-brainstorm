@@ -1,4 +1,5 @@
 import type { BriefBlock, BriefDoc } from "@/lib/pipeline/types";
+import type { ExplorationBriefExport } from "@/lib/orchestrator/exportExplorationBrief.functions";
 
 function escapeHtml(value: string) {
   return value
@@ -112,10 +113,76 @@ function printableHtml(doc: BriefDoc, title: string, fallbackText = "") {
 </html>`;
 }
 
-export function exportBriefToPdfPrint(doc: BriefDoc, title: string, fallbackText = "") {
+function explorationBriefHtml(brief: ExplorationBriefExport) {
+  const displayTitle = brief.title || "Exploration Brief";
+  const content = brief.sections
+    .map(
+      (section) => `
+        <section class="block brief-section">
+          <h2>${escapeHtml(section.title)}</h2>
+          ${
+            section.bullets.length
+              ? `<ul>${section.bullets.map((bullet) => `<li>${escapeHtml(bullet)}</li>`).join("")}</ul>`
+              : `<p class="empty">No grounded content yet.</p>`
+          }
+        </section>
+      `,
+    )
+    .join("");
+
+  return `<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>${escapeHtml(displayTitle)}</title>
+  <style>
+    @page { size: A4; margin: 18mm; }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      color: #1f1f1f;
+      background: #ffffff;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      font-size: 12pt;
+      line-height: 1.55;
+    }
+    main { max-width: 720px; margin: 0 auto; }
+    header { margin-bottom: 26px; padding-bottom: 14px; border-bottom: 1px solid #d8d3ca; }
+    .eyebrow { margin: 0 0 8px; color: #777064; font-size: 8.5pt; letter-spacing: 0.16em; text-transform: uppercase; }
+    h1, h2, p { margin: 0; }
+    h1 { font-size: 24pt; line-height: 1.15; font-weight: 650; }
+    .summary { margin-top: 12px; color: #504b43; font-size: 11.5pt; }
+    h2 { margin: 20px 0 8px; font-size: 14.5pt; line-height: 1.25; font-weight: 650; }
+    ul { margin: 0 0 10px 18px; padding: 0; }
+    li { margin: 0 0 6px; padding-left: 2px; }
+    .block { break-inside: avoid; margin-bottom: 8px; }
+    .empty { color: #777064; font-style: italic; }
+    @media screen {
+      body { background: #efede8; padding: 32px; }
+      main { min-height: calc(297mm - 36mm); padding: 18mm; background: #fff; box-shadow: 0 18px 60px rgba(33, 31, 27, 0.14); }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <p class="eyebrow">Murmur exploration brief</p>
+      <h1>${escapeHtml(displayTitle)}</h1>
+      ${brief.summary.trim() ? `<p class="summary">${escapeHtml(brief.summary)}</p>` : ""}
+    </header>
+    ${content || `<p class="empty">Nothing to export yet.</p>`}
+  </main>
+  <script>
+    window.addEventListener("load", () => window.setTimeout(() => window.print(), 250));
+  </script>
+</body>
+</html>`;
+}
+
+function printHtml(html: string, title: string) {
   if (typeof window === "undefined") return;
 
-  const html = printableHtml(doc, title, fallbackText);
   const blob = new Blob([html], { type: "text/html;charset=utf-8" });
   const url = URL.createObjectURL(blob);
   const printWindow = window.open(url, "_blank");
@@ -127,4 +194,12 @@ export function exportBriefToPdfPrint(doc: BriefDoc, title: string, fallbackText
   }
 
   printWindow.document.title = `${safeFilename(title)}.pdf`;
+}
+
+export function exportBriefToPdfPrint(doc: BriefDoc, title: string, fallbackText = "") {
+  printHtml(printableHtml(doc, title, fallbackText), title);
+}
+
+export function exportExplorationBriefToPdfPrint(brief: ExplorationBriefExport) {
+  printHtml(explorationBriefHtml(brief), brief.title || "Exploration Brief");
 }

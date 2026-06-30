@@ -321,62 +321,33 @@ function orthogonalEdgePath({
 }) {
   const sourceVertical = sourcePosition === Position.Top || sourcePosition === Position.Bottom;
   const targetVertical = targetPosition === Position.Top || targetPosition === Position.Bottom;
-  const sourceDir =
-    sourcePosition === Position.Left
-      ? { x: -1, y: 0 }
-      : sourcePosition === Position.Right
-        ? { x: 1, y: 0 }
-        : sourcePosition === Position.Top
-          ? { x: 0, y: -1 }
-          : { x: 0, y: 1 };
-  const targetDir =
-    targetPosition === Position.Left
-      ? { x: -1, y: 0 }
-      : targetPosition === Position.Right
-        ? { x: 1, y: 0 }
-        : targetPosition === Position.Top
-          ? { x: 0, y: -1 }
-          : { x: 0, y: 1 };
-  const stem = 42;
-  const sourceStem = { x: sourceX + sourceDir.x * stem, y: sourceY + sourceDir.y * stem };
-  const targetStem = { x: targetX + targetDir.x * stem, y: targetY + targetDir.y * stem };
 
   let points: Array<{ x: number; y: number }>;
   let handle: { x: number; y: number; cursor: "ew-resize" | "ns-resize" };
 
   if (sourceVertical && targetVertical) {
-    const busY = (sourceStem.y + targetStem.y) / 2 + routeOffset;
+    const busY = (sourceY + targetY) / 2 + routeOffset;
     points = [
       { x: sourceX, y: sourceY },
-      sourceStem,
-      { x: sourceStem.x, y: busY },
-      { x: targetStem.x, y: busY },
-      targetStem,
+      { x: sourceX, y: busY },
+      { x: targetX, y: busY },
       { x: targetX, y: targetY },
     ];
-    handle = { x: (sourceStem.x + targetStem.x) / 2, y: busY, cursor: "ns-resize" };
+    handle = { x: (sourceX + targetX) / 2, y: busY, cursor: "ns-resize" };
   } else if (!sourceVertical && !targetVertical) {
-    const busX = (sourceStem.x + targetStem.x) / 2 + routeOffset;
+    const busX = (sourceX + targetX) / 2 + routeOffset;
     points = [
       { x: sourceX, y: sourceY },
-      sourceStem,
-      { x: busX, y: sourceStem.y },
-      { x: busX, y: targetStem.y },
-      targetStem,
+      { x: busX, y: sourceY },
+      { x: busX, y: targetY },
       { x: targetX, y: targetY },
     ];
-    handle = { x: busX, y: (sourceStem.y + targetStem.y) / 2, cursor: "ew-resize" };
+    handle = { x: busX, y: (sourceY + targetY) / 2, cursor: "ew-resize" };
   } else {
     const corner = sourceVertical
-      ? { x: sourceStem.x, y: targetStem.y + routeOffset }
-      : { x: targetStem.x + routeOffset, y: sourceStem.y };
-    points = [
-      { x: sourceX, y: sourceY },
-      sourceStem,
-      corner,
-      targetStem,
-      { x: targetX, y: targetY },
-    ];
+      ? { x: sourceX, y: targetY + routeOffset }
+      : { x: targetX + routeOffset, y: sourceY };
+    points = [{ x: sourceX, y: sourceY }, corner, { x: targetX, y: targetY }];
     handle = {
       x: corner.x,
       y: corner.y,

@@ -46,7 +46,7 @@ import {
   upsertBriefNode,
   acceptPendingBlock,
 } from "@/lib/brief.functions";
-import { exportBriefToPdfPrint } from "@/lib/exportPdf";
+import { exportExplorationBriefToPdfPrint } from "@/lib/exportPdf";
 
 import { getRealtimeSession } from "@/lib/agent/realtime.functions";
 import {
@@ -80,6 +80,11 @@ import {
   structureVoiceToCanvas,
   type StructuredVoiceCanvas,
 } from "@/lib/orchestrator/structureVoiceToCanvas.functions";
+import {
+  generateCanvasInsight,
+  type CanvasInsight,
+} from "@/lib/orchestrator/canvasInsight.functions";
+import { exportExplorationBrief } from "@/lib/orchestrator/exportExplorationBrief.functions";
 import { cleanVoiceCapture } from "@/lib/orchestrator/cleanVoiceCapture.functions";
 import {
   formatThinkingState,
@@ -536,6 +541,8 @@ function Workbench() {
   const saveCanvas = useServerFn(saveIdeaCanvas);
   const planContract = useServerFn(planThoughtTurnContract);
   const structureCanvasCapture = useServerFn(structureVoiceToCanvas);
+  const generateQuietInsight = useServerFn(generateCanvasInsight);
+  const buildExplorationBrief = useServerFn(exportExplorationBrief);
   const cleanCapture = useServerFn(cleanVoiceCapture);
   const loadState = useServerFn(loadThinkingState);
 
@@ -555,6 +562,8 @@ function Workbench() {
   const [ideaCanvas, setIdeaCanvas] = useState<IdeaCanvasState>({ nodes: [], edges: [] });
   const [mapLoading, setMapLoading] = useState(false);
   const [thinkingState, setThinkingState] = useState<SessionThinkingState>(EMPTY_THINKING_STATE);
+  const [quietInsight, setQuietInsight] = useState<CanvasInsight | null>(null);
+  const [exportingBrief, setExportingBrief] = useState(false);
 
   // The audio panel and floating dock share one realtime session.
   const [audioCollapsed, setAudioCollapsed] = useState(() => {
@@ -669,6 +678,7 @@ function Workbench() {
     setCaptureAnchor(null);
     setCaptureActive(false);
     setVoiceMode("idle");
+    setQuietInsight(null);
   }, [activeSessionId]);
 
   const selectCaptureAnchor = useCallback((position: { x: number; y: number }) => {
@@ -1213,6 +1223,37 @@ function Workbench() {
     [applyCanvasOps],
   );
 
+  const addQuietInsightCard = useCallback(() => {
+    const card = quietInsight?.suggestedCard;
+    const title = card?.title.trim();
+    if (!card || !title) return;
+    const current = ideaCanvasRef.current;
+    const width = 280;
+    const position = findOpenCanvasPosition(
+      current.nodes,
+      snapCanvasPosition({ x: 140, y: 160 + current.nodes.length * 28 }),
+      width,
+      178,
+    );
+    const node: IdeaFlowNode = {
+      id: nextIdeaId("insight"),
+      type: "ideaNode",
+      position,
+      selected: true,
+      data: {
+        title,
+        body: card.body.trim(),
+        kind: card.kind,
+        width,
+      },
+    };
+    setIdeaCanvas({
+      ...current,
+      nodes: [...current.nodes.map((item) => ({ ...item, selected: false })), node],
+    });
+    setQuietInsight(null);
+  }, [quietInsight]);
+
   // Stage 4: sync sessionStore + attach slow-lane coordinator to the active session.
   // Also subscribe to brief.proposed / research.requested / research.completed.
   useEffect(() => {
@@ -1640,18 +1681,34 @@ function Workbench() {
       setBriefThinking(true);
       setMapLoading(true);
       try {
+        const canvasBefore = ideaCanvasRef.current;
         const result = await structureCanvasCapture({
           data: {
             rawTranscript: source.slice(0, 6000),
-            existingCards: ideaCanvasExistingCards(ideaCanvasRef.current),
+            existingCards: ideaCanvasExistingCards(canvasBefore),
             model: modelRef.current,
           },
         });
 
-        setIdeaCanvas((current) => ({
-          ...current,
-          ...mergeStructuredCanvasCapture(current, result, position),
-        }));
+        const nextCanvas = {
+          ...canvasBefore,
+          ...mergeStructuredCanvasCapture(canvasBefore, result, position),
+        };
+        ideaCanvasRef.current = nextCanvas;
+        setIdeaCanvas(nextCanvas);
+        setQuietInsight(null);
+        void generateQuietInsight({
+          data: {
+            latestThought: source.slice(0, 6000),
+            canvasText: ideaCanvasToPlainText(nextCanvas).slice(0, 5000),
+            model: modelRef.current,
+          },
+        })
+          .then((insight) => {
+            if (!insight.emit) return;
+            setQuietInsight(insight);
+          })
+          .catch((error) => console.warn("[quietInsight] failed", error));
         scheduleInject(
           `[canvas voice capture]\n${result.summary || result.title}\nRaw transcript was used as source material for the structured cards.`,
         );
@@ -1668,7 +1725,7 @@ function Workbench() {
         setCaptureAnchor(null);
       }
     },
-    [scheduleInject, structureCanvasCapture],
+    [generateQuietInsight, scheduleInject, structureCanvasCapture],
   );
 
   const startListening = async (options?: {
@@ -2436,8 +2493,11 @@ function Workbench() {
     if (aiLoading) {
       items.push({ id: "write", text: "AI is writing to the canvas..." });
     }
+    if (exportingBrief) {
+      items.push({ id: "export", text: "AI is shaping the exploration brief..." });
+    }
     return items;
-  }, [aiLoading, briefThinking, mapLoading, researchRunning]);
+  }, [aiLoading, briefThinking, exportingBrief, mapLoading, researchRunning]);
   const conversationActive = voiceMode === "conversation";
   const audioActive = voiceMode !== "idle";
 
@@ -2783,23 +2843,30 @@ function Workbench() {
               </span>
               <button
                 onClick={() => {
-                  try {
-                    exportBriefToPdfPrint(
-                      doc,
-                      activeSession?.title ?? "Live Brief",
-                      canvasTextForExport,
-                    );
-                  } catch (e) {
-                    setError(e instanceof Error ? e.message : "Export failed");
-                  }
+                  const title = activeSession?.title ?? "Exploration Brief";
+                  setExportingBrief(true);
+                  setError(null);
+                  void buildExplorationBrief({
+                    data: {
+                      title,
+                      briefText: briefPlainText.slice(0, 8000),
+                      canvasText: canvasTextForExport.slice(0, 8000),
+                      model: modelRef.current,
+                    },
+                  })
+                    .then((brief) => exportExplorationBriefToPdfPrint(brief))
+                    .catch((e) => {
+                      setError(e instanceof Error ? e.message : "Export failed");
+                    })
+                    .finally(() => setExportingBrief(false));
                 }}
-                disabled={!canExport}
+                disabled={!canExport || exportingBrief}
                 className="ml-3 px-3 py-1.5 rounded-full border border-auralis bg-surface text-primary text-xs font-medium hover:bg-surface-variant disabled:opacity-40 flex items-center gap-1.5"
                 aria-label="Export to PDF"
-                title="Export canvas text to PDF"
+                title="Export an AI-structured Exploration Brief to PDF"
               >
                 <span className="material-symbols-outlined text-base">download</span>
-                Export PDF
+                {exportingBrief ? "Preparing..." : "Export PDF"}
               </button>
             </div>
           </header>
@@ -2841,7 +2908,7 @@ function Workbench() {
             />
             {/* AI status indicators — pinned inside the canvas, above the lower chrome. */}
             {canvasStatusItems.length > 0 && (
-              <div className="pointer-events-none absolute bottom-16 left-5 z-20 flex max-w-[360px] flex-col items-start gap-1.5">
+              <div className="pointer-events-none absolute bottom-24 left-5 z-20 flex max-w-[360px] flex-col items-start gap-1.5">
                 {canvasStatusItems.map((item) => (
                   <div
                     key={item.id}
@@ -2851,6 +2918,28 @@ function Workbench() {
                     <span className="truncate">{item.text}</span>
                   </div>
                 ))}
+              </div>
+            )}
+            {quietInsight?.emit && (
+              <div className="absolute bottom-28 left-5 z-20 w-[340px] max-w-[calc(100%-40px)] text-xs text-secondary">
+                <div className="mb-1 font-semibold text-primary">{quietInsight.title}</div>
+                <div className="leading-relaxed">{quietInsight.observation}</div>
+                <div className="mt-2 flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={addQuietInsightCard}
+                    className="rounded px-2 py-1 text-[11px] font-medium text-primary hover:bg-surface-variant"
+                  >
+                    Add as question
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setQuietInsight(null)}
+                    className="rounded px-2 py-1 text-[11px] font-medium text-secondary hover:bg-surface-variant hover:text-primary"
+                  >
+                    Dismiss
+                  </button>
+                </div>
               </div>
             )}
           </div>
