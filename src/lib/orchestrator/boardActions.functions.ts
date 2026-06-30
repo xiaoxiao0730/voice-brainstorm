@@ -7,6 +7,7 @@ import { z } from "zod";
 
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
 import { createOpenAIProvider, normalizeAiModel, requireOpenAIKey } from "@/lib/ai-gateway.server";
+import { CANVAS_EDGE_LABELS, normalizeCanvasEdgeLabel } from "@/lib/canvas/edgeLabels";
 
 function extractJSON(raw: string): unknown {
   let cleaned = (raw ?? "").trim();
@@ -26,12 +27,22 @@ const ConnectInput = z.object({
   model: z.string().default("openai/gpt-4o-mini"),
 });
 
-const ConnectOutput = z.object({ relation: z.string().default("") });
+const ConnectOutput = z.object({
+  relation: z
+    .string()
+    .default("")
+    .transform((value) => normalizeCanvasEdgeLabel(value)),
+});
 
 const CONNECT_SYSTEM = `You label the relationship between two idea cards on a thinking canvas.
-Given a SOURCE card and a TARGET card, return ONE short relation phrase (1-4 words) describing how SOURCE relates to TARGET — the kind of phrase that would sit on the connecting arrow.
-Examples: 导致 / 依赖 / 对比 / 解决 / 是…的灵感来源 / 风险 / 前提 / leads to / blocks / part of / vs.
-Use the user's language. Be specific to THESE two cards, not generic.
+Given a SOURCE card and a TARGET card, return ONE categorical edge label describing how SOURCE relates to TARGET.
+
+EDGE LABEL RULES
+- Edge labels MUST be exactly one tag from this set: ${CANVAS_EDGE_LABELS.join(", ")}.
+- Edges are NOT natural language. Do not write explanations in edges.
+- INVALID: "leads to improving system performance", "is related to latency issues", "because of user behavior causing delay".
+- VALID: CAUSES, ENABLES, PART_OF, DEPENDS_ON.
+- If no label fits, return "".
 Return STRICT JSON only: { "relation": "..." }`;
 
 export const connectCards = createServerFn({ method: "POST" })
@@ -48,7 +59,7 @@ export const connectCards = createServerFn({ method: "POST" })
         prompt: `SOURCE: ${data.source.title}${data.source.body ? ` — ${data.source.body}` : ""}\nTARGET: ${data.target.title}${data.target.body ? ` — ${data.target.body}` : ""}\n\nReturn the relation JSON.`,
       });
       const out = ConnectOutput.parse(extractJSON(text));
-      return { relation: out.relation.trim() };
+      return { relation: out.relation };
     } catch (e) {
       console.warn("[connectCards] failed", e instanceof Error ? e.message : String(e));
       return { relation: "" };
@@ -66,7 +77,10 @@ const MergeInput = z.object({
 const MergeOutput = z.object({
   title: z.string().default(""),
   body: z.string().default(""),
-  relation: z.string().default(""),
+  relation: z
+    .string()
+    .default("")
+    .transform((value) => normalizeCanvasEdgeLabel(value)),
   kind: z.enum(["focus", "idea", "question", "decision", "risk", "next"]).default("idea"),
 });
 
@@ -78,7 +92,7 @@ RULES
 - Use the user's language. Keep product/technical terms as-is.
 - title: the new idea in a short phrase or clause (the card's main line).
 - body: optional one-line elaboration; default "".
-- relation: a SHORT phrase (1-4 words) for the connecting arrows, e.g. 结合得出 / 共同指向 / 由此产生 / leads to / implies.
+- relation: exactly one categorical edge label from this set: ${CANVAS_EDGE_LABELS.join(", ")}. Edge labels are NOT natural language; do not write explanations. Use LEADS_TO if both cards point toward the new card and no more specific tag fits.
 - kind: pick the type that fits the new idea (idea/question/decision/risk/next/focus); default "idea".
 
 Return STRICT JSON only: { "title": "...", "body": "", "relation": "...", "kind": "idea" }`;
@@ -100,7 +114,7 @@ export const mergeCards = createServerFn({ method: "POST" })
       return {
         title: out.title.trim() || "New idea",
         body: out.body.trim(),
-        relation: out.relation.trim(),
+        relation: out.relation,
         kind: out.kind,
       };
     } catch (e) {
@@ -123,7 +137,10 @@ const AskInput = z.object({
 const AskOutput = z.object({
   title: z.string().default("Answer"),
   body: z.string().default(""),
-  relation: z.string().default("answers"),
+  relation: z
+    .string()
+    .default("ANSWERS")
+    .transform((value) => normalizeCanvasEdgeLabel(value) || "ANSWERS"),
   kind: z.enum(["focus", "idea", "question", "decision", "risk", "next"]).default("idea"),
 });
 
@@ -135,11 +152,11 @@ RULES
 - If the cards are insufficient, say what is missing and turn that into a useful question/next step.
 - title: short label for the answer card.
 - body: concise answer, ideally 2-5 bullets or short paragraphs.
-- relation: short edge label from selected cards to this answer, e.g. answers / implies / suggests / risk.
+- relation: exactly one categorical edge label from this set: ${CANVAS_EDGE_LABELS.join(", ")}. Usually use ANSWERS for an answer card.
 - kind: choose the best card type.
 - Use the user's language. Preserve product/technical terms.
 
-Return STRICT JSON only: { "title": "...", "body": "...", "relation": "answers", "kind": "idea" }`;
+Return STRICT JSON only: { "title": "...", "body": "...", "relation": "ANSWERS", "kind": "idea" }`;
 
 export const askCards = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
@@ -161,7 +178,7 @@ export const askCards = createServerFn({ method: "POST" })
       return {
         title: out.title.trim() || "Answer",
         body: out.body.trim(),
-        relation: out.relation.trim() || "answers",
+        relation: out.relation,
         kind: out.kind,
       };
     } catch (e) {
@@ -169,7 +186,7 @@ export const askCards = createServerFn({ method: "POST" })
       return {
         title: data.question.slice(0, 80) || "Answer",
         body: data.cards.map((c) => `- ${c.title}`).join("\n"),
-        relation: "answers",
+        relation: "ANSWERS",
         kind: "idea" as const,
       };
     }

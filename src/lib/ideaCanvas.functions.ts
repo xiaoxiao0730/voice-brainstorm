@@ -106,7 +106,7 @@ const NodeSchema = z.object({
   position: PositionSchema,
   data: z.object({
     title: z.string().max(500).default(""),
-    body: z.string().max(5000).optional(),
+    body: z.string().max(3_000_000).optional(),
     kind: IdeaKind.default("idea"),
     width: z.number().min(120).max(800).optional(),
     height: z.number().min(80).max(800).optional(),

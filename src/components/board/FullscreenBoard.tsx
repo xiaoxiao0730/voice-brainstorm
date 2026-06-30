@@ -4,6 +4,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type DragEvent as ReactDragEvent,
   type FormEvent,
   type KeyboardEvent as ReactKeyboardEvent,
 } from "react";
@@ -63,6 +64,7 @@ import type {
   IdeaNodeData,
   IdeaNodeKind,
 } from "@/components/mindmap/IdeaCanvas";
+import { normalizeCanvasEdgeLabel } from "@/lib/canvas/edgeLabels";
 import { askCards, mergeCards } from "@/lib/orchestrator/boardActions.functions";
 
 type Props = {
@@ -177,6 +179,21 @@ const QUICK_ADD_POSITION: Record<Side, string> = {
   left: "left-0 top-1/2 -translate-x-[34px] -translate-y-1/2",
 };
 
+const TEXT_NODE_MIN_WIDTH = 190;
+const TEXT_NODE_DEFAULT_WIDTH = 190;
+const TEXT_NODE_MAX_WIDTH = 520;
+
+const MAX_PASTED_IMAGE_BYTES = 1_800_000;
+
+function fileToDataUrl(file: File) {
+  return new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result ?? ""));
+    reader.onerror = () => reject(reader.error ?? new Error("Could not read image."));
+    reader.readAsDataURL(file);
+  });
+}
+
 function findOpenPosition(nodes: IdeaFlowNode[], desired: { x: number; y: number }, width = 260) {
   const height = 190;
   for (let index = 0; index < 20; index++) {
@@ -231,6 +248,15 @@ function getNodesBounds(nodes: IdeaFlowNode[]) {
     centerX: (left + right) / 2,
     centerY: (top + bottom) / 2,
   };
+}
+
+function estimateTextBlockWidth(text: string, textSize: IdeaNodeData["textSize"] = "small") {
+  const fontSize = textSize === "large" ? 24 : textSize === "normal" ? 18 : 14;
+  const longestLine = Math.max(8, ...text.split("\n").map((line) => line.length));
+  return Math.min(
+    TEXT_NODE_MAX_WIDTH,
+    Math.max(TEXT_NODE_MIN_WIDTH, longestLine * fontSize * 0.62 + 28),
+  );
 }
 
 function roundedOrthogonalPath(points: Array<{ x: number; y: number }>, radius = 18) {
@@ -505,7 +531,7 @@ function SmartNote({ id, data, selected }: NodeProps<IdeaFlowNode>) {
               });
             }
           }}
-          placeholder="Type a thought..."
+          placeholder="Name the idea, then add detail below..."
         />
         <div className="mt-auto flex items-center justify-between gap-2 px-4 pb-3 pt-2">
           <select
@@ -545,7 +571,7 @@ function TextBlock({ id, data, selected }: NodeProps<IdeaFlowNode>) {
     const textarea = taRef.current;
     if (!textarea) return;
     textarea.style.height = "auto";
-    textarea.style.height = `${Math.max(72, textarea.scrollHeight)}px`;
+    textarea.style.height = `${Math.max(52, textarea.scrollHeight)}px`;
   }, [data.width, text]);
 
   useEffect(() => {
@@ -571,29 +597,29 @@ function TextBlock({ id, data, selected }: NodeProps<IdeaFlowNode>) {
   }, [dictationCaret, id, onChange]);
 
   return (
-    <div className="group/text relative min-h-[72px]">
+    <div className="group/text relative min-h-[52px]">
       {selected && (
         <>
           <NodeResizeControl
             position="left"
             variant={ResizeControlVariant.Line}
             resizeDirection="horizontal"
-            minWidth={220}
-            maxWidth={860}
+            minWidth={TEXT_NODE_MIN_WIDTH}
+            maxWidth={TEXT_NODE_MAX_WIDTH}
             color="#168cf5"
           />
           <NodeResizeControl
             position="right"
             variant={ResizeControlVariant.Line}
             resizeDirection="horizontal"
-            minWidth={220}
-            maxWidth={860}
+            minWidth={TEXT_NODE_MIN_WIDTH}
+            maxWidth={TEXT_NODE_MAX_WIDTH}
             color="#168cf5"
           />
         </>
       )}
       <div
-        className={`relative min-h-[72px] border bg-transparent transition-colors ${
+        className={`relative min-h-[52px] border bg-transparent transition-colors ${
           selected ? "border-[#168cf5]/70" : "border-transparent"
         }`}
       >
@@ -606,18 +632,19 @@ function TextBlock({ id, data, selected }: NodeProps<IdeaFlowNode>) {
           onChange={(event) => {
             const value = event.target.value;
             const newline = value.indexOf("\n");
+            const width = Math.round(estimateTextBlockWidth(value, data.textSize ?? "small"));
             data.onChange?.(
               id,
               newline === -1
-                ? { title: value, body: "" }
-                : { title: value.slice(0, newline), body: value.slice(newline + 1) },
+                ? { title: value, body: "", width }
+                : { title: value.slice(0, newline), body: value.slice(newline + 1), width },
             );
           }}
-          placeholder="Start writing..."
+          placeholder="Add text"
           className="nodrag nowheel block w-full resize-none overflow-hidden whitespace-pre-wrap break-words bg-transparent px-2 py-2 font-sans leading-[1.5] text-primary outline-none placeholder:text-secondary/55"
           style={{
             fontFamily: "Inter, ui-sans-serif, system-ui, sans-serif",
-            fontSize: data.textSize === "small" ? 14 : data.textSize === "large" ? 24 : 18,
+            fontSize: data.textSize === "large" ? 24 : data.textSize === "normal" ? 18 : 14,
             fontWeight: data.bold ? 600 : 400,
             fontStyle: data.italic ? "italic" : "normal",
             textAlign: data.textAlign ?? "left",
@@ -629,6 +656,54 @@ function TextBlock({ id, data, selected }: NodeProps<IdeaFlowNode>) {
           }`}
           title="Drag text block"
           aria-label="Drag text block"
+        >
+          <span className="h-1.5 w-1.5 rounded-full bg-secondary" />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ImageBlock({ data, selected }: NodeProps<IdeaFlowNode>) {
+  const src = data.body ?? "";
+  return (
+    <div className="group/image relative">
+      {selected && (
+        <NodeResizeControl
+          variant={ResizeControlVariant.Line}
+          minWidth={180}
+          minHeight={120}
+          maxWidth={960}
+          maxHeight={720}
+          color="#168cf5"
+        />
+      )}
+      <div
+        className={`relative overflow-hidden border bg-white transition-shadow ${
+          selected
+            ? "shadow-[0_10px_24px_rgba(20,24,31,0.16)]"
+            : "shadow-[0_7px_18px_rgba(20,24,31,0.1)] hover:shadow-[0_10px_24px_rgba(20,24,31,0.14)]"
+        }`}
+        style={{ borderColor: selected ? "#168cf5" : "rgba(0,0,0,0.12)", borderRadius: 4 }}
+      >
+        {src ? (
+          <img
+            src={src}
+            alt={data.title || "Canvas image"}
+            className="block h-full w-full select-none object-contain"
+            draggable={false}
+          />
+        ) : (
+          <div className="flex h-full min-h-[160px] items-center justify-center text-sm text-secondary">
+            Image unavailable
+          </div>
+        )}
+        <div
+          className={`note-drag-handle absolute right-2 top-2 flex h-7 w-7 cursor-grab items-center justify-center rounded bg-white/90 text-secondary shadow-sm transition-opacity active:cursor-grabbing ${
+            selected ? "opacity-100" : "opacity-0 group-hover/image:opacity-100"
+          }`}
+          title="Drag image"
+          aria-label="Drag image"
         >
           <span className="h-1.5 w-1.5 rounded-full bg-secondary" />
         </div>
@@ -764,7 +839,7 @@ function EditableEdge({
   );
 }
 
-const nodeTypes = { ideaNode: SmartNote, textNode: TextBlock };
+const nodeTypes = { ideaNode: SmartNote, textNode: TextBlock, imageNode: ImageBlock };
 const edgeTypes = { editable: EditableEdge };
 
 function BoardInner({
@@ -794,6 +869,7 @@ function BoardInner({
   const rf = useReactFlow();
   const viewport = useViewport();
   const stateRef = useRef(state);
+  const lastPointerFlowRef = useRef<{ x: number; y: number } | null>(null);
   const [selectedNodes, setSelectedNodes] = useState<IdeaFlowNode[]>([]);
   const [actionBusy, setActionBusy] = useState(false);
   const [askOpen, setAskOpen] = useState(false);
@@ -808,6 +884,7 @@ function BoardInner({
   } | null>(null);
   const mergeFn = useServerFn(mergeCards);
   const askFn = useServerFn(askCards);
+  const hasCanvasContent = state.nodes.length > 0;
 
   useEffect(() => {
     stateRef.current = state;
@@ -895,10 +972,13 @@ function BoardInner({
 
   const onInlineKeyDown = useCallback(
     (id: string, event: ReactKeyboardEvent<HTMLTextAreaElement>, currentText: string) => {
-      const isOptionKey =
-        event.key === "Alt" || event.code === "AltLeft" || event.code === "AltRight";
-      if (!isOptionKey) return;
-      if (event.repeat || event.ctrlKey || event.metaKey || event.shiftKey) return;
+      const isInlineVoiceHotkey =
+        event.code === "Space" &&
+        (event.metaKey || event.ctrlKey) &&
+        event.shiftKey &&
+        !event.altKey;
+      if (!isInlineVoiceHotkey) return;
+      if (event.repeat) return;
       if (!onInlineDictationStart || !onInlineDictationStop) return;
       if (inlineDictationRef.current?.timer || inlineDictationRef.current?.active) return;
 
@@ -928,9 +1008,12 @@ function BoardInner({
 
   const onInlineKeyUp = useCallback(
     (id: string, event: ReactKeyboardEvent<HTMLTextAreaElement>, currentText: string) => {
-      const isOptionKey =
-        event.key === "Alt" || event.code === "AltLeft" || event.code === "AltRight";
-      if (!isOptionKey) return;
+      const isInlineVoiceRelease =
+        event.code === "Space" ||
+        event.key === "Meta" ||
+        event.key === "Control" ||
+        event.key === "Shift";
+      if (!isInlineVoiceRelease) return;
       const ref = inlineDictationRef.current;
       if (!ref || ref.nodeId !== id) return;
 
@@ -1058,46 +1141,104 @@ function BoardInner({
     }, 0);
   }, [commitState, rf]);
 
-  const addTextBlock = useCallback(() => {
-    const current = stateRef.current;
-    const center = rf.screenToFlowPosition({
-      x: window.innerWidth / 2,
-      y: window.innerHeight / 2,
-    });
-    const width = 520;
-    const position = findOpenPosition(
-      current.nodes,
-      { x: center.x - width / 2, y: center.y - 70 },
-      width,
-    );
-    const node: IdeaFlowNode = {
-      id: crypto.randomUUID(),
-      type: "textNode",
-      position: { x: Math.round(position.x), y: Math.round(position.y) },
-      data: {
-        title: "",
-        body: "",
-        kind: "idea",
+  const addTextBlockAt = useCallback(
+    (flowPosition: { x: number; y: number }) => {
+      const current = stateRef.current;
+      const width = TEXT_NODE_DEFAULT_WIDTH;
+      const position = findOpenPosition(
+        current.nodes,
+        { x: flowPosition.x - width / 2, y: flowPosition.y - 36 },
         width,
-        autoFocus: true,
-      },
-      selected: true,
-    };
-    commitState({
-      ...current,
-      nodes: [...current.nodes.map((item) => ({ ...item, selected: false })), node],
-    });
-  }, [commitState, rf]);
+      );
+      const node: IdeaFlowNode = {
+        id: crypto.randomUUID(),
+        type: "textNode",
+        position: { x: Math.round(position.x), y: Math.round(position.y) },
+        data: {
+          title: "",
+          body: "",
+          kind: "idea",
+          width,
+          textSize: "small",
+          autoFocus: true,
+        },
+        selected: true,
+      };
+      commitState({
+        ...current,
+        nodes: [...current.nodes.map((item) => ({ ...item, selected: false })), node],
+      });
+    },
+    [commitState],
+  );
+
+  const addTextBlock = useCallback(() => {
+    const center =
+      lastPointerFlowRef.current ??
+      rf.screenToFlowPosition({
+        x: window.innerWidth / 2,
+        y: window.innerHeight / 2,
+      });
+    addTextBlockAt(center);
+  }, [addTextBlockAt, rf]);
+
+  const addImageBlockAt = useCallback(
+    (src: string, flowPosition?: { x: number; y: number }) => {
+      const current = stateRef.current;
+      const width = 360;
+      const height = 240;
+      const center =
+        flowPosition ??
+        rf.screenToFlowPosition({
+          x: window.innerWidth / 2,
+          y: window.innerHeight / 2,
+        });
+      const position = findOpenPosition(
+        current.nodes,
+        { x: center.x - width / 2, y: center.y - height / 2 },
+        width,
+      );
+      const node: IdeaFlowNode = {
+        id: crypto.randomUUID(),
+        type: "imageNode",
+        position: { x: Math.round(position.x), y: Math.round(position.y) },
+        data: {
+          title: "Pasted image",
+          body: src,
+          kind: "idea",
+          width,
+          height,
+        },
+        selected: true,
+      };
+      commitState({
+        ...current,
+        nodes: [...current.nodes.map((item) => ({ ...item, selected: false })), node],
+      });
+    },
+    [commitState, rf],
+  );
 
   const renderNodes = useMemo(
     () =>
       state.nodes.map((node) => ({
         ...node,
-        type: node.type === "textNode" ? "textNode" : "ideaNode",
+        type:
+          node.type === "textNode"
+            ? "textNode"
+            : node.type === "imageNode"
+              ? "imageNode"
+              : "ideaNode",
         dragHandle: ".note-drag-handle",
         style: {
-          width: node.data.width ?? (node.type === "textNode" ? 520 : 260),
-          height: "auto" as const,
+          width:
+            node.data.width ??
+            (node.type === "textNode"
+              ? TEXT_NODE_DEFAULT_WIDTH
+              : node.type === "imageNode"
+                ? 360
+                : 260),
+          height: node.type === "imageNode" ? (node.data.height ?? 240) : "auto",
         },
         data: {
           ...node.data,
@@ -1128,15 +1269,27 @@ function BoardInner({
     (changes: NodeChange<IdeaFlowNode>[]) => {
       const current = stateRef.current;
       const changedNodes = applyNodeChanges(changes, current.nodes);
-      const widths = new Map<string, number>();
+      const sizes = new Map<string, { width?: number; height?: number }>();
       for (const change of changes) {
-        if (change.type === "dimensions" && change.dimensions?.width) {
-          widths.set(change.id, change.dimensions.width);
+        if (change.type === "dimensions" && change.dimensions) {
+          sizes.set(change.id, {
+            width: change.dimensions.width,
+            height: change.dimensions.height,
+          });
         }
       }
       const nodes = changedNodes.map((node) => {
-        const width = widths.get(node.id);
-        return width ? { ...node, data: { ...node.data, width: Math.round(width) } } : node;
+        const size = sizes.get(node.id);
+        if (!size?.width) return node;
+        return {
+          ...node,
+          data: {
+            ...node.data,
+            width: Math.round(size.width),
+            height:
+              node.type === "imageNode" && size.height ? Math.round(size.height) : node.data.height,
+          },
+        };
       });
       commitState({ ...current, nodes });
     },
@@ -1207,7 +1360,7 @@ function BoardInner({
     const bounds = getNodesBounds(selectedNodes);
     return {
       left: bounds.centerX * viewport.zoom + viewport.x,
-      top: bounds.top * viewport.zoom + viewport.y - 54,
+      top: bounds.top * viewport.zoom + viewport.y - 84,
     };
   }, [selectedNodes, viewport.x, viewport.y, viewport.zoom]);
 
@@ -1262,7 +1415,7 @@ function BoardInner({
             sourceHandle: "bottom",
             targetHandle: "top",
             type: "editable" as const,
-            label: result.relation || "answers",
+            label: normalizeCanvasEdgeLabel(result.relation) || "ANSWERS",
           })),
         ],
       });
@@ -1310,7 +1463,7 @@ function BoardInner({
       const current = stateRef.current;
       const sharedEdge = {
         type: "editable" as const,
-        label: result.relation || undefined,
+        label: normalizeCanvasEdgeLabel(result.relation) || undefined,
       };
       commitState({
         ...current,
@@ -1364,6 +1517,52 @@ function BoardInner({
     return () => window.removeEventListener("keydown", onKeyDown, true);
   }, [askOpen, mode, onExit]);
 
+  useEffect(() => {
+    const isTypingTarget = (target: EventTarget | null) => {
+      const element = target as HTMLElement | null;
+      if (!element) return false;
+      return (
+        element.tagName === "INPUT" || element.tagName === "TEXTAREA" || element.isContentEditable
+      );
+    };
+    const onPaste = (event: ClipboardEvent) => {
+      if (isTypingTarget(event.target)) return;
+      const items = Array.from(event.clipboardData?.items ?? []);
+      const imageItem = items.find((item) => item.type.startsWith("image/"));
+      const file = imageItem?.getAsFile();
+      if (!file) return;
+      event.preventDefault();
+      if (file.size > MAX_PASTED_IMAGE_BYTES) {
+        console.warn("[canvas] pasted image is too large for local canvas storage");
+        return;
+      }
+      void fileToDataUrl(file)
+        .then((src) => addImageBlockAt(src))
+        .catch((error) => console.warn("[canvas] paste image failed", error));
+    };
+    window.addEventListener("paste", onPaste);
+    return () => window.removeEventListener("paste", onPaste);
+  }, [addImageBlockAt]);
+
+  const handleImageDrop = useCallback(
+    (event: ReactDragEvent<HTMLDivElement>) => {
+      const file = Array.from(event.dataTransfer.files).find((item) =>
+        item.type.startsWith("image/"),
+      );
+      if (!file) return;
+      event.preventDefault();
+      if (file.size > MAX_PASTED_IMAGE_BYTES) {
+        console.warn("[canvas] dropped image is too large for local canvas storage");
+        return;
+      }
+      const position = rf.screenToFlowPosition({ x: event.clientX, y: event.clientY });
+      void fileToDataUrl(file)
+        .then((src) => addImageBlockAt(src, position))
+        .catch((error) => console.warn("[canvas] drop image failed", error));
+    },
+    [addImageBlockAt, rf],
+  );
+
   return (
     <div
       className={
@@ -1371,6 +1570,26 @@ function BoardInner({
           ? "fixed inset-0 z-50 bg-[#fbfaf7]"
           : "absolute inset-0 overflow-hidden bg-[#fbfaf7]"
       }
+      onDoubleClick={(event) => {
+        const target = event.target as HTMLElement | null;
+        if (
+          target?.closest(".react-flow__node, .react-flow__edge, input, textarea, button, select")
+        ) {
+          return;
+        }
+        const position = rf.screenToFlowPosition({
+          x: event.clientX,
+          y: event.clientY,
+        });
+        lastPointerFlowRef.current = position;
+        addTextBlockAt(position);
+      }}
+      onDragOver={(event) => {
+        if (Array.from(event.dataTransfer.items).some((item) => item.type.startsWith("image/"))) {
+          event.preventDefault();
+        }
+      }}
+      onDrop={handleImageDrop}
     >
       <ReactFlow
         nodes={renderNodes}
@@ -1381,11 +1600,18 @@ function BoardInner({
         onEdgesChange={onEdgesChange}
         onConnect={onConnect}
         onConnectEnd={onConnectEnd}
+        onPaneMouseMove={(event) => {
+          lastPointerFlowRef.current = rf.screenToFlowPosition({
+            x: event.clientX,
+            y: event.clientY,
+          });
+        }}
         onPaneClick={(event) => {
           const position = rf.screenToFlowPosition({
             x: event.clientX,
             y: event.clientY,
           });
+          lastPointerFlowRef.current = position;
           onCanvasPointSelect?.({
             x: Math.round(position.x),
             y: Math.round(position.y),
@@ -1426,13 +1652,29 @@ function BoardInner({
               />
               <span className="whitespace-nowrap rounded bg-white/95 px-2 py-1 text-[11px] font-medium text-secondary shadow-sm">
                 {captureActive
-                  ? "Listening... release Space to structure"
+                  ? "Listening... press Cmd/Ctrl+Shift+Space again to structure"
                   : "AI structure will start here"}
               </span>
             </div>
           </ViewportPortal>
         )}
       </ReactFlow>
+
+      {!hasCanvasContent && !captureAnchor && (
+        <div className="pointer-events-none absolute left-1/2 top-[34%] z-10 flex w-[410px] max-w-[calc(100vw-40px)] -translate-x-1/2 -translate-y-1/2 flex-col items-center text-center">
+          <div className="h-10 w-10 rounded-full bg-gradient-to-tr from-rose-300 via-indigo-200 to-emerald-200" />
+          <div
+            className="mt-5 text-[28px] leading-[1.08] text-primary"
+            style={{ fontFamily: '"Instrument Serif", Georgia, serif' }}
+          >
+            A canvas that lets your ideas grow.
+          </div>
+          <div className="mt-3 text-[14px] leading-snug text-secondary">
+            Press Cmd/Ctrl+Shift+Space to start or stop thinking out loud, or talk with the agent
+            directly.
+          </div>
+        </div>
+      )}
 
       {toolbarPos && selectedNodes.length > 0 && (
         <div
@@ -1479,7 +1721,7 @@ function BoardInner({
             }
           }}
           className="absolute z-40 flex w-[360px] -translate-x-1/2 flex-col gap-2 rounded-xl border border-auralis bg-white p-3 shadow-[0_16px_40px_rgba(20,24,31,0.16)]"
-          style={{ left: toolbarPos.left, top: toolbarPos.top + 42 }}
+          style={{ left: toolbarPos.left, top: toolbarPos.top + 44 }}
           aria-label="Ask selected cards"
         >
           <label className="text-[11px] font-semibold uppercase tracking-[0.14em] text-secondary">
@@ -1490,7 +1732,7 @@ function BoardInner({
             value={askDraft}
             onChange={(event) => setAskDraft(event.target.value)}
             rows={3}
-            placeholder="比如：这几张卡片共同指向什么？最大的风险是什么？"
+            placeholder="For example: What do these cards point to? What is the biggest risk?"
             className="min-h-[76px] resize-none rounded-lg border border-black/10 bg-[#fbfaf7] px-3 py-2 text-sm text-primary outline-none transition focus:border-[#168cf5] focus:bg-white focus:ring-2 focus:ring-[#168cf5]/15"
           />
           <div className="flex items-center justify-end gap-2">
@@ -1516,7 +1758,7 @@ function BoardInner({
       {toolbarPos && selectedNodes.length === 1 && selectedNodes[0].type === "textNode" && (
         <div
           className="absolute z-30 flex -translate-x-1/2 items-center gap-1 rounded-md border border-auralis bg-white p-1 shadow-md"
-          style={{ left: toolbarPos.left, top: toolbarPos.top + (askOpen ? 172 : 42) }}
+          style={{ left: toolbarPos.left, top: toolbarPos.top - 42 }}
           aria-label="Text formatting"
         >
           <select
@@ -1660,8 +1902,8 @@ function BoardInner({
           onMouseDown={(event) => event.preventDefault()}
           onClick={addTextBlock}
           className="flex h-9 w-9 items-center justify-center rounded text-primary hover:bg-surface-variant"
-          title="Create text"
-          aria-label="Create text"
+          title="Write freely"
+          aria-label="Write freely"
         >
           <Type size={18} />
         </button>
@@ -1670,8 +1912,8 @@ function BoardInner({
           onMouseDown={(event) => event.preventDefault()}
           onClick={addStandaloneNote}
           className="flex h-9 w-9 items-center justify-center rounded text-primary hover:bg-surface-variant"
-          title="Create note"
-          aria-label="Create note"
+          title="Create structured card"
+          aria-label="Create structured card"
         >
           <StickyNote size={18} />
         </button>

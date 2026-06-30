@@ -32,6 +32,8 @@ export type RealtimeEvents = {
   onCanvasOpsProposed?: (args: { reason?: string; ops: CanvasToolOp[]; callId: string }) => void;
 };
 
+import { CANVAS_EDGE_LABELS, normalizeCanvasEdgeLabel } from "@/lib/canvas/edgeLabels";
+
 export type CanvasToolOp = {
   action: "add_card" | "update_card" | "connect";
   kind?: "focus" | "idea" | "question" | "decision" | "risk" | "next";
@@ -121,6 +123,8 @@ CANVAS WRITING RULES
 - Use add_card for new user-requested notes.
 - Use update_card only when targetTitle exactly names an existing card from [Current Canvas Context].
 - Use connect only when sourceTitle and targetTitle exactly match visible card titles.
+- For connect, label MUST be exactly one categorical tag from this set: ${CANVAS_EDGE_LABELS.join(", ")}.
+- Edge labels are NOT natural language. Do not write explanations in edge labels.
 - If you cannot find the requested target on the canvas, say you don't see it instead of inventing one.
 - Do not write to the canvas merely because you have a suggestion; speak first unless the user gave a command.
 
@@ -177,7 +181,9 @@ function parseCanvasToolOps(value: unknown): CanvasToolOp[] {
           ...(typeof item.body === "string" ? { body: item.body.trim() } : {}),
           ...(typeof item.targetTitle === "string" ? { targetTitle: item.targetTitle.trim() } : {}),
           ...(typeof item.sourceTitle === "string" ? { sourceTitle: item.sourceTitle.trim() } : {}),
-          ...(typeof item.label === "string" ? { label: item.label.trim() } : {}),
+          ...(typeof item.label === "string"
+            ? { label: normalizeCanvasEdgeLabel(item.label) }
+            : {}),
         },
       ];
     });
@@ -241,7 +247,11 @@ const TOOLS = [
                 type: "string",
                 description: "Existing source card title for connect.",
               },
-              label: { type: "string", description: "Relationship label for connect." },
+              label: {
+                type: "string",
+                enum: CANVAS_EDGE_LABELS,
+                description: "Categorical relationship tag for connect. Not natural language.",
+              },
             },
             required: ["action"],
           },

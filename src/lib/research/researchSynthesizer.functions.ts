@@ -25,7 +25,7 @@ const ResultSchema = z.object({
 });
 
 const SYSTEM_BASE = `Convert raw research notes into a clean structured result for a Live Brief.
-- title: ≤ 8 words
+- title: ≤ 8 words (and then enter a newline)
 - summary: 2–4 sentences of markdown
 - findings: 3–5 short bullets, each one concrete fact taken from the notes (do not invent)
 - links: only include URLs explicitly named in the notes; otherwise return an empty list

@@ -315,6 +315,11 @@ export function treeToIdeaCanvas(
   const originX = options?.originX ?? 440;
   const originY = options?.originY ?? 330;
   const idMap = new Map<string, string>();
+  const leaves = (node: MindMapNode): number =>
+    Math.max(
+      1,
+      node.children.reduce((sum, child) => sum + leaves(child), 0),
+    );
 
   const mapId = (id: string) => {
     const existing = idMap.get(id);
@@ -330,7 +335,7 @@ export function treeToIdeaCanvas(
     parentId: string | null,
     x: number,
     y: number,
-    angle = 0,
+    direction: 1 | -1 = 1,
   ) => {
     const id = mapId(node.id);
     nodes.push({
@@ -361,19 +366,45 @@ export function treeToIdeaCanvas(
     }
 
     const childCount = node.children.length;
+    if (childCount === 0) return;
+
+    if (depth === 0) {
+      const left = node.children.filter((_, index) => index % 2 === 0);
+      const right = node.children.filter((_, index) => index % 2 === 1);
+      const placeSide = (children: MindMapNode[], direction: 1 | -1) => {
+        const total = Math.max(
+          1,
+          children.reduce((sum, child) => sum + leaves(child), 0),
+        );
+        let cursor = y - ((total - 1) * 150) / 2;
+        children.forEach((child) => {
+          const span = leaves(child);
+          const childY = cursor + ((span - 1) * 150) / 2;
+          cursor += span * 150;
+          place(child, depth + 1, id, x + direction * 330, childY, direction);
+        });
+      };
+      placeSide(left.length ? left : right, -1);
+      if (left.length) placeSide(right, 1);
+      return;
+    }
+
+    const total = Math.max(
+      1,
+      node.children.reduce((sum, child) => sum + leaves(child), 0),
+    );
+    let cursor = y - ((total - 1) * 118) / 2;
     node.children.forEach((child, index) => {
-      const childAngle =
-        depth === 0
-          ? -Math.PI + ((index + 1) * (Math.PI * 2)) / (childCount + 1)
-          : angle + (index - (childCount - 1) / 2) * Math.min(0.72, 1.4 / Math.max(1, childCount));
-      const radius = depth === 0 ? 280 : Math.max(160, 230 - depth * 28);
+      const span = leaves(child);
+      const childY = cursor + ((span - 1) * 118) / 2 + (index - (childCount - 1) / 2) * 10;
+      cursor += span * 118;
       place(
         child,
         depth + 1,
         id,
-        x + Math.cos(childAngle) * radius,
-        y + Math.sin(childAngle) * radius,
-        childAngle,
+        x + direction * Math.max(230, 310 - depth * 34),
+        childY,
+        direction,
       );
     });
   };

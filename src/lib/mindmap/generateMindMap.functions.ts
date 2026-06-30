@@ -53,24 +53,33 @@ function ensureIds(node: MindMapNodeInput, path = "r"): MindMapNode {
 
 const SYSTEM = `You turn a user's working notes / brief into a clear, structured MIND MAP that captures and organizes their thinking. You are SYNTHESIZING and SUMMARIZING — not copying text.
 
+LANGUAGE FIDELITY
+- Detect the dominant language of SELECTED SNIPPET and write node labels + relations in that language.
+- If the user mixes Chinese with English product/technical terms, keep the English terms exactly as-is.
+- Do not translate product names, model names, feature names, keyboard names, or code terms.
+
 STRUCTURE
 - ONE root node = the single central topic, summarized in 2–6 words.
 - 3 to 6 first-level branches radiating from the root = the main aspects / threads of the thinking.
 - Each branch may have 0–4 children (sub-points); max depth 3 below the root.
+- Keep the whole map readable: target 12–24 total nodes. Prefer fewer strong nodes over many thin nodes.
 
 NODE LABELS — summarize, never transcribe
 - Every label is a TIGHT summary of the point: a noun phrase or short clause, 2–8 words.
 - NEVER paste raw sentences from the notes. Distill the idea into its essence.
 - Use the user's language. Keep technical/product terms in their original form (usually English).
+- Preserve the user's actual concepts and priorities; do not upgrade vague thoughts into polished strategy claims.
 
 RELATIONS — label every edge
 - For EVERY non-root node, set "relation": a SHORT word/phrase (1–4 words) describing how it relates to its PARENT.
 - Examples: 包含 / 导致 / 依赖 / 对比 / 解决 / 风险 / 前提 / 例子 / 子任务 / leads to / part of / blocks / vs.
 - Pick the relation that genuinely fits the logic. The root node has no relation.
+- Do not create sibling branches that only differ by wording. Merge them and put detail below the stronger parent.
 
 QUALITY
 - Group by semantic relationship, not speaking order. Merge near-duplicates.
 - Be faithful — do not invent facts the notes don't support.
+- Preserve uncertainty, open questions, and unresolved tradeoffs as uncertainty; do not convert them into decisions.
 - Aim for a map that helps the user SEE the structure of their own thinking at a glance.
 
 Return STRICT JSON only, no prose, no code fences:

@@ -46,7 +46,7 @@ import {
   upsertBriefNode,
   acceptPendingBlock,
 } from "@/lib/brief.functions";
-import { exportBriefToDocx } from "@/lib/exportDocx";
+import { exportBriefToPdfPrint } from "@/lib/exportPdf";
 
 import { getRealtimeSession } from "@/lib/agent/realtime.functions";
 import {
@@ -55,6 +55,7 @@ import {
   type RealtimeClient,
 } from "@/lib/agent/realtimeClient";
 import { formatAgentCanvasContext } from "@/lib/agent/canvasContext";
+import { normalizeCanvasEdgeLabel } from "@/lib/canvas/edgeLabels";
 import { generateIntervention } from "@/lib/agent/responseGenerator.functions";
 import { logIntervention } from "@/lib/agent/interventionLog.functions";
 import { createPolicyEngine } from "@/lib/agent/interventionPolicy";
@@ -472,7 +473,7 @@ function mergeStructuredCanvasCapture(
     added.push(node);
     byTitle.set(titleKey, node);
 
-    const relation = card.relation.trim() || undefined;
+    const relation = normalizeCanvasEdgeLabel(card.relation) || undefined;
     if (attachTo && !edgeExists(attachTo.id, node.id, relation)) {
       edges.push({
         id: nextIdeaId("voice-edge"),
@@ -490,7 +491,7 @@ function mergeStructuredCanvasCapture(
     const source = byTitle.get(normalizeTitleKey(edge.sourceTitle));
     const target = byTitle.get(normalizeTitleKey(edge.targetTitle));
     if (!source || !target || source.id === target.id) continue;
-    const label = edge.label.trim() || undefined;
+    const label = normalizeCanvasEdgeLabel(edge.label) || undefined;
     if (edgeExists(source.id, target.id, label)) continue;
     edges.push({
       id: nextIdeaId("voice-edge"),
@@ -606,6 +607,7 @@ function Workbench() {
   const analyserRef = useRef<AnalyserNode | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const rafRef = useRef<number | null>(null);
+  const meterRunRef = useRef(0);
   const docRef = useRef(doc);
   const ideaCanvasRef = useRef(ideaCanvas);
   const thinkingStateRef = useRef<SessionThinkingState>(EMPTY_THINKING_STATE);
@@ -625,6 +627,7 @@ function Workbench() {
   const captureTextsRef = useRef<string[]>([]);
   const captureActiveRef = useRef(false);
   const voiceModeRef = useRef<VoiceMode>("idle");
+  const stoppingListeningRef = useRef(false);
   const briefDocRef = useRef<BriefDocumentHandle | null>(null);
   const skipIdeaCanvasSaveRef = useRef(false);
   const loadedIdeaCanvasSessionRef = useRef<string | null>(null);
@@ -640,7 +643,7 @@ function Workbench() {
   const [researchRunning, setResearchRunning] = useState<Record<string, string>>({});
 
   // True while the slow lane (decideBrief) is working on a finalized turn —
-  // drives the canvas "AI is thinking…" indicator.
+  // drives the canvas activity indicator.
   const [briefThinking, setBriefThinking] = useState(false);
 
   useEffect(() => {
@@ -1154,6 +1157,7 @@ function Workbench() {
           if (!source || !target || source.id === target.id) continue;
           const id = `${source.id}-${target.id}`;
           if (edges.some((edge) => edge.id === id)) continue;
+          const label = normalizeCanvasEdgeLabel(op.label) || undefined;
           edges.push({
             id,
             source: source.id,
@@ -1161,7 +1165,7 @@ function Workbench() {
             sourceHandle: "right",
             targetHandle: "left",
             type: "editable",
-            label: op.label.trim() || undefined,
+            label,
           });
         }
       }
@@ -1199,7 +1203,7 @@ function Workbench() {
             body: "",
             sourceTitle,
             targetTitle,
-            label: (op.label ?? "").trim(),
+            label: normalizeCanvasEdgeLabel(op.label),
           });
         }
       }
@@ -1238,7 +1242,7 @@ function Workbench() {
           getModel: () => modelRef.current,
         });
 
-    // Slow-lane "AI is thinking…" indicator: a finalized turn kicks off
+    // Slow-lane canvas activity indicator: a finalized turn kicks off
     // decideBrief; clear when it proposes patches, or after a safety timeout
     // (decideBrief may return zero patches and never emit brief.proposed).
     let thinkingTimer: ReturnType<typeof setTimeout> | null = null;
@@ -1672,7 +1676,13 @@ function Workbench() {
     captureToCanvas?: boolean;
     inlineDictation?: boolean;
   }) => {
-    if (listening || !activeSessionId) return;
+    if (
+      listening ||
+      stoppingListeningRef.current ||
+      voiceModeRef.current !== "idle" ||
+      !activeSessionId
+    )
+      return;
     setError(null);
     const captureToCanvas = options?.captureToCanvas ?? false;
     const inlineDictation = options?.inlineDictation ?? false;
@@ -1709,7 +1719,9 @@ function Workbench() {
       src.connect(analyser);
       analyserRef.current = analyser;
       const data = new Uint8Array(analyser.frequencyBinCount);
+      const meterRunId = ++meterRunRef.current;
       const tick = () => {
+        if (meterRunRef.current !== meterRunId || !analyserRef.current) return;
         analyser.getByteTimeDomainData(data);
         let sum = 0;
         for (let i = 0; i < data.length; i++) {
@@ -1718,7 +1730,7 @@ function Workbench() {
         }
         const rms = Math.sqrt(sum / data.length);
         setLevel((prev) => prev * 0.6 + Math.min(1, rms * 3) * 0.4);
-        rafRef.current = requestAnimationFrame(tick);
+        if (meterRunRef.current === meterRunId) rafRef.current = requestAnimationFrame(tick);
       };
       tick();
 
@@ -1794,63 +1806,70 @@ function Workbench() {
   };
 
   const stopListening = useCallback(async (): Promise<string> => {
+    if (stoppingListeningRef.current) return "";
+    stoppingListeningRef.current = true;
     const shouldCommitCapture = captureActiveRef.current;
     const capturePosition = captureAnchorRef.current;
     const stoppingMode = voiceModeRef.current;
-    setListening(false);
-    if (rafRef.current) cancelAnimationFrame(rafRef.current);
-    rafRef.current = null;
-    streamRef.current?.getTracks().forEach((t) => t.stop());
-    streamRef.current = null;
-    if (audioCtxRef.current) {
-      try {
-        await audioCtxRef.current.close();
-      } catch {
-        /* ignore */
+    try {
+      voiceModeRef.current = "idle";
+      setListening(false);
+      setCaptureActive(false);
+      setVoiceMode("idle");
+      setPartial("");
+      setLevel(0);
+      meterRunRef.current += 1;
+      if (rafRef.current) cancelAnimationFrame(rafRef.current);
+      rafRef.current = null;
+      streamRef.current?.getTracks().forEach((t) => t.stop());
+      streamRef.current = null;
+      if (audioCtxRef.current) {
+        try {
+          await audioCtxRef.current.close();
+        } catch {
+          /* ignore */
+        }
+        audioCtxRef.current = null;
       }
-      audioCtxRef.current = null;
-    }
-    analyserRef.current = null;
-    setLevel(0);
-    if (recognizerRef.current) {
-      try {
-        await recognizerRef.current.stop();
-      } catch {
-        /* ignore */
+      analyserRef.current = null;
+      if (recognizerRef.current) {
+        try {
+          await recognizerRef.current.stop();
+        } catch {
+          /* ignore */
+        }
+        recognizerRef.current = null;
       }
-      recognizerRef.current = null;
-    }
-    if (bufferRef.current) {
-      if (!shouldCommitCapture) bufferRef.current.forceFlush("manual_stop");
-      bufferRef.current.dispose();
-      bufferRef.current = null;
-    }
-    // Disconnect the agent too — its mic track is cloned from the now-stopped stream.
-    if (realtimeRef.current) {
-      try {
-        await realtimeRef.current.disconnect();
-      } catch {
-        /* ignore */
+      if (bufferRef.current) {
+        if (!shouldCommitCapture) bufferRef.current.forceFlush("manual_stop");
+        bufferRef.current.dispose();
+        bufferRef.current = null;
       }
-      realtimeRef.current = null;
+      // Disconnect the agent too — its mic track is cloned from the now-stopped stream.
+      if (realtimeRef.current) {
+        try {
+          await realtimeRef.current.disconnect();
+        } catch {
+          /* ignore */
+        }
+        realtimeRef.current = null;
+      }
+      setAgentEnabled(false);
+      setAgentStatus("off");
+      const captureText = captureTextsRef.current.join(" ").trim();
+      captureTextsRef.current = [];
+      if (
+        stoppingMode === "canvas_capture" &&
+        shouldCommitCapture &&
+        capturePosition &&
+        captureText
+      ) {
+        await commitCanvasVoiceCapture(captureText, capturePosition);
+      }
+      return captureText;
+    } finally {
+      stoppingListeningRef.current = false;
     }
-    setAgentEnabled(false);
-    setAgentStatus("off");
-    const captureText = captureTextsRef.current.join(" ").trim();
-    captureTextsRef.current = [];
-    captureActiveRef.current = false;
-    voiceModeRef.current = "idle";
-    setCaptureActive(false);
-    setVoiceMode("idle");
-    if (
-      stoppingMode === "canvas_capture" &&
-      shouldCommitCapture &&
-      capturePosition &&
-      captureText
-    ) {
-      await commitCanvasVoiceCapture(captureText, capturePosition);
-    }
-    return captureText;
   }, [commitCanvasVoiceCapture]);
 
   const startInlineDictation = async () => {
@@ -1972,7 +1991,7 @@ function Workbench() {
   const toggleAgentConversation = () => {
     if (voiceModeRef.current === "canvas_capture") {
       setError(
-        "Release Space or press T to finish the canvas capture before starting an AI conversation.",
+        "Press Cmd/Ctrl+Shift+Space again to finish the canvas capture before starting an AI conversation.",
       );
       return;
     }
@@ -1986,9 +2005,7 @@ function Workbench() {
   // Note: agent lifecycle is owned by startListening / stopListening.
 
   // Hotkeys (outside text inputs):
-  //   Space hold → structure a spoken thought onto the canvas
-  //   T → compatibility toggle for canvas voice capture
-  //   S → if agent is speaking, silence it; otherwise prompt it to speak now
+  //   Cmd/Ctrl+Shift+Space toggles canvas voice capture on/off
   useEffect(() => {
     const isTextTarget = (target: EventTarget | null) => {
       const t = target as HTMLElement | null;
@@ -2004,50 +2021,48 @@ function Workbench() {
       void startListening({ connectRealtime: false, captureToCanvas: true });
     };
 
-    const onKeyDown = (e: KeyboardEvent) => {
-      if (e.repeat) return;
-      if (e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
-      const key = e.key.toLowerCase();
-      if (key !== "t" && key !== "s" && e.code !== "Space") return;
-      if (isTextTarget(e.target)) return;
-      e.preventDefault();
-
-      if (e.code === "Space") {
-        if (voiceModeRef.current === "canvas_capture" || voiceModeRef.current === "conversation")
-          return;
-        beginCanvasCapture();
-        return;
-      }
-
-      if (key === "t") {
-        if (voiceModeRef.current === "canvas_capture") {
-          void stopListening();
-        } else if (voiceModeRef.current === "conversation") {
-          setError("End the AI conversation from the Dock before starting a voice capture.");
-        } else {
-          beginCanvasCapture();
-        }
-        return;
-      }
-      // "s": toggle agent voice
-      promptAgent();
-    };
-
-    const onKeyUp = (e: KeyboardEvent) => {
-      if (e.code !== "Space") return;
+    const stopCanvasCapture = () => {
       if (voiceModeRef.current !== "canvas_capture") return;
-      e.preventDefault();
       void stopListening();
     };
 
+    const isVoiceCaptureHotkey = (e: KeyboardEvent) =>
+      e.code === "Space" && (e.metaKey || e.ctrlKey) && e.shiftKey && !e.altKey;
+
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.repeat) return;
+      if (!isVoiceCaptureHotkey(e)) return;
+      if (isTextTarget(e.target)) return;
+      e.preventDefault();
+
+      if (voiceModeRef.current === "canvas_capture") {
+        stopCanvasCapture();
+        return;
+      }
+      if (voiceModeRef.current === "conversation") return;
+      beginCanvasCapture();
+    };
+
+    const onWindowBlur = () => {
+      stopCanvasCapture();
+    };
+
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "hidden") stopCanvasCapture();
+    };
+
     window.addEventListener("keydown", onKeyDown);
-    window.addEventListener("keyup", onKeyUp);
+    window.addEventListener("blur", onWindowBlur);
+    window.addEventListener("pagehide", onWindowBlur);
+    document.addEventListener("visibilitychange", onVisibilityChange);
     return () => {
       window.removeEventListener("keydown", onKeyDown);
-      window.removeEventListener("keyup", onKeyUp);
+      window.removeEventListener("blur", onWindowBlur);
+      window.removeEventListener("pagehide", onWindowBlur);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [listening, stopListening, activeSessionId, promptAgent]);
+  }, [listening, stopListening, activeSessionId]);
 
   // ============= Document handlers =============
 
@@ -2391,6 +2406,8 @@ function Workbench() {
 
   const blockCount = Object.keys(doc).length;
   const activeSession = sessions.find((s) => s.id === activeSessionId);
+  const canvasTextForExport = useMemo(() => ideaCanvasToPlainText(ideaCanvas), [ideaCanvas]);
+  const canExport = blockCount > 0 || canvasTextForExport.trim().length > 0;
   const passiveInsight = useMemo(() => {
     const clampText = (value: string) =>
       value.length > 96 ? `${value.slice(0, 93).trimEnd()}...` : value;
@@ -2403,6 +2420,24 @@ function Workbench() {
     return "";
   }, [thinkingState]);
   const canvasAiWriting = briefThinking || aiLoading || mapLoading;
+  const canvasStatusItems = useMemo(() => {
+    const items: Array<{ id: string; text: string }> = [];
+    for (const [taskId, query] of Object.entries(researchRunning)) {
+      items.push({
+        id: `research-${taskId}`,
+        text: query.trim() ? `AI is researching: ${query}` : "AI is researching...",
+      });
+    }
+    if (mapLoading) {
+      items.push({ id: "map", text: "AI is weaving your thoughts into the canvas..." });
+    } else if (briefThinking) {
+      items.push({ id: "brief", text: "AI is structuring the latest thought..." });
+    }
+    if (aiLoading) {
+      items.push({ id: "write", text: "AI is writing to the canvas..." });
+    }
+    return items;
+  }, [aiLoading, briefThinking, mapLoading, researchRunning]);
   const conversationActive = voiceMode === "conversation";
   const audioActive = voiceMode !== "idle";
 
@@ -2677,27 +2712,6 @@ function Workbench() {
                     : "Talk with Agent"}
               </button>
             </div>
-            <div className="px-5 pb-3 flex items-center justify-center shrink-0">
-              <span className="text-[11px] text-secondary">
-                <kbd className="px-1.5 py-0.5 rounded border border-auralis bg-surface text-[10px] font-mono">
-                  Space
-                </kbd>{" "}
-                hold to structure canvas ·{" "}
-                <kbd className="px-1.5 py-0.5 rounded border border-auralis bg-surface text-[10px] font-mono">
-                  T
-                </kbd>{" "}
-                toggle capture ·{" "}
-                <kbd className="px-1.5 py-0.5 rounded border border-auralis bg-surface text-[10px] font-mono">
-                  Option
-                </kbd>{" "}
-                in note: dictate ·{" "}
-                <kbd className="px-1.5 py-0.5 rounded border border-auralis bg-surface text-[10px] font-mono">
-                  S
-                </kbd>{" "}
-                {agentStatus === "speaking" ? "silence agent" : "ask agent to speak"}
-              </span>
-            </div>
-
             {/* Transcript */}
             <div className="border-t border-auralis bg-surface/60 shrink-0">
               <button
@@ -2769,17 +2783,23 @@ function Workbench() {
               </span>
               <button
                 onClick={() => {
-                  void exportBriefToDocx(doc, activeSession?.title ?? "Live Brief").catch((e) =>
-                    setError(e?.message ?? "Export failed"),
-                  );
+                  try {
+                    exportBriefToPdfPrint(
+                      doc,
+                      activeSession?.title ?? "Live Brief",
+                      canvasTextForExport,
+                    );
+                  } catch (e) {
+                    setError(e instanceof Error ? e.message : "Export failed");
+                  }
                 }}
-                disabled={blockCount === 0}
+                disabled={!canExport}
                 className="ml-3 px-3 py-1.5 rounded-full border border-auralis bg-surface text-primary text-xs font-medium hover:bg-surface-variant disabled:opacity-40 flex items-center gap-1.5"
-                aria-label="Export to Word"
-                title="Export structured canvas text to Word (.docx)"
+                aria-label="Export to PDF"
+                title="Export canvas text to PDF"
               >
                 <span className="material-symbols-outlined text-base">download</span>
-                Export
+                Export PDF
               </button>
             </div>
           </header>
@@ -2819,21 +2839,20 @@ function Workbench() {
               onInlineDictationStart={startInlineDictation}
               onInlineDictationStop={stopInlineDictation}
             />
-            {/* AI status indicators — pinned to the lower area of the canvas. */}
-            <div className="pointer-events-none sticky bottom-4 z-10 flex flex-col items-start gap-1.5 px-2">
-              {Object.entries(researchRunning).map(([taskId, q]) => (
-                <div key={taskId} className="flex items-center gap-2 text-xs text-secondary">
-                  <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse" />
-                  <span className="truncate max-w-[280px]">Researching: {q}</span>
-                </div>
-              ))}
-              {(briefThinking || aiLoading) && (
-                <div className="flex items-center gap-2 text-xs text-secondary">
-                  <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse" />
-                  <span>AI is thinking…</span>
-                </div>
-              )}
-            </div>
+            {/* AI status indicators — pinned inside the canvas, above the lower chrome. */}
+            {canvasStatusItems.length > 0 && (
+              <div className="pointer-events-none absolute bottom-16 left-5 z-20 flex max-w-[360px] flex-col items-start gap-1.5">
+                {canvasStatusItems.map((item) => (
+                  <div
+                    key={item.id}
+                    className="flex max-w-full items-center gap-2 px-1 text-xs font-medium text-secondary"
+                  >
+                    <span className="h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-amber-500" />
+                    <span className="truncate">{item.text}</span>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
           <footer className="h-10 px-6 flex items-center justify-between border-t border-auralis text-xs text-secondary shrink-0">
             <span>

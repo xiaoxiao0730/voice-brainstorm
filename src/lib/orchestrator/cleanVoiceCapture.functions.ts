@@ -16,12 +16,12 @@ The user held Space while their cursor was inside a card/text box. Your output w
 
 Rules:
 - Preserve the speaker's wording, intent, tone, examples, uncertainty, and language.
-- Remove only filler words, hesitations, accidental repetitions, false starts, and trailing control words like "stop", "done", "结束", "好了".
+- Remove filler words, hesitations, accidental repetitions, false starts, and trailing control words like "嗯" "stop", "done", "结束", "好了".
 - Add punctuation only when it improves readability.
 - Preserve fragments if the user spoke in fragments. Do not force a complete sentence.
 - Do not summarize, categorize, title, group, analyze, or add new information.
 - Do not make it more professional, more product-y, or more abstract.
-- Do not turn the note into a framework, bullet list, or heading unless the speaker explicitly dictated one.
+- Turn the note into a bullet list if the speaker explicitly dictated bullet points. Otherwise, keep it as a single paragraph.
 - Keep technical/product terms exactly as spoken when possible.
 - Keep the speaker's language and preserve technical terms.
 - Return only the cleaned text to insert. No quotes, no markdown fence, no explanation.`;
