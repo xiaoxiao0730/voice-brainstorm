@@ -5,7 +5,10 @@ import { z } from "zod";
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
 import { createOpenAIProvider, normalizeAiModel, requireOpenAIKey } from "@/lib/ai-gateway.server";
 import type { BriefPatch } from "@/lib/pipeline/types";
-import { formatThinkingState, type SessionThinkingState } from "@/lib/agent/thinkingState.functions";
+import {
+  formatThinkingState,
+  type SessionThinkingState,
+} from "@/lib/agent/thinkingState.functions";
 
 const ThinkingStateSchema = z.object({
   current_goal: z.string().max(500).default(""),
@@ -136,8 +139,10 @@ BOARD / CANVAS OPS
 
 VOICE HINT
 - This is NOT the full voice reply. It is a grounding hint for the realtime agent.
-- Include current state + 2-3 next directions only when useful.
-- Keep it concise and natural.
+- Keep it short and action-oriented.
+- For idea-sharing turns: suggest one useful next prompt, question, or framing move.
+- For command turns such as write, edit, connect, or research: hint only a brief confirmation plus the requested action.
+- Do not encourage long summaries, praise, or generic reflection.
 
 Return strict JSON only.`;
 
@@ -243,11 +248,19 @@ Create the thought turn contract.`;
             : [],
           canvasOps: [],
           nextDirections: [
-            { title: "Clarify the goal", why: "Make the next turn easier to structure.", kind: "question" },
-            { title: "Map options", why: "Turn the thought into visible alternatives.", kind: "idea" },
+            {
+              title: "Clarify the goal",
+              why: "Make the next turn easier to structure.",
+              kind: "question",
+            },
+            {
+              title: "Map options",
+              why: "Turn the thought into visible alternatives.",
+              kind: "idea",
+            },
           ],
           voiceReplyHint:
-            "Acknowledge the user's current thought, then offer to clarify the goal, map options, or pick the next step.",
+            "Give a tiny acknowledgment, then ask whether to clarify the goal, map options, or pick the next concrete step.",
         },
         data.turnId,
         data.currentThinkingState,

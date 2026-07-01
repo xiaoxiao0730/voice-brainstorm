@@ -100,6 +100,7 @@ type Side = "top" | "right" | "bottom" | "left";
 type EditableEdgeData = {
   onLabelChange?: (id: string, label: string) => void;
   routeOffset?: number;
+  autoRouteOffset?: number;
 };
 
 type EditableBoardEdge = Edge<EditableEdgeData>;
@@ -321,28 +322,41 @@ function orthogonalEdgePath({
 }) {
   const sourceVertical = sourcePosition === Position.Top || sourcePosition === Position.Bottom;
   const targetVertical = targetPosition === Position.Top || targetPosition === Position.Bottom;
+  const stub = 32;
 
   let points: Array<{ x: number; y: number }>;
   let handle: { x: number; y: number; cursor: "ew-resize" | "ns-resize" };
 
   if (sourceVertical && targetVertical) {
-    const busY = (sourceY + targetY) / 2 + routeOffset;
-    points = [
-      { x: sourceX, y: sourceY },
-      { x: sourceX, y: busY },
-      { x: targetX, y: busY },
-      { x: targetX, y: targetY },
-    ];
-    handle = { x: (sourceX + targetX) / 2, y: busY, cursor: "ns-resize" };
-  } else if (!sourceVertical && !targetVertical) {
+    const sourceDir = sourcePosition === Position.Bottom ? 1 : -1;
+    const targetDir = targetPosition === Position.Bottom ? 1 : -1;
+    const sourceStubY = sourceY + sourceDir * stub;
+    const targetStubY = targetY + targetDir * stub;
     const busX = (sourceX + targetX) / 2 + routeOffset;
     points = [
       { x: sourceX, y: sourceY },
-      { x: busX, y: sourceY },
-      { x: busX, y: targetY },
+      { x: sourceX, y: sourceStubY },
+      { x: busX, y: sourceStubY },
+      { x: busX, y: targetStubY },
+      { x: targetX, y: targetStubY },
       { x: targetX, y: targetY },
     ];
-    handle = { x: busX, y: (sourceY + targetY) / 2, cursor: "ew-resize" };
+    handle = { x: busX, y: (sourceStubY + targetStubY) / 2, cursor: "ew-resize" };
+  } else if (!sourceVertical && !targetVertical) {
+    const sourceDir = sourcePosition === Position.Right ? 1 : -1;
+    const targetDir = targetPosition === Position.Right ? 1 : -1;
+    const sourceStubX = sourceX + sourceDir * stub;
+    const targetStubX = targetX + targetDir * stub;
+    const busY = (sourceY + targetY) / 2 + routeOffset;
+    points = [
+      { x: sourceX, y: sourceY },
+      { x: sourceStubX, y: sourceY },
+      { x: sourceStubX, y: busY },
+      { x: targetStubX, y: busY },
+      { x: targetStubX, y: targetY },
+      { x: targetX, y: targetY },
+    ];
+    handle = { x: (sourceStubX + targetStubX) / 2, y: busY, cursor: "ns-resize" };
   } else {
     const corner = sourceVertical
       ? { x: sourceX, y: targetY + routeOffset }
@@ -368,46 +382,64 @@ function orthogonalEdgePath({
 
 function SmartNote({ id, data, selected }: NodeProps<IdeaFlowNode>) {
   const style = KIND_STYLE[data.kind] ?? KIND_STYLE.idea;
-  const taRef = useRef<HTMLTextAreaElement>(null);
+  const titleRef = useRef<HTMLTextAreaElement>(null);
+  const bodyRef = useRef<HTMLTextAreaElement>(null);
   const [hovered, setHovered] = useState(false);
   const text = data.body ? `${data.title}\n${data.body}` : data.title;
   const showConnections = hovered || selected;
   const dictationCaret = data.dictationCaret;
   const onChange = data.onChange;
+  const noteWidth = Number(data.width ?? 260);
 
   useEffect(() => {
-    const ta = taRef.current;
-    if (!ta) return;
-    ta.style.height = "auto";
-    ta.style.height = `${Math.max(112, ta.scrollHeight)}px`;
-  }, [text, data.width]);
+    const title = titleRef.current;
+    const body = bodyRef.current;
+    if (title) {
+      title.style.height = "auto";
+      title.style.height = `${Math.max(34, title.scrollHeight)}px`;
+    }
+    if (body) {
+      body.style.height = "auto";
+      body.style.height = `${Math.max(68, body.scrollHeight)}px`;
+    }
+  }, [data.title, data.body, data.width]);
 
   useEffect(() => {
     if (!data.autoFocus) return;
     const timer = window.setTimeout(() => {
-      const ta = taRef.current;
-      ta?.focus();
-      ta?.setSelectionRange(ta.value.length, ta.value.length);
+      const target = data.title ? bodyRef.current : titleRef.current;
+      target?.focus();
+      target?.setSelectionRange(target.value.length, target.value.length);
     }, 380);
     return () => window.clearTimeout(timer);
-  }, [data.autoFocus]);
+  }, [data.autoFocus, data.title]);
 
   useEffect(() => {
     if (typeof dictationCaret !== "number") return;
     const timer = window.setTimeout(() => {
-      const ta = taRef.current;
-      if (!ta) return;
-      const caret = Math.min(dictationCaret, ta.value.length);
-      ta.focus();
-      ta.setSelectionRange(caret, caret);
+      const titleLength = data.title.length;
+      if (dictationCaret <= titleLength) {
+        const title = titleRef.current;
+        if (!title) return;
+        const caret = Math.min(dictationCaret, title.value.length);
+        title.focus();
+        title.setSelectionRange(caret, caret);
+      } else {
+        const body = bodyRef.current;
+        if (!body) return;
+        const caret = Math.min(Math.max(0, dictationCaret - titleLength - 1), body.value.length);
+        body.focus();
+        body.setSelectionRange(caret, caret);
+      }
       onChange?.(id, { dictationCaret: undefined });
     }, 0);
     return () => window.clearTimeout(timer);
-  }, [dictationCaret, id, onChange]);
+  }, [data.title, dictationCaret, id, onChange]);
 
   return (
     <div
       className="group/note relative"
+      style={{ width: noteWidth }}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
     >
@@ -481,29 +513,55 @@ function SmartNote({ id, data, selected }: NodeProps<IdeaFlowNode>) {
           background: style.bg,
           borderColor: selected ? "#168cf5" : style.border,
           borderRadius: 4,
+          width: noteWidth,
         }}
       >
-        <textarea
-          ref={taRef}
-          onFocus={() => data.onSelect?.(id)}
-          onKeyDown={(event) => data.onInlineDictationKeyDown?.(id, event, text)}
-          onKeyUp={(event) => data.onInlineDictationKeyUp?.(id, event, text)}
-          className="nodrag nowheel w-full resize-none overflow-hidden whitespace-pre-wrap break-words bg-transparent px-5 pb-3 pt-5 text-[15px] font-medium leading-[1.55] outline-none"
-          style={{ color: style.titleColor, minHeight: 112 }}
-          value={text}
-          onChange={(event) => {
-            const value = event.target.value;
-            const newline = value.indexOf("\n");
-            if (newline === -1) data.onChange?.(id, { title: value, body: "" });
-            else {
-              data.onChange?.(id, {
-                title: value.slice(0, newline),
-                body: value.slice(newline + 1),
-              });
-            }
-          }}
-          placeholder="Name the idea, then add detail below..."
-        />
+        <div className="flex min-h-[112px] min-w-0 flex-col px-5 pb-3 pt-5">
+          <textarea
+            ref={titleRef}
+            rows={1}
+            wrap="soft"
+            onFocus={() => data.onSelect?.(id)}
+            onKeyDown={(event) => {
+              data.onInlineDictationKeyDown?.(id, event, text);
+              if (!event.defaultPrevented && event.key === "Enter" && !event.shiftKey) {
+                event.preventDefault();
+                bodyRef.current?.focus();
+                bodyRef.current?.setSelectionRange(0, 0);
+              }
+            }}
+            onKeyUp={(event) => data.onInlineDictationKeyUp?.(id, event, text)}
+            className="nodrag nowheel block w-full min-w-0 resize-none overflow-hidden whitespace-pre-wrap break-words bg-transparent p-0 text-[18px] font-semibold leading-[1.32] outline-none placeholder:text-secondary/55"
+            style={{ color: style.titleColor, overflowWrap: "break-word" }}
+            value={data.title}
+            onChange={(event) => {
+              const value = event.target.value;
+              const newline = value.indexOf("\n");
+              if (newline === -1) data.onChange?.(id, { title: value });
+              else {
+                data.onChange?.(id, {
+                  title: value.slice(0, newline),
+                  body: `${value.slice(newline + 1)}${data.body ? `\n${data.body}` : ""}`,
+                });
+                window.setTimeout(() => bodyRef.current?.focus(), 0);
+              }
+            }}
+            placeholder="Title"
+          />
+          <textarea
+            ref={bodyRef}
+            rows={2}
+            wrap="soft"
+            onFocus={() => data.onSelect?.(id)}
+            onKeyDown={(event) => data.onInlineDictationKeyDown?.(id, event, text)}
+            onKeyUp={(event) => data.onInlineDictationKeyUp?.(id, event, text)}
+            className="nodrag nowheel mt-2 block w-full min-w-0 resize-none overflow-hidden whitespace-pre-wrap break-words bg-transparent p-0 text-[14px] font-normal leading-[1.5] outline-none placeholder:text-secondary/55"
+            style={{ color: style.titleColor, overflowWrap: "break-word" }}
+            value={data.body ?? ""}
+            onChange={(event) => data.onChange?.(id, { body: event.target.value })}
+            placeholder="Add details"
+          />
+        </div>
         <div className="mt-auto flex items-center justify-between gap-2 px-4 pb-3 pt-2">
           <select
             className="nodrag min-w-0 cursor-pointer bg-transparent text-[10px] font-semibold uppercase tracking-[0.08em] outline-none"
@@ -708,7 +766,7 @@ function EditableEdge({
     targetX,
     targetY,
     targetPosition,
-    routeOffset: Number(data?.routeOffset ?? 0),
+    routeOffset: Number(data?.routeOffset ?? 0) + Number(data?.autoRouteOffset ?? 0),
   });
 
   useEffect(() => setDraft(labelText), [labelText]);
@@ -1223,18 +1281,42 @@ function BoardInner({
     [createConnectedNode, onInlineKeyDown, onInlineKeyUp, selectNode, state.nodes, updateNodeData],
   );
 
-  const renderEdges = useMemo(
-    () =>
-      state.edges.map((edge) => ({
-        ...edge,
-        type: "editable",
-        data: {
-          ...edge.data,
-          onLabelChange: updateEdgeLabel,
-        },
-      })),
-    [state.edges, updateEdgeLabel],
-  );
+  const renderEdges = useMemo(() => {
+    const nodeById = new Map(state.nodes.map((node) => [node.id, node] as const));
+    const grouped = new Map<string, typeof state.edges>();
+
+    for (const edge of state.edges) {
+      const key = `${edge.source}:${edge.sourceHandle ?? ""}:${edge.targetHandle ?? ""}`;
+      grouped.set(key, [...(grouped.get(key) ?? []), edge]);
+    }
+
+    const autoOffsets = new Map<string, number>();
+    for (const group of grouped.values()) {
+      if (group.length < 2) continue;
+      const sorted = [...group].sort((a, b) => {
+        const aTarget = nodeById.get(a.target);
+        const bTarget = nodeById.get(b.target);
+        const aCenter = (aTarget?.position.y ?? 0) + Number(aTarget?.data.height ?? 178) / 2;
+        const bCenter = (bTarget?.position.y ?? 0) + Number(bTarget?.data.height ?? 178) / 2;
+        return aCenter - bCenter;
+      });
+      sorted.forEach((edge, index) => {
+        const centeredIndex = index - (sorted.length - 1) / 2;
+        const offset = Math.max(-84, Math.min(84, centeredIndex * 28));
+        autoOffsets.set(edge.id, offset);
+      });
+    }
+
+    return state.edges.map((edge) => ({
+      ...edge,
+      type: "editable",
+      data: {
+        ...edge.data,
+        autoRouteOffset: autoOffsets.get(edge.id) ?? 0,
+        onLabelChange: updateEdgeLabel,
+      },
+    }));
+  }, [state.edges, state.nodes, updateEdgeLabel]);
 
   const onNodesChange = useCallback(
     (changes: NodeChange<IdeaFlowNode>[]) => {

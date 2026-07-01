@@ -59,7 +59,7 @@ import { normalizeCanvasEdgeLabel } from "@/lib/canvas/edgeLabels";
 import { generateIntervention } from "@/lib/agent/responseGenerator.functions";
 import { logIntervention } from "@/lib/agent/interventionLog.functions";
 import { createPolicyEngine } from "@/lib/agent/interventionPolicy";
-import { assessDensity } from "@/lib/agent/segmentGate";
+import { assessDensity, assessMindMapTrigger } from "@/lib/agent/segmentGate";
 import {
   publish as publishSignal,
   snapshot as signalSnapshot,
@@ -183,6 +183,26 @@ function htmlToCanvasText(value: string) {
     .replace(/&#39;/gi, "'")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
+}
+
+function markdownToCanvasText(value: string) {
+  return htmlToCanvasText(value)
+    .replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, "$1")
+    .replace(/\*\*([^*]+)\*\*/g, "$1")
+    .replace(/__([^_]+)__/g, "$1")
+    .replace(/`([^`]+)`/g, "$1")
+    .replace(/^\s*[-*•]\s+/gm, "")
+    .replace(/\s*\((https?:\/\/[^\s)]+)\)/g, "")
+    .replace(/https?:\/\/\S+/g, "")
+    .replace(/\s{2,}/g, " ")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+function summarizeResearchBody(text: string, max = 220) {
+  const cleaned = markdownToCanvasText(text).replace(/\s+/g, " ").trim();
+  if (cleaned.length <= max) return cleaned;
+  return `${cleaned.slice(0, max - 1).trim()}...`;
 }
 
 const BRIEF_NODE_PREFIX = "brief-block-";
@@ -492,12 +512,20 @@ function mergeStructuredCanvasCapture(
     }
   });
 
+  let extraEdgeCount = 0;
   for (const edge of result.edges) {
+    if (extraEdgeCount >= 2) break;
     const source = byTitle.get(normalizeTitleKey(edge.sourceTitle));
     const target = byTitle.get(normalizeTitleKey(edge.targetTitle));
     if (!source || !target || source.id === target.id) continue;
     const label = normalizeCanvasEdgeLabel(edge.label) || undefined;
     if (edgeExists(source.id, target.id, label)) continue;
+    const targetWasAttachedToSource = result.cards.some(
+      (card) =>
+        normalizeTitleKey(card.title) === normalizeTitleKey(edge.targetTitle) &&
+        normalizeTitleKey(card.attachToTitle) === normalizeTitleKey(edge.sourceTitle),
+    );
+    if (targetWasAttachedToSource) continue;
     edges.push({
       id: nextIdeaId("voice-edge"),
       source: source.id,
@@ -507,6 +535,7 @@ function mergeStructuredCanvasCapture(
       type: "editable",
       label,
     });
+    extraEdgeCount += 1;
   }
 
   return { nodes: [...nodes, ...added], edges };
@@ -624,6 +653,7 @@ function Workbench() {
 
   // Agent refs
   const realtimeRef = useRef<RealtimeClient | null>(null);
+  const connectAgentInFlightRef = useRef(false);
   const policyRef = useRef(createPolicyEngine(null));
   const recentTextsRef = useRef<string[]>([]);
   const recentThoughtTurnsRef = useRef<string[]>([]);
@@ -645,6 +675,7 @@ function Workbench() {
   const openSessionSeqRef = useRef(0);
   const pendingBriefWritesRef = useRef<Set<Promise<unknown>>>(new Set());
   const lastAutoMapAtRef = useRef(0);
+  const autoMindMapTurnIdsRef = useRef<Set<string>>(new Set());
   const coThinkingTurnIdsRef = useRef<Set<string>>(new Set());
   const [appliedTemplateId, setAppliedTemplateId] = useState<string>(DEFAULT_TEMPLATE_ID);
 
@@ -845,6 +876,37 @@ function Workbench() {
       }
     }, 3000);
   }, []);
+
+  const structureThoughtToCanvas = useCallback(
+    async (rawText: string, origin?: { x: number; y: number }) => {
+      const source = rawText.trim();
+      if (!source) return;
+      setMapLoading(true);
+      try {
+        const canvasBefore = ideaCanvasRef.current;
+        const result = await structureCanvasCapture({
+          data: {
+            rawTranscript: source.slice(0, 6000),
+            existingCards: ideaCanvasExistingCards(canvasBefore),
+            model: modelRef.current,
+          },
+        });
+        const nextCanvas = mergeStructuredCanvasCapture(
+          canvasBefore,
+          result,
+          origin ?? defaultCanvasCaptureAnchor(canvasBefore),
+        );
+        ideaCanvasRef.current = nextCanvas;
+        setIdeaCanvas(nextCanvas);
+        scheduleInject(
+          `[canvas voice capture]\n${result.summary || result.title}\nRaw transcript was used as source material for the structured cards.`,
+        );
+      } finally {
+        setMapLoading(false);
+      }
+    },
+    [scheduleInject, structureCanvasCapture],
+  );
 
   useEffect(() => {
     if (!activeSessionId) {
@@ -1056,43 +1118,85 @@ function Workbench() {
       docRef.current = map;
       briefDocRef.current?.appendLines(appended, { asHtml: true });
       for (const b of appended) void persistBlock(b);
-      const sources = result.links
-        .slice(0, 3)
-        .map((link) => `Source: ${link.title || link.url}\n${link.url}`)
-        .join("\n\n");
-      const body = [
-        result.summary?.trim(),
-        result.findings.length ? result.findings.map((finding) => `- ${finding}`).join("\n") : "",
-        sources,
-      ]
-        .filter(Boolean)
-        .join("\n\n")
-        .slice(0, 1400);
       setIdeaCanvas((current) => {
-        const title = `Research: ${result.title || result.query}`.slice(0, 120);
-        const key = title.trim().toLowerCase();
-        if (current.nodes.some((node) => node.data.title.trim().toLowerCase() === key)) {
-          return current;
-        }
-        const sameKindCount = current.nodes.filter((node) => node.data.kind === "idea").length;
-        return {
-          ...current,
-          nodes: [
-            ...current.nodes.map((node) => ({ ...node, selected: false })),
-            {
-              id: nextIdeaId("research"),
-              type: "ideaNode",
-              position: { x: 80 + sameKindCount * 34, y: 120 + sameKindCount * 132 },
-              selected: true,
-              data: {
-                title,
-                body,
-                kind: "idea",
-                width: 340,
-              },
+        const nodes = current.nodes.map((node) => ({ ...node, selected: false }));
+        const edges = [...current.edges];
+        const titleKey = (title: string) => normalizeTitleKey(title);
+        const existingTitles = new Set(nodes.map((node) => titleKey(node.data.title ?? "")));
+        const visibleNodes = nodes.filter((node) => !node.id.startsWith(BRIEF_NODE_PREFIX));
+        const anchor =
+          [...visibleNodes].reverse().find((node) => node.data.kind === "question") ??
+          [...visibleNodes].reverse().find((node) => node.data.kind === "focus") ??
+          visibleNodes[visibleNodes.length - 1];
+
+        const researchTitle = markdownToCanvasText(result.title || result.query).slice(0, 120);
+        const parentTitle = researchTitle || "Research findings";
+        let parent = anchor;
+
+        if (!parent) {
+          const parentId = nextIdeaId("research-topic");
+          parent = {
+            id: parentId,
+            type: "ideaNode",
+            position: findOpenCanvasPosition(nodes, { x: 120, y: 140 }, 320, 178),
+            selected: false,
+            data: {
+              title: parentTitle,
+              body: summarizeResearchBody(result.summary || result.query, 180),
+              kind: "question",
+              width: 320,
             },
-          ],
-        };
+          };
+          nodes.push(parent);
+          existingTitles.add(titleKey(parentTitle));
+        }
+
+        const sourceBaseX = parent.position.x + estimateNodeWidth(parent) + 160;
+        const sourceBaseY = parent.position.y - 28;
+        const findings = (result.findings.length ? result.findings : [result.summary])
+          .map((finding) => summarizeResearchBody(finding, 260))
+          .filter(Boolean)
+          .slice(0, 5);
+
+        const added: IdeaFlowNode[] = [];
+        for (const [index, finding] of findings.entries()) {
+          const titleSource = finding.split(/[.。;；:：]/)[0] || finding;
+          const cardTitle = titleSource.slice(0, 72).trim() || `Finding ${index + 1}`;
+          const key = titleKey(cardTitle);
+          if (existingTitles.has(key)) continue;
+          const width = 340;
+          const node: IdeaFlowNode = {
+            id: nextIdeaId("research-finding"),
+            type: "ideaNode",
+            position: findOpenCanvasPosition(
+              [...nodes, ...added],
+              { x: sourceBaseX, y: sourceBaseY + index * 216 },
+              width,
+              178,
+            ),
+            selected: index === 0,
+            data: {
+              title: cardTitle,
+              body: finding.length > cardTitle.length ? finding.slice(cardTitle.length).trim() : "",
+              kind: "idea",
+              width,
+            },
+          };
+          added.push(node);
+          existingTitles.add(key);
+          edges.push({
+            id: nextIdeaId("research-edge"),
+            source: parent.id,
+            target: node.id,
+            sourceHandle: "right",
+            targetHandle: "left",
+            type: "editable",
+            label: "SUPPORTS",
+          });
+        }
+
+        if (added.length === 0) return current;
+        return { ...current, nodes: [...nodes, ...added], edges };
       });
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1679,24 +1783,10 @@ function Workbench() {
       const source = rawText.trim();
       if (!source) return;
       setBriefThinking(true);
-      setMapLoading(true);
       try {
-        const canvasBefore = ideaCanvasRef.current;
-        const result = await structureCanvasCapture({
-          data: {
-            rawTranscript: source.slice(0, 6000),
-            existingCards: ideaCanvasExistingCards(canvasBefore),
-            model: modelRef.current,
-          },
-        });
-
-        const nextCanvas = {
-          ...canvasBefore,
-          ...mergeStructuredCanvasCapture(canvasBefore, result, position),
-        };
-        ideaCanvasRef.current = nextCanvas;
-        setIdeaCanvas(nextCanvas);
+        await structureThoughtToCanvas(source, position);
         setQuietInsight(null);
+        const nextCanvas = ideaCanvasRef.current;
         void generateQuietInsight({
           data: {
             latestThought: source.slice(0, 6000),
@@ -1709,9 +1799,6 @@ function Workbench() {
             setQuietInsight(insight);
           })
           .catch((error) => console.warn("[quietInsight] failed", error));
-        scheduleInject(
-          `[canvas voice capture]\n${result.summary || result.title}\nRaw transcript was used as source material for the structured cards.`,
-        );
       } catch (captureError) {
         setError(
           captureError instanceof Error
@@ -1720,12 +1807,11 @@ function Workbench() {
         );
       } finally {
         setBriefThinking(false);
-        setMapLoading(false);
         captureAnchorRef.current = null;
         setCaptureAnchor(null);
       }
     },
-    [generateQuietInsight, scheduleInject, structureCanvasCapture],
+    [generateQuietInsight, structureThoughtToCanvas],
   );
 
   const startListening = async (options?: {
@@ -1803,6 +1889,7 @@ function Workbench() {
       const handle = await startAzureRecognizer({
         token,
         region,
+        micStream: stream,
         onEvent: (e) => {
           if (e.kind === "partial") {
             setPartial(e.text);
@@ -1911,6 +1998,7 @@ function Workbench() {
         }
         realtimeRef.current = null;
       }
+      connectAgentInFlightRef.current = false;
       setAgentEnabled(false);
       setAgentStatus("off");
       const captureText = captureTextsRef.current.join(" ").trim();
@@ -1962,11 +2050,12 @@ function Workbench() {
   // ============= Agent connect / toggle / feedback =============
 
   const connectAgent = useCallback(async () => {
-    if (realtimeRef.current) return;
+    if (realtimeRef.current || connectAgentInFlightRef.current) return;
     if (!streamRef.current || !activeSessionRef.current) {
       setError("Start listening first so the agent can hear you.");
       return;
     }
+    connectAgentInFlightRef.current = true;
     setAgentStatus("connecting");
     try {
       const { clientSecret, model: rtModel } = await mintRealtime();
@@ -2026,6 +2115,7 @@ function Workbench() {
         },
       });
       realtimeRef.current = client;
+      connectAgentInFlightRef.current = false;
       client.updateCanvasSnapshot(
         formatAgentCanvasContext({
           canvas: ideaCanvasRef.current,
@@ -2033,6 +2123,7 @@ function Workbench() {
         }),
       );
     } catch (e: unknown) {
+      connectAgentInFlightRef.current = false;
       setError(errorMessage(e, "Failed to connect agent"));
       setAgentStatus("error");
     }
@@ -2042,7 +2133,8 @@ function Workbench() {
     const client = realtimeRef.current;
     if (!client) return;
     if (client.isAgentSpeaking()) client.cancel();
-    else client.promptResponse();
+    // Server VAD already creates replies automatically. Starting another
+    // response here can make the agent answer the same user turn twice.
   }, []);
 
   const toggleAgentConversation = () => {
@@ -2387,6 +2479,36 @@ function Workbench() {
   // Per-turn: the Thought Turn Contract is the main co-thinking orchestrator.
   // One model call decides state, brief ops, canvas ops, next directions, and a
   // grounding hint for the realtime voice agent.
+  useEffect(() => {
+    if (!activeSessionId) return;
+    const slot = sessionStore.getOrCreate(activeSessionId);
+    const offTurn = slot.bus.on("thought_turn.finalized", (e) => {
+      if (e.sessionId !== activeSessionRef.current) return;
+      if (
+        voiceModeRef.current === "canvas_capture" ||
+        voiceModeRef.current === "inline_dictation"
+      ) {
+        return;
+      }
+      if (autoMindMapTurnIdsRef.current.has(e.turnId)) return;
+
+      const text = e.thoughtTurn.combinedText.trim();
+      const verdict = assessMindMapTrigger(text, recentThoughtTurnsRef.current);
+      if (!verdict.substantive) return;
+
+      const now = Date.now();
+      if (now - lastAutoMapAtRef.current < 5000) return;
+      lastAutoMapAtRef.current = now;
+      autoMindMapTurnIdsRef.current.add(e.turnId);
+
+      setBriefThinking(true);
+      void structureThoughtToCanvas(text)
+        .catch((err) => console.warn("[conversation mindmap] failed", err))
+        .finally(() => setBriefThinking(false));
+    });
+    return () => offTurn();
+  }, [activeSessionId, structureThoughtToCanvas]);
+
   useEffect(() => {
     if (!activeSessionId) return;
     if (MANUAL_CANVAS_CAPTURE) return;

@@ -193,10 +193,10 @@ export function AgentDock({
         <button
           type="button"
           onClick={onPromptAgent}
-          disabled={!listening || status === "connecting" || disabled}
+          disabled={!listening || status !== "speaking" || disabled}
           className="flex h-9 w-9 items-center justify-center rounded-full border border-auralis bg-surface text-primary hover:bg-surface-variant disabled:opacity-35"
-          title={status === "speaking" ? "Stop agent response (S)" : "Ask agent to respond (S)"}
-          aria-label={status === "speaking" ? "Stop agent response" : "Ask agent to respond"}
+          title="Stop agent response"
+          aria-label="Stop agent response"
         >
           <MessageCircle size={16} />
         </button>
