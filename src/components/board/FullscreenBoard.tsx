@@ -945,6 +945,21 @@ function BoardInner({
       >,
     ) => {
       const current = stateRef.current;
+      const existing = current.nodes.find((node) => node.id === id);
+      if (existing?.type === "textNode" && ("title" in patch || "body" in patch)) {
+        const currentText = `${existing.data.title ?? ""}${existing.data.body ?? ""}`.trim();
+        const nextTitle = patch.title ?? existing.data.title ?? "";
+        const nextBody = patch.body ?? existing.data.body ?? "";
+        const nextText = `${nextTitle}${nextBody}`.trim();
+        if (currentText && !nextText) {
+          commitState({
+            ...current,
+            nodes: current.nodes.filter((node) => node.id !== id),
+            edges: current.edges.filter((edge) => edge.source !== id && edge.target !== id),
+          });
+          return;
+        }
+      }
       commitState({
         ...current,
         nodes: current.nodes.map((node) =>
@@ -1562,13 +1577,25 @@ function BoardInner({
         return;
       }
       if (isTypingTarget(event.target)) return;
+      if (
+        event.key.toLowerCase() === "t" &&
+        !event.metaKey &&
+        !event.ctrlKey &&
+        !event.altKey &&
+        !event.repeat
+      ) {
+        event.preventDefault();
+        event.stopPropagation();
+        addTextBlock();
+        return;
+      }
       if (event.key === "Escape" && mode === "fullscreen") {
         onExit();
       }
     };
     window.addEventListener("keydown", onKeyDown, true);
     return () => window.removeEventListener("keydown", onKeyDown, true);
-  }, [askOpen, mode, onExit]);
+  }, [addTextBlock, askOpen, mode, onExit]);
 
   useEffect(() => {
     const isTypingTarget = (target: EventTarget | null) => {

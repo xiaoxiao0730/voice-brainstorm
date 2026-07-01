@@ -1,459 +1,505 @@
+# Murmur Presentation Outline (Value Narrative for Mentor Review)
+
+> This outline sits on top of the demo script below. It is the story you tell; the
+> scenarios are what you show. Audience: a mentor critiquing the product. Spine:
+> **positioning → problem → solution → value**, mapped to the PRD (v1, 2026-06-05)
+> and to the concrete demo scenarios in this file.
+
+## 0. One-line positioning (open with this)
+
+A **Voice-first AI co-thinking workbench**: you speak scattered thoughts, the system
+turns them into a **live editable structure in real time**, an Agent **thinks together
+with you** at your pace, and you leave with a **clear problem definition and a next
+validation step** — not a chat log.
+
+> PRD anchor: §01 Product Positioning ("一句话总结"). Three pillars: *Think Out Loud ·
+> See Your Ideas Evolve · Know What to Do Next*.
+
+## 1. The problem (why this exists)
+
+Say it as one core problem with two consequences — this is exactly the PRD problem tree.
+
+- **Core:** When you explore a not-yet-formed idea, thoughts arrive fast and keep
+  changing. Existing tools either just store raw content, or force you to organize the
+  question *before* talking to AI. **So thinking stays scattered and breaks.**
+- **Consequence 1 — Co-thinking gap:** Traditional Voice Agents are turn-based. They
+  wait passively, or speak too early while you are still diverging — and interrupt.
+  *You do not need more answers; you need timely, low-interruption co-thinking.*
+- **Consequence 2 — Action gap:** After the conversation you still re-read a transcript
+  and manually extract problems, assumptions, next steps. *You do not need a chat log;
+  you need an Exploration Brief you can keep working on.*
+
+> PRD anchor: §2.3 核心问题结构 (core + 衍生问题 01/02). Competitor table §2.5: everyone
+> solves record / summarize / visualize / chat — nobody connects **real-time voice
+> co-thinking + dynamic structure + action** into one flow.
+
+## 2. The value points (the heart of the pitch)
+
+Each value point = one PRD pillar → the specific claim → the demo scenario that proves
+it → the one-line you actually say.
+
+### V1 — Structure: speaking and organizing stop being two separate steps
+
+- **Claim (PRD §3.1 Stage 1):** Not appending transcript — messy speech is placed into
+  the right slot (problem, evidence, assumptions, directions, trade-offs, open
+  questions) as a **live, editable** Live Brief.
+- **Proof:** Scenario 1 (Chinese capture) + Scenario 7 (edit a card live).
+- **Say:** "I don't organize my language first. I just talk, and it grows a structure I
+  can immediately edit — I keep final control, the AI keeps organizing."
+
+### V2 — Co-thinking: the Agent follows my thinking, it doesn't interrupt it
+
+- **Claim (PRD §3.2 Stage 2):** Default is silent structuring. The Agent speaks only
+  when it helps — and when asked to lay things out, it **narrates the structure** instead
+  of throwing the question back. This is the *intervention ladder* (silent → light text
+  → short voice).
+- **Proof:** Scenario 4 (walkthrough) — **this is the money shot** — plus Scenario 3
+  (greetings/thanks create nothing, no double replies).
+- **Say:** "Watch — I say 'walk me through my idea', and it lays out my thinking:
+  core goal, hardest part, directions, next step. It does **not** ask me 'what do you
+  want to tackle?'. And when I'm just thinking, it stays quiet."
+
+### V3 — See Your Ideas Evolve: the canvas grows *while* the Agent speaks
+
+- **Claim (PRD pillar 2 + §2.5 output form "实时看板 Live Brief"):** As the Agent
+  narrates, each segment grows a matching card. The idea is being organized *with* me,
+  visibly, in real time — the differentiator no competitor column has.
+- **Proof:** Scenario 4 canvas behavior (new cards appear during the walkthrough) +
+  Scenario 5 (precise, commanded canvas writes under a selected node).
+- **Say:** "Every point it makes lands as a card on the canvas. My thinking becomes
+  something I can see, move, and keep."
+
+### V4 — Faithful & in control: it preserves my intent, I am not flooded
+
+- **Claim (PRD §2.4 用户洞察):** Users reject "AI 味太重". Output stays editable, keeps
+  uncertainty, does not overclaim. Filler does not become cards.
+- **Proof:** Scenario 3 (no false cards) + Scenario 7 (edit) + Scenario 5 (no unrelated
+  cards).
+- **Say:** "It keeps my words and my uncertainty. I can delete or reshape anything — it
+  organizes, but it doesn't take over."
+
+### V5 — Action: the session ends as a brief I can present, not a recording
+
+- **Claim (PRD §3.3 Stage 3):** The output is an Exploration Brief — problem hypothesis,
+  interaction model, evidence, open questions, next validation steps — a starting point
+  for the *next* step, not a dead deliverable.
+- **Proof:** Scenario 6 (research → connected evidence cards) + Scenario 8 (export brief).
+- **Say:** "I walk away with a structured brief I can bring straight to you — not a
+  transcript I still have to clean up."
+
+## 3. Differentiation (if asked "how is this different from ChatGPT Voice / Otter / Miro?")
+
+Three lines, straight from the PRD §2.5 table:
+
+1. **Interaction:** they are turn-based and interrupt; Murmur is **continuous streaming
+   input + smart interruption** — quiet when it should be, co-thinking when it matters.
+2. **Output:** they leave only chat history / raw transcript; Murmur precipitates a
+   **live Live Brief board**.
+3. **Co-thinking depth:** they wait for prompts; Murmur **proactively** helps articulate
+   the idea and structures it onto the canvas as it speaks.
+
+## 4. How I'd evaluate it (pre-empt the "does it actually work?" question)
+
+The real benchmark is not "is the diagram correct" — it's **"do I understand my own idea
+better after using it?"** Concretely: clarity lift `+1`, next-step confidence lift `+1`,
+at least one new insight (see *Research-Style Evaluation Benchmarks* below).
+
+## 5. Two honest caveats (say them before you're asked — it reads as maturity)
+
+- **"Real-time" ≠ per-word animation.** Canvas growth is async per-segment LLM calls, so
+  there's a short delay. It's structuring, not a typewriter effect.
+- **The walkthrough is on-demand.** The Agent narrates only when I explicitly ask
+  ("walk me through / 帮我梳理"). Default is low-interruption — that's the design, not a
+  bug. State this up front so silence reads as intentional.
+
+## 6. Talk track ↔ scenario map (quick reference during the live run)
+
+| Beat | Value point | PRD | Scenario |
+| --- | --- | --- | --- |
+| Intro / framing | Positioning | §01 | Framing line |
+| Speak a messy idea → structure | V1 Structure | §3.1 | Scenario 1 |
+| Filler creates nothing | V4 Control | §2.4 | Scenario 3 |
+| "Walk me through" → narration + canvas grows | V2 Co-thinking + V3 Evolve | §3.2 | **Scenario 4** |
+| Command precise canvas writes | V3 Evolve | §3.2 | Scenario 5 |
+| Research → evidence cards | V5 Action | §3.3 | Scenario 6 |
+| Edit a card live | V4 Control | §2.4 | Scenario 7 |
+| Export exploration brief | V5 Action | §3.3 | Scenario 8 |
+
+---
+
 # Murmur Demo Script and Test Plan
 
-Goal: demo Murmur as a voice-first thinking canvas, not a transcript app. The user speaks, the canvas grows into structure, the Agent guides only when useful, research becomes small connected cards, and the final output can become an exploration brief.
+Goal: demo Murmur as a voice-first thinking canvas for clarifying an early product idea. The demo should show that messy spoken thinking can become a live canvas, the realtime Agent can guide attention without taking over, research can become connected evidence cards, and the final output can become an exploration brief for a mentor.
 
-Recommended demo length: 8-12 minutes.
+Recommended demo length: 8-10 minutes.
 
-## Persona
+## Demo Persona
 
-**Name:** Lin Chen / 林晨  
-**Role:** Product designer building a compliance/safety workflow concept for small hardware companies.  
-**Situation:** Lin is preparing for a mentor review. They have fuzzy ideas, need to brainstorm positioning, ask the Agent for guidance, research how large companies partner around compliance, then export an exploration brief.  
-**Primary need:** Convert messy spoken thinking into a useful visual structure without manually cleaning notes.  
-**Risk to test:** The system should not turn every small utterance into cards, should preserve the user's language, and should avoid long unstructured research cards.
+**Name:** Xiao / Product design student  
+**Context:** Xiao is preparing to present Murmur, an AI voice brainstorming canvas, to a mentor. The product direction is still evolving. Xiao needs to explain what problem Murmur solves, how voice + canvas + realtime Agent work together, and how to evaluate whether it actually helps people think.  
+**Primary need:** Think aloud naturally and let the system turn scattered thoughts into a structure that can be discussed.  
+**Core tension:** Murmur should not be just a transcript app or a chat app. It should help users notice what matters, organize fuzzy ideas, and create a shareable thinking artifact.
 
 ## Demo Setup
 
-- Open the workbench and create a fresh session.
+- Open a fresh Murmur session.
 - Start with an empty canvas.
-- Keep the canvas visible.
-- Use `Cmd/Ctrl+Shift+Space` for explicit canvas capture.
-- Use `Talk with Agent` only when testing realtime conversation.
-- For each scenario, say the transcript naturally with pauses.
+- Keep the canvas visible during the whole demo.
+- Use `Cmd/Ctrl+Shift+Space` for intentional canvas capture.
+- Use `Talk with Agent` when testing realtime guidance.
+- Speak naturally. Do not read like a polished pitch.
+
+## One-Sentence Demo Framing
+
+"I am going to use Murmur to think through Murmur itself: what it is, why voice matters, how the Agent should guide attention, and whether the final canvas is useful enough to discuss with a mentor."
 
 ## Success Metrics Summary
 
 | Area | Success Metric | Target |
 | --- | --- | --- |
-| Language fidelity | Chinese input creates Chinese cards; English input creates English cards | 100% for titles and body text |
-| Mind map trigger quality | Casual utterances like "Hi", "好的", "嗯" do not create cards | 0 false cards |
-| Manual capture | `Cmd/Ctrl+Shift+Space` creates structured cards from one spoken thought | <= 5s after stop |
-| Realtime Agent | Agent gives one short response, not duplicate replies | 1 response per user turn |
-| Research | Research results become multiple small connected cards | 3-5 cards, no markdown artifacts |
-| Canvas editing | Title is bold and separate; body wraps naturally; Enter works | Pass by manual edit |
-| Export | PDF brief is structured, not raw transcript | Sections are readable and mentor-ready |
+| Language fidelity | Chinese input creates Chinese cards; English input creates English cards | 100% for title/body |
+| Thought capture | Messy speech becomes compact cards, not raw transcript | 3-5 useful cards |
+| Trigger quality | Greetings, thanks, and filler do not create cards | 0 false cards |
+| Agent guidance | Agent gives useful structure, not just another question | User can name one clearer next step |
+| Canvas evolution | Agent walkthrough can create/update canvas structure | Visible new cards or connections |
+| Research | Research becomes several small connected evidence cards | 3-5 cards, no markdown clutter |
+| Export | PDF is an exploration brief, not a chat log | Mentor-ready sections |
 
 ## Research-Style Evaluation Benchmarks
 
-Use these after each scenario or after the full session. The goal is not only to verify that the UI rendered correctly, but to measure whether Murmur actually helped the user think.
-
-The functional checks above are guardrails: language, trigger behavior, card count, edge quality, editing, and export must work well enough for the product to be usable. The real product benchmark is subjective and reflective: did the user feel their thinking became clearer, did they notice a new direction, and did the output become something they could discuss with another person?
-
-### Benchmark Philosophy
-
-For this product, success should be measured closer to creativity-support and sensemaking tools than to note-taking tools.
-
-Do not define success as only:
-
-- The canvas generated cards.
-- The card count was correct.
-- The layout looked neat.
-- The transcript was accurate.
-
-Define success as:
-
-- The user can explain their idea more clearly after the session than before.
-- The user discovers at least one new angle, missing question, risk, or next step.
-- The user trusts that the canvas preserved their intent instead of rewriting the idea into something generic.
-- The user feels lighter cognitive load: they can keep speaking without managing notes.
-- The user would use the map or brief in a mentor conversation.
+The functional checks above are guardrails. The real benchmark is whether Murmur helps the user think better.
 
 Score each item from 1 to 5:
 
-1 = strongly disagree, 3 = neutral / partially true, 5 = strongly agree.
+1 = strongly disagree, 3 = partially true, 5 = strongly agree.
 
 | Dimension | Rating Prompt | What Good Looks Like |
 | --- | --- | --- |
-| Thought clarity | "The canvas helped me understand my own thinking more clearly." | The user can explain the problem, options, and next step more easily after using the canvas |
-| Structure quality | "The generated structure matched how I would organize the idea myself." | Cards reflect real conceptual roles: goal, question, option, risk, evidence, next step |
-| Idea generation | "The system helped me notice at least one new angle, missing question, or possible direction." | User identifies a new path, scenario, risk, or research question after interacting with Agent/canvas |
-| Cognitive load reduction | "I spent less effort remembering and organizing my thoughts." | User talks naturally without needing to manually rewrite everything afterward |
-| Control / agency | "I felt in control of what entered the canvas." | User understands why cards appeared and can edit/delete/accept without feeling flooded |
-| Trust | "The system did not invent or overstate my ideas." | Generated cards preserve intent and uncertainty; research is separated from user claims |
-| Low interruption | "The Agent helped without derailing my thinking." | Agent speaks briefly, at useful moments, and does not duplicate or over-explain |
-| Presentation readiness | "The final map/brief would help me discuss this with a mentor." | Output supports critique: clear focus, evidence, open questions, next actions |
+| Thought clarity | "The canvas helped me understand my idea more clearly." | User can explain problem, mechanism, and next step more easily |
+| Idea generation | "The system helped me notice a new angle, risk, or question." | User identifies at least one new direction after using Agent/canvas |
+| Attention guidance | "The Agent helped me focus on what mattered next." | Agent points to a high-leverage issue instead of asking generic questions |
+| Control / agency | "I felt in control of what entered the canvas." | User can edit/delete/accept without feeling flooded |
+| Trust | "The system preserved my intent without inventing too much." | Cards keep uncertainty and do not overclaim |
+| Low interruption | "The Agent helped without derailing my flow." | No duplicate replies, no excessive filler, no awkward turn-taking |
+| Presentation readiness | "I would use this map or brief with a mentor." | Output supports critique and discussion |
 
-### Pre/Post Reflection Method
+### Pre/Post Reflection
 
-Before using Murmur, ask the participant to speak for 60-90 seconds about the idea without AI help. Then ask two quick baseline questions:
+Before the demo, ask:
 
-| Moment | Question | Scoring |
-| --- | --- | --- |
-| Before | "How clear does this idea feel right now?" | 1-5 |
-| Before | "How confident are you about what to explore next?" | 1-5 |
-
-After using Murmur, ask the same two questions again, plus one open-ended question:
-
-| Moment | Question | Scoring |
-| --- | --- | --- |
-| After | "How clear does this idea feel now?" | 1-5 |
-| After | "How confident are you about what to explore next?" | 1-5 |
-| After | "What changed in your understanding?" | Open response |
-
-Useful benchmark signals:
-
-| Metric | How To Calculate | Strong Signal |
-| --- | --- | --- |
-| Clarity lift | After clarity - before clarity | +1 or higher |
-| Next-step confidence lift | After confidence - before confidence | +1 or higher |
-| New insight count | Count user-mentioned new angles/questions/risks | At least 1 |
-| Useful edit ratio | Useful generated cards / total generated cards | >= 70% |
-| Presentation readiness | User would show the brief/map to mentor | >= 4/5 |
-
-### Qualitative Coding
-
-When reviewing a demo or user test recording, mark moments where the user says or does the following:
-
-| Code | Evidence |
+| Question | Score |
 | --- | --- |
-| Clarification | "Oh, this is actually two different users" or "Now I see the core problem" |
-| New direction | User adds a new branch, scenario, risk, research question, or next step because of the canvas/Agent |
-| Trust | User accepts generated cards with small edits instead of rewriting them |
-| Loss of control | User asks why something appeared, deletes many cards, or says the AI is over-organizing |
-| Interruption | User stops thinking to manage UI, repeated errors, duplicate Agent replies, or messy cards |
+| How clear does the Murmur product direction feel right now? | 1-5 |
+| How confident are you about what to discuss with a mentor next? | 1-5 |
 
-The best evidence is not that the user says "the UI worked." The best evidence is that the user points at the canvas and continues thinking from it.
+After the demo, ask the same two questions again, then ask:
 
-### Primary Success Criteria
-
-For a strong demo, aim for:
-
-| Metric | Target |
+| Question | Evidence |
 | --- | --- |
-| Clarity lift | +1 or higher |
-| Next-step confidence lift | +1 or higher |
-| New insight count | At least 1 per full session |
-| Average subjective score | >= 4.0 / 5 |
-| Thought clarity score | >= 4 / 5 |
-| Idea generation score | >= 4 / 5 |
-| Control / agency score | >= 4 / 5 |
-| Low interruption score | >= 4 / 5 |
+| What became clearer? | User names a clearer product frame or interaction model |
+| What new idea or concern appeared? | User names a new direction, risk, or missing validation question |
+| What would you show to a mentor? | User points to map/brief content |
 
-### Post-Task Interview Questions
-
-Ask these after the demo/test. Let the user answer freely, then map responses back to the rubric.
-
-- What did Murmur help you understand about your idea that was less clear before?
-- Did the canvas create any card or relationship that felt genuinely useful?
-- Did it suggest or surface any new direction, risk, or question?
-- Which part felt noisy, redundant, or not faithful to what you meant?
-- Did you feel in control of the canvas, or did it feel like the AI was taking over?
-- Would you use the generated map or brief to present this idea to a mentor? Why or why not?
-
-### Behavioral Signals To Observe
-
-These are not strict pass/fail metrics, but useful qualitative evidence.
-
-| Signal | Positive Evidence | Negative Evidence |
-| --- | --- | --- |
-| User edits less | User only tweaks titles/details | User rewrites most cards from scratch |
-| User builds on AI output | User says "this gives me another idea" or adds branches | User deletes generated structure because it feels wrong |
-| User references the map | User points to cards while explaining | User ignores the canvas and returns to raw speech |
-| User trusts research cards | User uses findings to compare options | User sees markdown clutter or cannot tell what the evidence means |
-| User feels flow | User keeps speaking naturally | User pauses to manage UI or correct noise repeatedly |
+Primary target: clarity lift `+1`, next-step confidence lift `+1`, at least one new insight.
 
 ---
 
-# Scenario 1: Chinese Manual Mind Map Capture
+# Scenario 1: Chinese Manual Capture, Product Core
 
-**Purpose:** Test explicit voice-to-canvas path and Chinese language fidelity.
+**Purpose:** Test whether intentional voice capture can turn Xiao's real product thinking into a useful Chinese canvas structure.
 
 **Action:** Press `Cmd/Ctrl+Shift+Space`, speak, press again to stop.
 
 **Chinese Transcript:**
 
-> 我现在想做的是一个面向小型硬件公司的合规助手。  
-> 他们经常不知道产品进入大客户渠道之前，到底需要准备哪些安全认证、测试报告和供应商资料。  
-> 我担心的问题是，如果只做成一个 checklist，它会很无聊；但如果能根据客户类型和行业自动推荐下一步材料，就会更有价值。
+> 我现在想做的其实不是一个普通的语音转文字工具。  
+> 我想做的是一个可以陪用户一边说一边思考的画布。  
+> 用户说出来的想法可能很散，但是系统应该帮他变成一些可以看见、可以移动、可以继续发展的结构。  
+> 我最在意的是，它能不能真的帮助用户把思路变清楚，而不是只是生成一些看起来漂亮的卡片。
 
 **Expected Canvas Behavior:**
 
 - Cards are in Simplified Chinese.
-- A central focus card appears, likely around "小型硬件公司的合规助手".
-- Branches include customer pain, checklist risk, adaptive recommendation idea, next question.
-- Edges use short categorical labels such as `PART_OF`, `RISK_OF`, `ENABLES`, `LEADS_TO`.
+- Central focus is around "语音思考画布" or "陪用户思考的画布".
+- Branches include: not transcription, visible structure, editable canvas, clarity as value.
+- No filler card like "我现在想做的其实是".
 
 **Success Metrics:**
 
 | Metric | Pass Criteria |
 | --- | --- |
-| Language | All card title/body text is Chinese except terms like checklist |
-| Structure | 3-5 useful cards, not a transcript paragraph |
-| No over-splitting | No card for filler like "我现在想做的是" |
-| Layout | Cards do not overlap and edges do not create odd downward protrusions |
-| Subjective clarity | User rates "this helps me see the core idea and risks" >= 4/5 |
-| Faithfulness | User says the map preserves their intended meaning without adding false claims |
+| Language | All main cards are Chinese |
+| Structure | 3-5 cards, not one transcript paragraph |
+| Faithfulness | Preserves "not transcript app" and "clarify thinking" |
+| Visual clarity | Cards are not crowded; edge labels are categorical |
+| Subjective clarity | User rates clarity help >= 4/5 |
 
 ---
 
-# Scenario 2: English Manual Mind Map Capture
+# Scenario 2: English Manual Capture, Product Pitch
 
-**Purpose:** Test English output and concept structuring.
+**Purpose:** Test English language fidelity and whether Murmur can structure a rough product pitch.
 
 **Action:** Press `Cmd/Ctrl+Shift+Space`, speak, press again to stop.
 
 **English Transcript:**
 
-> I am exploring a tool for small hardware companies that want to sell into enterprise channels.  
-> The hard part is not just knowing the compliance requirements, but understanding what evidence a large buyer will ask for before they trust the vendor.  
-> I want the product to help teams prepare the right safety docs, certifications, and supplier answers before the sales conversation starts.
+> Murmur is a voice-first thinking canvas.  
+> The user should be able to talk naturally, and the canvas should grow with their thinking.  
+> The realtime Agent should not behave like a chatbot that keeps asking questions.  
+> It should help reallocate the user's attention: what is unclear, what is missing, and what might be worth exploring next.
 
 **Expected Canvas Behavior:**
 
 - Cards are in English.
-- The map should identify enterprise sales readiness, compliance evidence, safety documentation, and supplier trust.
-- The structure should be compact, not a long paragraph.
+- Cards identify voice-first canvas, live canvas growth, Agent role, attention guidance.
+- The structure should be compact.
 
 **Success Metrics:**
 
 | Metric | Pass Criteria |
 | --- | --- |
-| Language | All generated cards are English |
-| Quality | At least one card captures "buyer trust/evidence" |
-| Compactness | Max 5 cards unless the input is very dense |
-| Editability | User can click a card, edit title/body, and press Enter in body for line breaks |
-| Subjective usefulness | User can name one clearer distinction after seeing the map |
+| Language | All generated title/body text is English |
+| Quality | Captures "reallocate attention" as a core value |
+| Compactness | Max 5 cards |
+| Editability | User can edit title/body naturally |
 
 ---
 
-# Scenario 3: Casual Utterance Should Not Generate Mind Map
+# Scenario 3: Casual Utterance Should Not Create Cards
 
-**Purpose:** Test trigger gate. The system should not create cards from shallow speech.
+**Purpose:** Test that the canvas does not react to shallow conversation.
 
 **Action:** Start `Talk with Agent`, say each line separately.
 
+**Transcript:**
+
+> Hi.  
+> What's your name?  
+> 嗯，我想一下。  
+> Thank you.
+
+**Expected Behavior:**
+
+- Agent can answer briefly.
+- No mind map cards are created for greeting, name question, filler, or thanks.
+- No duplicate Agent reply.
+
+**Success Metrics:**
+
+| Metric | Pass Criteria |
+| --- | --- |
+| False positive card creation | 0 cards |
+| Agent response | 1 response per user turn |
+| Flow | User does not need to clean up useless cards |
+
+---
+
+# Scenario 4: Realtime Agent Walkthrough
+
+**Purpose:** Test whether the Agent can say more when asked for a walkthrough and make the canvas evolve while speaking.
+
+**Action:** Start `Talk with Agent`, then ask for help.
+
 **Chinese Transcript:**
 
-> 嗨。  
-> 好的。  
-> 嗯我想一下。  
-> 先等一下。
+> 你可以帮我把我现在这个产品想法整体走一遍吗？  
+> 我现在有点混乱，我知道它和语音、画布、Agent 都有关，但是我不知道应该怎么讲清楚它的核心价值。
 
 **English Transcript:**
 
-> Hi.  
-> Okay.  
-> Let me think.  
-> Wait a second.
+> Can you walk me through the whole picture of my product idea right now?  
+> I know it involves voice, canvas, and an Agent, but I am not sure how to explain the core value clearly.
+
+**Expected Agent Behavior:**
+
+- Agent gives a 3-5 sentence walkthrough, not just one tiny reply.
+- Agent should not end by simply throwing the question back to the user.
+- Agent frames the idea as: voice input, canvas external memory, Agent attention guidance, mentor-ready artifact.
+- Agent may create compact canvas cards while speaking.
 
 **Expected Canvas Behavior:**
 
-- Agent may respond briefly, but the canvas should not create new mind map cards for these lines.
+- New cards or updates appear around the product structure.
+- Possible cards: "Voice-first capture", "Living canvas", "Attention guidance", "Exploration brief", "Open validation question".
+- Connections are simple and readable.
 
 **Success Metrics:**
 
 | Metric | Pass Criteria |
 | --- | --- |
-| False positive card creation | 0 cards generated |
-| Agent response | No duplicate reply to a single "Hi" |
-| Transcript | User and Agent lines can still appear in transcript/history |
+| Walkthrough quality | Agent gives a useful structure, not generic encouragement |
+| Canvas evolution | At least 3 useful cards or updates appear |
+| No handoff loop | Agent does not end with only "what do you want to tackle?" |
+| Attention guidance | User can name what matters next |
+| Subjective value | User rates Agent guidance >= 4/5 |
 
 ---
 
-# Scenario 4: Realtime Agent Guides, User Thought Enters Canvas
+# Scenario 5: Ask Agent To Expand A Selected Node
 
-**Purpose:** Test realtime conversation path. User's substantive thought should become canvas structure; Agent should stay concise.
+**Purpose:** Test precise Agent canvas writing.
 
-**Action:** Start `Talk with Agent`, speak naturally.
+**Action:** Select a node such as "Attention guidance" or "Agent role", then talk to Agent.
 
 **Chinese Transcript:**
 
-> 我现在卡住的地方是目标用户。  
-> 一种可能是直接卖给小硬件公司，帮他们准备进入大客户采购流程的材料。  
-> 另一种可能是卖给大公司采购团队，让他们更快判断供应商是不是合规。  
-> 你觉得我应该先验证哪一边？
+> 在这个 Agent role 下面，帮我发散三个它应该做的事情。  
+> 一个是指出我没有讲清楚的地方，一个是提醒我遗漏了什么，一个是帮我把下一步验证问题写出来。  
+> 直接写到画布上。
 
 **English Transcript:**
 
-> I am stuck on the target user.  
-> One option is selling to small hardware companies and helping them prepare for enterprise procurement.  
-> Another option is selling to enterprise procurement teams so they can evaluate supplier compliance faster.  
-> Which side should I validate first?
+> Under the Agent role node, expand three things it should do.  
+> One is pointing out what is unclear, one is noticing what I missed, and one is writing the next validation question.  
+> Put them directly on the canvas.
 
 **Expected Behavior:**
 
-- Agent gives one short guiding response.
-- User's substantive turn creates or updates mind map cards.
-- The map distinguishes two possible users and the validation question.
+- Agent briefly confirms and writes to canvas.
+- Exactly or approximately 3 child cards appear.
+- Cards stay connected to the selected/current Agent role node.
 
 **Success Metrics:**
 
 | Metric | Pass Criteria |
 | --- | --- |
-| Agent brevity | 1-2 short sentences |
-| Duplicate response | No second Agent reply for the same turn |
-| Canvas structure | Cards include small hardware companies, enterprise procurement, validation question |
-| Language | Cards match the language of the user turn |
-| Decision support | User rates "the Agent helped me decide what to validate next" >= 4/5 |
-| New angle | User can identify at least one useful framing or tradeoff surfaced by the Agent/canvas |
+| Command compliance | 3 cards are created |
+| Fidelity | The three cards match the requested functions |
+| Edge quality | Edges use categorical labels, not explanations |
+| Control | No unrelated cards are added |
 
 ---
 
-# Scenario 5: Command Agent To Write To Canvas
+# Scenario 6: Research For Product Positioning
 
-**Purpose:** Test explicit Agent canvas-writing commands.
-
-**Action:** Select a node about target user if possible, then talk to Agent.
-
-**Chinese Transcript:**
-
-> 在这个目标用户节点下面，帮我发散三个使用场景。  
-> 一个是准备进入大客户采购，一个是补齐安全认证材料，一个是回答采购团队的问题。  
-> 请直接写到画布上。
-
-**English Transcript:**
-
-> Under this target user node, expand three use cases.  
-> One is preparing for enterprise procurement, one is filling safety certification gaps, and one is answering procurement team questions.  
-> Please write them directly onto the canvas.
-
-**Expected Behavior:**
-
-- Agent should not only talk. It should propose canvas ops.
-- Exactly or approximately 3 new cards appear.
-- Cards connect to the selected/current target node.
-
-**Success Metrics:**
-
-| Metric | Pass Criteria |
-| --- | --- |
-| Command compliance | 3 use-case cards are created |
-| Edge quality | Edges use categorical labels, not full sentences |
-| Content fidelity | The three scenarios match the user's requested scenarios |
-| No extra clutter | No unrelated cards are added |
-| User control | User says the Agent wrote what they asked for, not more than they asked for |
-
----
-
-# Scenario 6: Research Splits Into Connected Cards
-
-**Purpose:** Test research output shape. It should not become one long markdown card.
+**Purpose:** Test research as evidence cards, not a long markdown blob.
 
 **Action:** Ask Agent to research.
 
 **Chinese Transcript:**
 
-> 帮我查一下，现在公司和大型企业合作推广合规或者安全相关产品的时候，常见的合作方式有哪些。  
-> 我想知道有没有战略合作、行业协会合作、渠道伙伴或者采购合规项目这些模式。
+> 帮我查一下，voice note、mind mapping、AI brainstorming、creativity support tools 这些方向里，大家通常怎么评估一个工具有没有真的帮助用户思考？  
+> 我不只是想看功能有没有跑通，我想知道有没有主观的评价方式，比如思路更清楚了，产生了新想法，认知负担变低了。
 
 **English Transcript:**
 
-> Help me research current common practices for partnering with large companies to promote compliance or safety-related products.  
-> I want to know whether strategic partnerships, industry associations, channel partners, or procurement compliance programs are common patterns.
+> Help me research how voice notes, mind mapping, AI brainstorming, and creativity support tools are usually evaluated.  
+> I do not only want functional metrics. I want subjective evaluation methods, like whether users feel clearer, generate new ideas, or reduce cognitive load.
 
 **Expected Behavior:**
 
 - Agent acknowledges briefly and triggers research.
-- Brief can contain the fuller research result.
-- Canvas should create several small research cards connected to the current question/focus node.
-- Markdown artifacts should not show in card text.
+- Canvas receives several small connected research/evidence cards.
+- Brief can keep the fuller source-backed synthesis.
+- Markdown artifacts are removed from cards.
 
 **Success Metrics:**
 
 | Metric | Pass Criteria |
 | --- | --- |
-| Research trigger | A research task starts |
+| Research trigger | Research task starts |
 | Canvas shape | 3-5 small cards, not one giant card |
-| Connection | Research cards connect to the relevant question/focus node |
-| Markdown cleanup | No visible `**bold**`, `[link](url)`, or long raw URLs inside cards |
-| Source handling | Sources can remain in brief, not crowded into canvas cards |
-| Insight value | User can name one research-backed pattern they did not have clearly before |
-| Evidence clarity | User rates "the research cards helped me compare options" >= 4/5 |
+| Relevance | Cards mention subjective evaluation, clarity, creativity, cognitive load, or sensemaking |
+| Source handling | Sources stay in brief, not crowded into cards |
+| Insight value | User can use one metric in mentor discussion |
 
 ---
 
-# Scenario 7: Card Editing UX
+# Scenario 7: Edit The Canvas Live
 
-**Purpose:** Test title/body editing inside a card.
+**Purpose:** Show the canvas is editable, not just generated output.
 
-**Action:** Click any generated idea card and edit it.
+**Action:** Click a generated card and edit it.
 
 **Manual Test Text:**
 
 Title:
 
 ```text
-Enterprise procurement readiness
+Attention guidance
 ```
 
 Body:
 
 ```text
-Prepare safety docs before sales calls.
-Map missing certifications.
-Answer buyer compliance questions.
+Notice what is unclear.
+Surface missing assumptions.
+Suggest the next validation question.
 ```
 
 **Expected Behavior:**
 
-- Title is bold and visually separate.
-- Title occupies the first line and wraps only after using full card width.
+- Title is bold and occupies the first line.
 - Body is normal weight.
-- Pressing Enter in title moves/focuses into body.
-- Pressing Enter in body creates a new line.
+- Body wraps naturally.
+- Pressing Enter in body creates a line break.
 
 **Success Metrics:**
 
 | Metric | Pass Criteria |
 | --- | --- |
 | Title wrapping | Does not wrap after every character |
-| Body wrapping | Long body text wraps naturally inside the card |
-| Enter behavior | Title Enter moves to body; body Enter inserts newline |
-| Visual hierarchy | Title is clearly bold; body is regular weight |
+| Body wrapping | Long text wraps naturally |
+| Enter behavior | Enter creates body line breaks |
+| Feeling | User feels they can shape the AI output |
 
 ---
 
-# Scenario 8: Export Exploration Brief
+# Scenario 8: Export Exploration Brief For Mentor
 
-**Purpose:** Test final output for mentor presentation.
+**Purpose:** Test whether the final output helps mentor presentation.
 
 **Action:** After scenarios 1, 4, and 6, export PDF.
 
 **Expected PDF Sections:**
 
 - Exploration focus
-- Current understanding
-- User/customer segments
-- Promising directions
-- Research-backed patterns
+- Current product hypothesis
+- Core interaction model
+- Agent role
+- Evidence / research-backed evaluation metrics
 - Open questions
-- Suggested next steps
+- Suggested next validation steps
 
 **Success Metrics:**
 
 | Metric | Pass Criteria |
 | --- | --- |
 | Not raw transcript | PDF is structured, not a chat log |
-| Language | Uses the dominant session language or preserves mixed context gracefully |
-| Research inclusion | Research appears as synthesized insight, not pasted raw markdown |
-| Mentor usefulness | A mentor can understand what was explored and what needs feedback |
+| Mentor usefulness | A mentor can understand the product direction |
+| Evaluation clarity | Brief includes how to judge whether Murmur works |
 | Presentation readiness | User rates "I would show this to a mentor" >= 4/5 |
 
 ---
 
 # End-To-End Demo Flow
 
-Use this order for a polished demo:
+Use this order for a polished live demo:
 
-1. 30s intro: "Murmur turns speaking into a living thinking canvas."
-2. Scenario 1 Chinese manual capture.
-3. Scenario 3 quick false-positive test: say "Hi" and show no card is created.
-4. Scenario 4 realtime Agent guidance.
-5. Scenario 5 command Agent to write three use cases.
-6. Scenario 6 research, then show multiple connected research cards.
-7. Scenario 7 edit one card live.
-8. Scenario 8 export PDF for mentor.
+1. 20s intro: "I am going to use Murmur to think through Murmur itself."
+2. Scenario 1: Chinese manual capture of the product core.
+3. Scenario 3: Say "Hi" / "Thank you" to show no useless cards appear.
+4. Scenario 4: Ask Agent for a walkthrough and show canvas evolving.
+5. Scenario 5: Select Agent role and ask for three concrete functions.
+6. Scenario 6: Research subjective evaluation metrics.
+7. Scenario 7: Edit one generated card live.
+8. Scenario 8: Export the exploration brief.
+
+## Mentor Presentation Script
+
+"The value I am testing is not whether Murmur can transcribe speech. The value is whether speaking can become a structured thinking artifact. In this demo, I use Murmur to think through Murmur itself: first I speak a messy idea, then the canvas turns it into movable structure, then the realtime Agent helps me notice what deserves attention next, and finally the session becomes an exploration brief I can discuss with a mentor."
 
 ## Closing Line
 
-"The point is not transcription. The point is that messy spoken thinking becomes a structured artifact: a map I can edit, research I can trust, and a brief I can present."
+"The success metric is not just whether the diagram is correct. It is whether I understand my own idea better after using it."
 
 ## Troubleshooting Notes
 
 | Problem | Demo Recovery |
 | --- | --- |
-| Azure recognizes Chinese as English | Repeat the line more clearly; current recognizer defaults to `zh-CN` before `en-US` |
-| Agent gives duplicate reply | Stop and restart Talk with Agent; Realtime has connection lock and manual prompt is disabled |
-| Research is slow | Say: "It is doing actual web research; the brief will update when sources return" |
-| Too many cards | Explain the gate is tuned for substantive thoughts; use manual capture for intentional structure |
-| Layout looks crowded | Drag the parent node; edges and child cards follow spatially through node positioning |
+| Chinese recognized as English | Repeat the line clearly; explain language fidelity is an active test |
+| Agent asks too many questions | Say: "Walk me through it and write the structure to the canvas" |
+| Too many cards | Delete one live to show user control |
+| Research is slow | Explain research is asynchronous and the brief updates when sources return |
+| Layout feels crowded | Drag the parent node or use this as a point about layout refinement |
