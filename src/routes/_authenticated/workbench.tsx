@@ -55,6 +55,7 @@ import {
   type RealtimeClient,
 } from "@/lib/agent/realtimeClient";
 import { formatAgentCanvasContext } from "@/lib/agent/canvasContext";
+import { type CanvasCardRole } from "@/lib/canvas/canvasCommandContract";
 import { normalizeCanvasEdgeLabel } from "@/lib/canvas/edgeLabels";
 import { generateIntervention } from "@/lib/agent/responseGenerator.functions";
 import { logIntervention } from "@/lib/agent/interventionLog.functions";
@@ -415,6 +416,25 @@ const STRUCTURED_KIND_COLUMN: Record<IdeaNodeKind, number> = {
   next: 5,
 };
 
+function structuredRoleOffset(role: string | undefined, index: number) {
+  const normalized = (role ?? "").toUpperCase() as CanvasCardRole;
+  switch (normalized) {
+    case "QUESTION":
+      return { x: -340, y: index * 210 };
+    case "OPTION":
+    case "EVIDENCE":
+      return { x: 360, y: index * 210 };
+    case "RISK":
+    case "ASSUMPTION":
+      return { x: 0, y: 250 + index * 190 };
+    case "NEXT_STEP":
+      return { x: 360, y: 250 + index * 190 };
+    case "FOCUS":
+    default:
+      return { x: 360, y: index * 210 };
+  }
+}
+
 function defaultCanvasCaptureAnchor(canvas: IdeaCanvasState) {
   const visibleNodes = canvas.nodes.filter((node) => !node.id.startsWith(BRIEF_NODE_PREFIX));
   if (visibleNodes.length === 0) return { x: 260, y: 180 };
@@ -468,9 +488,10 @@ function mergeStructuredCanvasCapture(
       ? (() => {
           const count = attachedCounts.get(attachTo.id) ?? 0;
           attachedCounts.set(attachTo.id, count + 1);
+          const offset = structuredRoleOffset(card.role, count);
           return snapCanvasPosition({
-            x: attachTo.position.x + estimateNodeWidth(attachTo) + 144,
-            y: attachTo.position.y + count * 216,
+            x: attachTo.position.x + offset.x,
+            y: attachTo.position.y + offset.y,
           });
         })()
       : (() => {
@@ -500,12 +521,13 @@ function mergeStructuredCanvasCapture(
 
     const relation = normalizeCanvasEdgeLabel(card.relation) || undefined;
     if (attachTo && !edgeExists(attachTo.id, node.id, relation)) {
+      const childIsLeftOfParent = node.position.x < attachTo.position.x;
       edges.push({
         id: nextIdeaId("voice-edge"),
         source: attachTo.id,
         target: node.id,
-        sourceHandle: "right",
-        targetHandle: "left",
+        sourceHandle: childIsLeftOfParent ? "left" : "right",
+        targetHandle: childIsLeftOfParent ? "right" : "left",
         type: "editable",
         label: relation,
       });
