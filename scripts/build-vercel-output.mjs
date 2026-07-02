@@ -17,7 +17,7 @@ await writeFile(
   join(functionDir, ".vc-config.json"),
   JSON.stringify(
     {
-      handler: "server.js",
+      handler: "index.mjs",
       launcherType: "Nodejs",
       runtime: "nodejs22.x",
       shouldAddHelpers: false,
@@ -26,6 +26,64 @@ await writeFile(
     null,
     2,
   ),
+);
+
+await writeFile(join(functionDir, "package.json"), JSON.stringify({ type: "module" }, null, 2));
+
+await writeFile(
+  join(functionDir, "index.mjs"),
+  `import server from "./server.js";
+
+function toWebHeaders(nodeHeaders) {
+  const headers = new Headers();
+  for (const [key, value] of Object.entries(nodeHeaders)) {
+    if (value === undefined) continue;
+    if (Array.isArray(value)) {
+      for (const item of value) headers.append(key, item);
+    } else {
+      headers.set(key, String(value));
+    }
+  }
+  return headers;
+}
+
+async function readBody(req) {
+  if (req.method === "GET" || req.method === "HEAD") return undefined;
+  const chunks = [];
+  for await (const chunk of req) chunks.push(Buffer.from(chunk));
+  return chunks.length > 0 ? Buffer.concat(chunks) : undefined;
+}
+
+export default async function handler(req, res) {
+  const protocol = req.headers["x-forwarded-proto"] || "https";
+  const host = req.headers.host || "localhost";
+  const url = new URL(req.url || "/", protocol + "://" + host);
+  const body = await readBody(req);
+  const request = new Request(url, {
+    method: req.method || "GET",
+    headers: toWebHeaders(req.headers),
+    body,
+    ...(body ? { duplex: "half" } : {}),
+  });
+
+  const response = await server.fetch(request, process.env, {
+    waitUntil: () => undefined,
+  });
+
+  res.statusCode = response.status;
+  response.headers.forEach((value, key) => {
+    res.setHeader(key, value);
+  });
+
+  if (!response.body) {
+    res.end();
+    return;
+  }
+
+  const buffer = Buffer.from(await response.arrayBuffer());
+  res.end(buffer);
+}
+`,
 );
 
 await writeFile(
