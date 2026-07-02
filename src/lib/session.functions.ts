@@ -1,6 +1,7 @@
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
+import { describeError } from "@/lib/errorDiagnostics";
 
 export const listSessions = createServerFn({ method: "GET" })
   .middleware([requireSupabaseAuth])
@@ -42,8 +43,7 @@ export const createSession = createServerFn({ method: "POST" })
       if (error) throw new Error(error.message);
       return row;
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      throw new Error(`Could not create session in Supabase: ${message}`);
+      throw new Error(`Could not create session in Supabase: ${describeError(error)}`);
     }
   });
 
