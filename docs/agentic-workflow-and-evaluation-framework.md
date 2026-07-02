@@ -6,6 +6,90 @@ This document records the technical methodology behind Murmur: a voice-first bra
 
 The goal is not only to build a working product, but also to understand how an AI system can participate in early-stage thinking without over-summarizing, over-generating, or taking control away from the user.
 
+## 中文汇报版总结
+
+这个项目现在可以被总结为一个闭环：
+
+```text
+Agent 编排
+→ 输出质量控制
+→ 用户体验提升
+→ Evaluation framework
+→ 反过来指导 workflow 改进
+```
+
+我现在做的不是单纯让 AI 生成更多内容，而是在探索如何编排一个实时协作的 agent workflow：让不同 agent 在合适的时间做合适的事，并通过 schema、validation、layout constraints 和 evaluation framework 持续提升用户思考的清晰度和行动性。
+
+### 1. 我如何让不同 Agent 协同工作
+
+这个系统不是一个大模型同时负责所有任务，而是把用户的一次 messy thinking turn 拆成多个职责明确的模块：
+
+```text
+Realtime Agent: 陪用户说话，并引导注意力
+Thought Turn Buffer: 把连续语音切成可处理的 thought turn
+Canvas Structuring Agent: 把 messy speech 转成 cards / edges
+Research Agent: 查资料，并转成可接入 canvas 的 evidence
+Quiet Insight Agent: 在后台发现遗漏、风险和下一步
+Validator / Critic: 限制输出质量，避免过度生成
+Renderer: 把结构落到画布上，并控制布局可读性
+```
+
+这里的核心经验是：agent collaboration 不只是让多个 agent 互相聊天，而是要给每个 agent 分配清楚的职责、触发时机和输出格式。
+
+### 2. 我如何提升最终任务完成质量
+
+任务质量不是只靠换更强模型解决，而是通过 workflow、constraints 和 evaluation 一起提升：
+
+```text
+Prompt: 告诉 AI 应该怎么理解和组织
+Schema: 限制 AI 可以输出什么
+Validation: 拦住不合格或过度自由的输出
+Layout constraints: 让结构在视觉上更容易阅读
+Human feedback: 用用户编辑行为反推质量问题
+Benchmark: 用真实 messy transcript 判断改动是否有效
+```
+
+比如 card granularity schema 不是一个小功能，而是为了减少 AI 把同一个 feature flow 拆成多个冗余卡片；edge relation schema 也不是只是改标签，而是为了让图里的关系更稳定、更可解释。
+
+### 3. Evaluation framework 如何反过来指导前面的设计
+
+Evaluation 不应该只是系统完成之后的打分，而应该作为一个设计工具，用来定位每个模块应该怎么改。
+
+```text
+Fidelity 忠实度
+→ 改 transcript cleaning、structuring prompt、hallucination guard
+
+Clarity 清晰度
+→ 改 card granularity、title/body separation、visual type selection
+
+Insightfulness 启发性
+→ 改 quiet insight agent、research agent、next-direction generation
+
+Actionability 可行动性
+→ 改 next step generation、decision map、suggested validation
+
+Cognitive Load 认知负担
+→ 改 schema limits、node count、edge length、layout constraints
+```
+
+因此，这个 evaluation framework 的作用不是最后证明“图画对了”，而是持续回答：哪个 agent 或 workflow stage 没有真正帮助用户完成思考任务？
+
+### 4. 当前可以对外表达的 Thesis
+
+英文版本：
+
+```text
+The goal is not to make the AI generate more content, but to orchestrate specialized agents and quality gates so that the user's messy thinking becomes clearer, more faithful, and more actionable.
+```
+
+中文版本：
+
+```text
+我不是在追求让 AI 生成更多内容，而是在设计一套 agent workflow，让不同 agent 在合适的时机做合适的事，并通过 schema、validation 和 evaluation framework 持续提升用户思考的清晰度、忠实度和行动性。
+```
+
+这个项目的最终呈现不应该只有功能 demo，也应该展示我在过程中形成的方法论：如何编排 agent、如何控制输出质量、如何评估 AI 是否真的帮助用户完成早期思考任务。
+
 ## Core Research Question
 
 How can an agentic system help a user turn messy spoken thoughts into clearer, more actionable thinking while preserving the user's intent, uncertainty, and language?
