@@ -1,21 +1,22 @@
 import { createMiddleware } from "@tanstack/react-start";
 import { getRequest } from "@tanstack/react-start/server";
 import { createClient } from "@supabase/supabase-js";
+import { readEnv } from "@/lib/env";
 import type { Database } from "./types";
 
 const LOCAL_USER_ID =
-  process.env.LOCAL_USER_ID ?? "00000000-0000-0000-0000-000000000001";
+  readEnv("LOCAL_USER_ID") ?? "00000000-0000-0000-0000-000000000001";
 
 export const requireSupabaseAuth = createMiddleware({ type: "function" }).server(
   async ({ next }) => {
-    const supabaseUrl = process.env.SUPABASE_URL;
-    const publishableKey = process.env.SUPABASE_PUBLISHABLE_KEY;
+    const supabaseUrl = readEnv("SUPABASE_URL");
+    const publishableKey = readEnv("SUPABASE_PUBLISHABLE_KEY");
     const secretKey =
-      process.env.SUPABASE_SECRET_KEY ?? process.env.SUPABASE_SERVICE_ROLE_KEY;
+      readEnv("SUPABASE_SECRET_KEY") ?? readEnv("SUPABASE_SERVICE_ROLE_KEY");
 
     if (!supabaseUrl) throw new Error("Missing SUPABASE_URL.");
 
-    if (process.env.VITE_ENABLE_AUTH !== "true") {
+    if (readEnv("VITE_ENABLE_AUTH") !== "true") {
       if (!secretKey) {
         throw new Error(
           "Local no-auth mode requires SUPABASE_SECRET_KEY or SUPABASE_SERVICE_ROLE_KEY.",

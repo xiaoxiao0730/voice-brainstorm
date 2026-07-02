@@ -4,10 +4,8 @@ import react from "@vitejs/plugin-react";
 import { defineConfig } from "vite";
 import tsconfigPaths from "vite-tsconfig-paths";
 
-export default defineConfig({
-  ssr: {
-    noExternal: true,
-  },
+export default defineConfig(({ command }) => ({
+  ssr: command === "build" ? { noExternal: true } : undefined,
   plugins: [
     tanstackStart({
       server: { entry: "server" },
@@ -16,4 +14,4 @@ export default defineConfig({
     tailwindcss(),
     react(),
   ],
-});
+}));

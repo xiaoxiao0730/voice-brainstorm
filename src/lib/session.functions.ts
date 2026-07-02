@@ -25,21 +25,26 @@ export const createSession = createServerFn({ method: "POST" })
       .parse(input),
   )
   .handler(async ({ data, context }) => {
-    const prompt = data.prompt?.trim() || "";
-    const title =
-      data.title?.trim() ||
-      (prompt ? prompt.split(/\s+/).slice(0, 8).join(" ") : "Untitled session");
-    const { data: row, error } = await context.supabase
-      .from("sessions")
-      .insert({
-        user_id: context.userId,
-        title,
-        prompt,
-      })
-      .select("id, title, status, started_at, ended_at, prompt")
-      .single();
-    if (error) throw new Error(error.message);
-    return row;
+    try {
+      const prompt = data.prompt?.trim() || "";
+      const title =
+        data.title?.trim() ||
+        (prompt ? prompt.split(/\s+/).slice(0, 8).join(" ") : "Untitled session");
+      const { data: row, error } = await context.supabase
+        .from("sessions")
+        .insert({
+          user_id: context.userId,
+          title,
+          prompt,
+        })
+        .select("id, title, status, started_at, ended_at, prompt")
+        .single();
+      if (error) throw new Error(error.message);
+      return row;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new Error(`Could not create session in Supabase: ${message}`);
+    }
   });
 
 
