@@ -12,7 +12,6 @@ import {
   Background,
   BaseEdge,
   ConnectionMode,
-  EdgeLabelRenderer,
   Handle,
   MiniMap,
   NodeResizeControl,
@@ -98,7 +97,6 @@ type CanvasProps = Props & {
 type Side = "top" | "right" | "bottom" | "left";
 
 type EditableEdgeData = {
-  onLabelChange?: (id: string, label: string) => void;
   routeOffset?: number;
   autoRouteOffset?: number;
 };
@@ -260,7 +258,7 @@ function estimateTextBlockWidth(text: string, textSize: IdeaNodeData["textSize"]
   );
 }
 
-function roundedOrthogonalPath(points: Array<{ x: number; y: number }>, radius = 18) {
+function roundedOrthogonalPath(points: Array<{ x: number; y: number }>, radius = 8) {
   const unique = points.filter(
     (point, index) =>
       index === 0 || point.x !== points[index - 1].x || point.y !== points[index - 1].y,
@@ -333,14 +331,22 @@ function orthogonalEdgePath({
     const sourceStubY = sourceY + sourceDir * stub;
     const targetStubY = targetY + targetDir * stub;
     const busX = (sourceX + targetX) / 2 + routeOffset;
-    points = [
-      { x: sourceX, y: sourceY },
-      { x: sourceX, y: sourceStubY },
-      { x: busX, y: sourceStubY },
-      { x: busX, y: targetStubY },
-      { x: targetX, y: targetStubY },
-      { x: targetX, y: targetY },
-    ];
+
+    if (Math.abs(sourceX - targetX) <= 8 && Math.abs(routeOffset) <= 0.5) {
+      points = [
+        { x: sourceX, y: sourceY },
+        { x: targetX, y: targetY },
+      ];
+    } else {
+      points = [
+        { x: sourceX, y: sourceY },
+        { x: sourceX, y: sourceStubY },
+        { x: busX, y: sourceStubY },
+        { x: busX, y: targetStubY },
+        { x: targetX, y: targetStubY },
+        { x: targetX, y: targetY },
+      ];
+    }
     handle = { x: busX, y: (sourceStubY + targetStubY) / 2, cursor: "ew-resize" };
   } else if (!sourceVertical && !targetVertical) {
     const sourceDir = sourcePosition === Position.Right ? 1 : -1;
@@ -348,14 +354,22 @@ function orthogonalEdgePath({
     const sourceStubX = sourceX + sourceDir * stub;
     const targetStubX = targetX + targetDir * stub;
     const busY = (sourceY + targetY) / 2 + routeOffset;
-    points = [
-      { x: sourceX, y: sourceY },
-      { x: sourceStubX, y: sourceY },
-      { x: sourceStubX, y: busY },
-      { x: targetStubX, y: busY },
-      { x: targetStubX, y: targetY },
-      { x: targetX, y: targetY },
-    ];
+
+    if (Math.abs(sourceY - targetY) <= 8 && Math.abs(routeOffset) <= 0.5) {
+      points = [
+        { x: sourceX, y: sourceY },
+        { x: targetX, y: targetY },
+      ];
+    } else {
+      points = [
+        { x: sourceX, y: sourceY },
+        { x: sourceStubX, y: sourceY },
+        { x: sourceStubX, y: busY },
+        { x: targetStubX, y: busY },
+        { x: targetStubX, y: targetY },
+        { x: targetX, y: targetY },
+      ];
+    }
     handle = { x: (sourceStubX + targetStubX) / 2, y: busY, cursor: "ns-resize" };
   } else {
     const corner = sourceVertical
@@ -751,14 +765,9 @@ function EditableEdge({
   targetPosition,
   markerEnd,
   style,
-  label,
   selected,
   data,
 }: EdgeProps<EditableBoardEdge>) {
-  const labelText = typeof label === "string" || typeof label === "number" ? String(label) : "";
-  const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState(labelText);
-  const inputRef = useRef<HTMLInputElement>(null);
   const route = orthogonalEdgePath({
     sourceX,
     sourceY,
@@ -768,18 +777,6 @@ function EditableEdge({
     targetPosition,
     routeOffset: Number(data?.routeOffset ?? 0) + Number(data?.autoRouteOffset ?? 0),
   });
-
-  useEffect(() => setDraft(labelText), [labelText]);
-  useEffect(() => {
-    if (!editing) return;
-    inputRef.current?.focus();
-    inputRef.current?.select();
-  }, [editing]);
-
-  const commit = () => {
-    data?.onLabelChange?.(id, draft.trim());
-    setEditing(false);
-  };
 
   return (
     <>
@@ -800,70 +797,9 @@ function EditableEdge({
         fill="none"
         stroke="rgba(22, 140, 245, 0.001)"
         strokeWidth={22}
-        className="cursor-text"
+        className="cursor-default"
         style={{ pointerEvents: "stroke" }}
-        onDoubleClick={(event) => {
-          event.stopPropagation();
-          setEditing(true);
-        }}
       />
-      <EdgeLabelRenderer>
-        <div
-          className="nodrag nopan absolute"
-          style={{
-            transform: `translate(-50%, -50%) translate(${route.labelX}px, ${route.labelY}px)`,
-            pointerEvents: "all",
-          }}
-        >
-          {editing ? (
-            <input
-              ref={inputRef}
-              value={draft}
-              onChange={(event) => setDraft(event.target.value)}
-              onBlur={commit}
-              onKeyDown={(event) => {
-                if (event.key === "Enter") {
-                  event.preventDefault();
-                  commit();
-                } else if (event.key === "Escape") {
-                  setDraft(labelText);
-                  setEditing(false);
-                }
-              }}
-              className="h-7 w-36 rounded border border-[#168cf5] bg-white px-2 text-[11px] text-primary shadow-sm outline-none"
-              aria-label="Relationship label"
-            />
-          ) : labelText ? (
-            <button
-              type="button"
-              onDoubleClick={() => setEditing(true)}
-              className="max-w-44 rounded bg-[#fbfaf7]/92 px-1.5 py-0.5 text-[10px] font-medium text-secondary shadow-sm"
-              title="Double-click to edit relationship"
-            >
-              {labelText}
-            </button>
-          ) : selected ? (
-            <button
-              type="button"
-              onDoubleClick={() => setEditing(true)}
-              className="rounded border border-dashed border-[#168cf5]/60 bg-white/90 px-1.5 py-0.5 text-[10px] text-[#168cf5]"
-              title="Double-click to add relationship text"
-            >
-              Add relation
-            </button>
-          ) : (
-            <button
-              type="button"
-              onDoubleClick={() => setEditing(true)}
-              className="flex h-6 w-6 items-center justify-center rounded-full border border-[#168cf5]/50 bg-white text-[#168cf5] opacity-0 shadow-sm transition-opacity hover:opacity-100 focus:opacity-100"
-              title="Double-click to add relationship text"
-              aria-label="Edit relationship"
-            >
-              <Plus size={13} />
-            </button>
-          )}
-        </div>
-      </EdgeLabelRenderer>
     </>
   );
 }
@@ -964,19 +900,6 @@ function BoardInner({
         ...current,
         nodes: current.nodes.map((node) =>
           node.id === id ? { ...node, data: { ...node.data, ...patch } } : node,
-        ),
-      });
-    },
-    [commitState],
-  );
-
-  const updateEdgeLabel = useCallback(
-    (id: string, nextLabel: string) => {
-      const current = stateRef.current;
-      commitState({
-        ...current,
-        edges: current.edges.map((edge) =>
-          edge.id === id ? { ...edge, label: nextLabel || undefined } : edge,
         ),
       });
     },
@@ -1328,10 +1251,9 @@ function BoardInner({
       data: {
         ...edge.data,
         autoRouteOffset: autoOffsets.get(edge.id) ?? 0,
-        onLabelChange: updateEdgeLabel,
       },
     }));
-  }, [state.edges, state.nodes, updateEdgeLabel]);
+  }, [state.edges, state.nodes]);
 
   const onNodesChange = useCallback(
     (changes: NodeChange<IdeaFlowNode>[]) => {

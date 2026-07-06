@@ -50,7 +50,7 @@ export const CanvasCommandEdgeSchema = z.object({
 });
 
 export const CanvasCommandResultSchema = z.object({
-  cards: z.array(CanvasCommandCardSchema).max(3).default([]),
+  cards: z.array(CanvasCommandCardSchema).max(5).default([]),
   edges: z.array(CanvasCommandEdgeSchema).max(2).default([]),
 });
 
@@ -59,7 +59,7 @@ export type CanvasCommandEdge = z.infer<typeof CanvasCommandEdgeSchema>;
 export type CanvasCommandResult = z.infer<typeof CanvasCommandResultSchema>;
 
 const LIMITS = {
-  maxCards: 3,
+  maxCards: 5,
   maxEdges: 2,
   maxCrossLinks: 1,
   maxTitleChars: 80,

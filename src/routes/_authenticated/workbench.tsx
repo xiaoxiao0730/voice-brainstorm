@@ -407,6 +407,144 @@ function snapCanvasPosition(position: { x: number; y: number }, grid = 24) {
   };
 }
 
+type CognitiveLayerKey = "S0" | "S1" | "S2" | "S3";
+
+const COGNITIVE_LAYER_ORDER: CognitiveLayerKey[] = ["S0", "S1", "S2", "S3"];
+
+const COGNITIVE_LAYER_TITLE: Record<CognitiveLayerKey, string> = {
+  S0: "Observation",
+  S1: "Context",
+  S2: "Analysis",
+  S3: "Action",
+};
+
+const COGNITIVE_LAYER_KIND: Record<CognitiveLayerKey, IdeaNodeKind> = {
+  S0: "idea",
+  S1: "question",
+  S2: "risk",
+  S3: "next",
+};
+
+const COGNITIVE_LAYER_OFFSETS: Record<CognitiveLayerKey, { x: number; y: number }> = {
+  S0: { x: -360, y: -240 },
+  S1: { x: 360, y: -240 },
+  S2: { x: -360, y: 240 },
+  S3: { x: 360, y: 240 },
+};
+
+function cognitiveLayerKey(title: string): CognitiveLayerKey | null {
+  const normalized = title.trim().toUpperCase();
+  if (normalized === "OBSERVATION" || normalized === "OBSERVATIONS" || /^S0\b/.test(normalized)) return "S0";
+  if (normalized === "CONTEXT" || /^S1\b/.test(normalized)) return "S1";
+  if (normalized === "ANALYSIS" || /^S2\b/.test(normalized)) return "S2";
+  if (normalized === "ACTION" || /^S3\b/.test(normalized)) return "S3";
+  return null;
+}
+
+function createCognitiveLayerFallbackBody(layer: CognitiveLayerKey) {
+  switch (layer) {
+    case "S0":
+      return "Capture the concrete observations or facts from this turn.";
+    case "S1":
+      return "Clarify the situation, constraints, user intent, or stakes.";
+    case "S2":
+      return "Compare possible explanations and name the strongest product judgment.";
+    case "S3":
+      return "Define the next action, MVP direction, validation question, or success metric.";
+  }
+}
+
+function isCognitiveScaffoldCapture(result: StructuredVoiceCanvas) {
+  const layerKeys = new Set(result.cards.map((card) => cognitiveLayerKey(card.title)).filter(Boolean));
+  return result.cards.some((card) => card.kind === "focus") && layerKeys.size >= 2;
+}
+
+function mergeCognitiveScaffoldCanvasCapture(
+  current: IdeaCanvasState,
+  result: StructuredVoiceCanvas,
+  origin: { x: number; y: number },
+): IdeaCanvasState {
+  const nodes: IdeaFlowNode[] = current.nodes.map((node) => ({ ...node, selected: false }));
+  const edges: IdeaCanvasState["edges"] = [...current.edges];
+  const byTitle = new Map<string, IdeaFlowNode>();
+  for (const node of nodes) {
+    const key = normalizeTitleKey(node.data.title ?? "");
+    if (key) byTitle.set(key, node);
+  }
+
+  const focusCard = result.cards.find((card) => card.kind === "focus") ?? result.cards[0];
+  const focusTitle = focusCard.title.trim() || result.title.trim() || "Current focus";
+  const focusKey = normalizeTitleKey(focusTitle);
+  let focusNode = byTitle.get(focusKey);
+  const added: IdeaFlowNode[] = [];
+  if (!focusNode) {
+    focusNode = {
+      id: nextIdeaId("voice-focus"),
+      type: "ideaNode",
+      position: snapCanvasPosition(origin),
+      selected: true,
+      data: {
+        title: focusTitle,
+        body: focusCard.body.trim(),
+        kind: "focus",
+        width: 320,
+      },
+    };
+    added.push(focusNode);
+    byTitle.set(focusKey, focusNode);
+  }
+
+  const layerCards = new Map<CognitiveLayerKey, StructuredVoiceCanvas["cards"][number]>();
+  for (const card of result.cards) {
+    const layer = cognitiveLayerKey(card.title);
+    if (layer && !layerCards.has(layer)) layerCards.set(layer, card);
+  }
+
+  const edgeExists = (source: string, target: string) =>
+    edges.some((edge) => edge.source === source && edge.target === target);
+
+  for (const layer of COGNITIVE_LAYER_ORDER) {
+    const card = layerCards.get(layer);
+    const title = card?.title.trim() || COGNITIVE_LAYER_TITLE[layer];
+    const key = normalizeTitleKey(title);
+    let node = byTitle.get(key);
+    if (!node) {
+      const offset = COGNITIVE_LAYER_OFFSETS[layer];
+      node = {
+        id: nextIdeaId(`voice-${layer.toLowerCase()}`),
+        type: "ideaNode",
+        position: snapCanvasPosition({
+          x: focusNode.position.x + offset.x,
+          y: focusNode.position.y + offset.y,
+        }),
+        selected: false,
+        data: {
+          title,
+          body: card?.body.trim() || createCognitiveLayerFallbackBody(layer),
+          kind: card?.kind === "focus" ? COGNITIVE_LAYER_KIND[layer] : ((card?.kind as IdeaNodeKind | undefined) ?? COGNITIVE_LAYER_KIND[layer]),
+          width: 300,
+        },
+      };
+      added.push(node);
+      byTitle.set(key, node);
+    }
+
+    if (!edgeExists(focusNode.id, node.id)) {
+      const childIsLeft = node.position.x < focusNode.position.x;
+      edges.push({
+        id: nextIdeaId("voice-edge"),
+        source: focusNode.id,
+        target: node.id,
+        sourceHandle: childIsLeft ? "left" : "right",
+        targetHandle: childIsLeft ? "right" : "left",
+        type: "editable",
+      });
+    }
+  }
+
+  return { nodes: [...nodes, ...added], edges };
+}
+
 const STRUCTURED_KIND_COLUMN: Record<IdeaNodeKind, number> = {
   focus: 0,
   question: 1,
@@ -448,6 +586,10 @@ function mergeStructuredCanvasCapture(
   result: StructuredVoiceCanvas,
   origin: { x: number; y: number },
 ): IdeaCanvasState {
+  if (isCognitiveScaffoldCapture(result)) {
+    return mergeCognitiveScaffoldCanvasCapture(current, result, origin);
+  }
+
   const nodes: IdeaFlowNode[] = current.nodes.map((node) => ({ ...node, selected: false }));
   const edges: IdeaCanvasState["edges"] = [...current.edges];
   const byTitle = new Map<string, IdeaFlowNode>();
@@ -519,8 +661,7 @@ function mergeStructuredCanvasCapture(
     added.push(node);
     byTitle.set(titleKey, node);
 
-    const relation = normalizeCanvasEdgeLabel(card.relation) || undefined;
-    if (attachTo && !edgeExists(attachTo.id, node.id, relation)) {
+    if (attachTo && !edgeExists(attachTo.id, node.id)) {
       const childIsLeftOfParent = node.position.x < attachTo.position.x;
       edges.push({
         id: nextIdeaId("voice-edge"),
@@ -529,10 +670,11 @@ function mergeStructuredCanvasCapture(
         sourceHandle: childIsLeftOfParent ? "left" : "right",
         targetHandle: childIsLeftOfParent ? "right" : "left",
         type: "editable",
-        label: relation,
       });
     }
   });
+
+  if (added.length > 0) return { nodes: [...nodes, ...added], edges };
 
   let extraEdgeCount = 0;
   for (const edge of result.edges) {

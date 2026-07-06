@@ -1,505 +1,338 @@
-# Murmur Presentation Outline (Value Narrative for Mentor Review)
-
-> This outline sits on top of the demo script below. It is the story you tell; the
-> scenarios are what you show. Audience: a mentor critiquing the product. Spine:
-> **positioning → problem → solution → value**, mapped to the PRD (v1, 2026-06-05)
-> and to the concrete demo scenarios in this file.
-
-## 0. One-line positioning (open with this)
+Demo
 
-A **Voice-first AI co-thinking workbench**: you speak scattered thoughts, the system
-turns them into a **live editable structure in real time**, an Agent **thinks together
-with you** at your pace, and you leave with a **clear problem definition and a next
-validation step** — not a chat log.
-
-> PRD anchor: §01 Product Positioning ("一句话总结"). Three pillars: *Think Out Loud ·
-> See Your Ideas Evolve · Know What to Do Next*.
+1. User Messy Voice Input
+Um, I just talked to a user about how she orders food delivery, and I’m trying to figure out what the actual product problem is.
+At first, I thought maybe the problem was that she couldn’t find enough good restaurants. She said she opens the app when she’s already hungry, but then she keeps scrolling for like 20 or 30 minutes.
+She compares restaurants, delivery fees, discounts, ratings, estimated arrival times… and then sometimes she just gets tired before ordering. She said there are so many options that everything starts to look kind of the same.
+But I’m not sure if the real problem is discovery, or price comparison, or delivery uncertainty, or just decision fatigue.
+She also said sometimes she already knows what she wants, like something quick and not too expensive, but the app still makes her browse through everything. So maybe the app is optimized for showing more choices, but in that moment she just wants to make a good-enough decision quickly.
+I need to prepare a product opportunity for review, but I don’t want to jump straight into a feature idea. I need to understand what the actual user need is first.
 
-## 1. The problem (why this exists)
-
-Say it as one core problem with two consequences — this is exactly the PRD problem tree.
-
-- **Core:** When you explore a not-yet-formed idea, thoughts arrive fast and keep
-  changing. Existing tools either just store raw content, or force you to organize the
-  question *before* talking to AI. **So thinking stays scattered and breaks.**
-- **Consequence 1 — Co-thinking gap:** Traditional Voice Agents are turn-based. They
-  wait passively, or speak too early while you are still diverging — and interrupt.
-  *You do not need more answers; you need timely, low-interruption co-thinking.*
-- **Consequence 2 — Action gap:** After the conversation you still re-read a transcript
-  and manually extract problems, assumptions, next steps. *You do not need a chat log;
-  you need an Exploration Brief you can keep working on.*
-
-> PRD anchor: §2.3 核心问题结构 (core + 衍生问题 01/02). Competitor table §2.5: everyone
-> solves record / summarize / visualize / chat — nobody connects **real-time voice
-> co-thinking + dynamic structure + action** into one flow.
-
-## 2. The value points (the heart of the pitch)
+⸻
 
-Each value point = one PRD pillar → the specific claim → the demo scenario that proves
-it → the one-line you actually say.
+Expected Outcome
+系统 提炼focus 并根据用户语义提炼并行节点 实时呈现给用户
+![alt text](image.png)
+⸻
 
-### V1 — Structure: speaking and organizing stop being two separate steps
-
-- **Claim (PRD §3.1 Stage 1):** Not appending transcript — messy speech is placed into
-  the right slot (problem, evidence, assumptions, directions, trade-offs, open
-  questions) as a **live, editable** Live Brief.
-- **Proof:** Scenario 1 (Chinese capture) + Scenario 7 (edit a card live).
-- **Say:** "I don't organize my language first. I just talk, and it grows a structure I
-  can immediately edit — I keep final control, the AI keeps organizing."
+2. AI 回复(S0->S1)
+目的：配合live canvas更好地帮助用户理解现状 推进思路的梳理
 
-### V2 — Co-thinking: the Agent follows my thinking, it doesn't interrupt it
-
-- **Claim (PRD §3.2 Stage 2):** Default is silent structuring. The Agent speaks only
-  when it helps — and when asked to lay things out, it **narrates the structure** instead
-  of throwing the question back. This is the *intervention ladder* (silent → light text
-  → short voice).
-- **Proof:** Scenario 4 (walkthrough) — **this is the money shot** — plus Scenario 3
-  (greetings/thanks create nothing, no double replies).
-- **Say:** "Watch — I say 'walk me through my idea', and it lays out my thinking:
-  core goal, hardest part, directions, next step. It does **not** ask me 'what do you
-  want to tackle?'. And when I'm just thinking, it stays quiet."
+I hear you. I’ve captured the main focus on the canvas:
 
-### V3 — See Your Ideas Evolve: the canvas grows *while* the Agent speaks
+Focus:
+The user wants to order food quickly when she is already hungry, but the current app experience makes the decision feel slow and tiring.
 
-- **Claim (PRD pillar 2 + §2.5 output form "实时看板 Live Brief"):** As the Agent
-  narrates, each segment grows a matching card. The idea is being organized *with* me,
-  visibly, in real time — the differentiator no competitor column has.
-- **Proof:** Scenario 4 canvas behavior (new cards appear during the walkthrough) +
-  Scenario 5 (precise, commanded canvas writes under a selected node).
-- **Say:** "Every point it makes lands as a card on the canvas. My thinking becomes
-  something I can see, move, and keep."
+I’m also seeing four possible problem nodes emerging from what you said:
 
-### V4 — Faithful & in control: it preserves my intent, I am not flooded
+1. Too many choices
+    The user keeps scrolling for 20–30 minutes and many options start to feel the same.
+2. Comparison overload
+    She is comparing restaurants, delivery fees, discounts, ratings, and estimated arrival times at the same time.
+3. Mismatch between intent and app flow
+    She sometimes already knows she wants something quick and not too expensive, but the app still pushes her into broad browsing.
+  4. Unclear root cause
+    It is not yet clear whether the real problem is discovery, price comparison, delivery uncertainty, or decision fatigue.
 
-- **Claim (PRD §2.4 用户洞察):** Users reject "AI 味太重". Output stays editable, keeps
-  uncertainty, does not overclaim. Filler does not become cards.
-- **Proof:** Scenario 3 (no false cards) + Scenario 7 (edit) + Scenario 5 (no unrelated
-  cards).
-- **Say:** "It keeps my words and my uncertainty. I can delete or reshape anything — it
-  organizes, but it doesn't take over."
+Before jumping into a feature idea, I suggest we first understand which of these nodes is the strongest explanation for the user’s struggle.
+⸻
 
-### V5 — Action: the session ends as a brief I can present, not a recording
+UI 当前状态：Situation Map
 
-- **Claim (PRD §3.3 Stage 3):** The output is an Exploration Brief — problem hypothesis,
-  interaction model, evidence, open questions, next validation steps — a starting point
-  for the *next* step, not a dead deliverable.
-- **Proof:** Scenario 6 (research → connected evidence cards) + Scenario 8 (export brief).
-- **Say:** "I walk away with a structured brief I can bring straight to you — not a
-  transcript I still have to clean up."
+画布发生转化，记录并梳理用户的输入和AI的回复：(永远都是先present一个focus然后开始发散）
 
-## 3. Differentiation (if asked "how is this different from ChatGPT Voice / Otter / Miro?")
+￼
+  
 
-Three lines, straight from the PRD §2.5 table:
+3. AI Reasoning Panel：提出 competing hypotheses
+AI Reply
+Based on the current evidence, I see three competing hypotheses.
 
-1. **Interaction:** they are turn-based and interrupt; Murmur is **continuous streaming
-   input + smart interruption** — quiet when it should be, co-thinking when it matters.
-2. **Output:** they leave only chat history / raw transcript; Murmur precipitates a
-   **live Live Brief board**.
-3. **Co-thinking depth:** they wait for prompts; Murmur **proactively** helps articulate
-   the idea and structures it onto the canvas as it speaks.
+Hypothesis 1: The user needs better restaurant discovery.
+This would mean the problem is that she cannot find the right restaurants.
 
-## 4. How I'd evaluate it (pre-empt the "does it actually work?" question)
+Hypothesis 2: The user needs easier comparison.
+This would mean the problem is that price, delivery time, rating, and discount information are too hard to compare.
 
-The real benchmark is not "is the diagram correct" — it's **"do I understand my own idea
-better after using it?"** Concretely: clarity lift `+1`, next-step confidence lift `+1`,
-at least one new insight (see *Research-Style Evaluation Benchmarks* below).
+Hypothesis 3: The user needs decision reduction.
+This would mean the problem is not lack of information, but too many comparable choices when she already has a simple intent.
 
-## 5. Two honest caveats (say them before you're asked — it reads as maturity)
+Right now, Hypothesis 3 seems strongest, because the user said there are too many options, not too few. She also already knows a rough intent: quick and not too expensive.
 
-- **"Real-time" ≠ per-word animation.** Canvas growth is async per-segment LLM calls, so
-  there's a short delay. It's structuring, not a typewriter effect.
-- **The walkthrough is on-demand.** The Agent narrates only when I explicitly ask
-  ("walk me through / 帮我梳理"). Default is low-interruption — that's the design, not a
-  bug. State this up front so silence reads as intentional.
+⸻
 
-## 6. Talk track ↔ scenario map (quick reference during the live run)
+UI 当前状态：Reasoning Panel
+Reasoning Panel
 
-| Beat | Value point | PRD | Scenario |
-| --- | --- | --- | --- |
-| Intro / framing | Positioning | §01 | Framing line |
-| Speak a messy idea → structure | V1 Structure | §3.1 | Scenario 1 |
-| Filler creates nothing | V4 Control | §2.4 | Scenario 3 |
-| "Walk me through" → narration + canvas grows | V2 Co-thinking + V3 Evolve | §3.2 | **Scenario 4** |
-| Command precise canvas writes | V3 Evolve | §3.2 | Scenario 5 |
-| Research → evidence cards | V5 Action | §3.3 | Scenario 6 |
-| Edit a card live | V4 Control | §2.4 | Scenario 7 |
-| Export exploration brief | V5 Action | §3.3 | Scenario 8 |
+Competing Hypotheses:
 
----
+H1: Better Discovery
+Evidence strength: Low
+Reason: User did not say there were too few restaurants.
 
-# Murmur Demo Script and Test Plan
+H2: Easier Comparison
+Evidence strength: Medium
+Reason: User compares price, delivery fee, rating, discount, and ETA.
 
-Goal: demo Murmur as a voice-first thinking canvas for clarifying an early product idea. The demo should show that messy spoken thinking can become a live canvas, the realtime Agent can guide attention without taking over, research can become connected evidence cards, and the final output can become an exploration brief for a mentor.
+H3: Decision Reduction
+Evidence strength: High
+Reason:
+- User scrolls for 20–30 minutes
+- User says there are too many options
+- User already has simple intent
+- User gets tired before ordering
 
-Recommended demo length: 8-10 minutes.
+Current leading interpretation:
+The app may be optimizing for browsing, while the user needs help making a fast good-enough decision.
 
-## Demo Persona
+⸻
 
-**Name:** Xiao / Product design student  
-**Context:** Xiao is preparing to present Murmur, an AI voice brainstorming canvas, to a mentor. The product direction is still evolving. Xiao needs to explain what problem Murmur solves, how voice + canvas + realtime Agent work together, and how to evaluate whether it actually helps people think.  
-**Primary need:** Think aloud naturally and let the system turn scattered thoughts into a structure that can be discussed.  
-**Core tension:** Murmur should not be just a transcript app or a chat app. It should help users notice what matters, organize fuzzy ideas, and create a shareable thinking artifact.
+Expected Outcome
+这里要体现系统开始进入 S2 Analytical：
+AI 不只是把问题分类，而是开始比较不同解释，并用用户说过的信息支持一个更强的判断。
+PM manager 应该能看到因果链开始形成：
+Too many options
+→ too much comparison
+→ user fatigue
+→ need decision reduction
 
-## Demo Setup
+⸻
 
-- Open a fresh Murmur session.
-- Start with an empty canvas.
-- Keep the canvas visible during the whole demo.
-- Use `Cmd/Ctrl+Shift+Space` for intentional canvas capture.
-- Use `Talk with Agent` when testing realtime guidance.
-- Speak naturally. Do not read like a polished pitch.
+4. AI Targeted Question：推进用户判断
+AI Reply
+To sharpen the product opportunity, which interpretation do you think is best supported by the interview?
 
-## One-Sentence Demo Framing
+A. She needs to discover more restaurants.
+B. She needs a faster way to make a good-enough decision.
+C. She needs a more detailed comparison tool for price, ratings, and delivery time.
 
-"I am going to use Murmur to think through Murmur itself: what it is, why voice matters, how the Agent should guide attention, and whether the final canvas is useful enough to discuss with a mentor."
+My current read is B, but I’d like you to confirm or correct that based on your interview memory.
 
-## Success Metrics Summary
+⸻
 
-| Area | Success Metric | Target |
-| --- | --- | --- |
-| Language fidelity | Chinese input creates Chinese cards; English input creates English cards | 100% for title/body |
-| Thought capture | Messy speech becomes compact cards, not raw transcript | 3-5 useful cards |
-| Trigger quality | Greetings, thanks, and filler do not create cards | 0 false cards |
-| Agent guidance | Agent gives useful structure, not just another question | User can name one clearer next step |
-| Canvas evolution | Agent walkthrough can create/update canvas structure | Visible new cards or connections |
-| Research | Research becomes several small connected evidence cards | 3-5 cards, no markdown clutter |
-| Export | PDF is an exploration brief, not a chat log | Mentor-ready sections |
+UI 当前状态：Intervention Card
+AI Intervention
 
-## Research-Style Evaluation Benchmarks
+Type:
+Candidate-answer question
 
-The functional checks above are guardrails. The real benchmark is whether Murmur helps the user think better.
+Purpose:
+Move from problem description to product judgment.
 
-Score each item from 1 to 5:
+Question:
+Which need is better supported by the evidence?
 
-1 = strongly disagree, 3 = partially true, 5 = strongly agree.
+A. More restaurant discovery
+B. Faster good-enough decision
+C. More detailed comparison
 
-| Dimension | Rating Prompt | What Good Looks Like |
-| --- | --- | --- |
-| Thought clarity | "The canvas helped me understand my idea more clearly." | User can explain problem, mechanism, and next step more easily |
-| Idea generation | "The system helped me notice a new angle, risk, or question." | User identifies at least one new direction after using Agent/canvas |
-| Attention guidance | "The Agent helped me focus on what mattered next." | Agent points to a high-leverage issue instead of asking generic questions |
-| Control / agency | "I felt in control of what entered the canvas." | User can edit/delete/accept without feeling flooded |
-| Trust | "The system preserved my intent without inventing too much." | Cards keep uncertainty and do not overclaim |
-| Low interruption | "The Agent helped without derailing my flow." | No duplicate replies, no excessive filler, no awkward turn-taking |
-| Presentation readiness | "I would use this map or brief with a mentor." | Output supports critique and discussion |
+Predicted transition:
+S1/S2 → S2
 
-### Pre/Post Reflection
+⸻
 
-Before the demo, ask:
+Expected Outcome
+这个问题不是泛泛地问“你觉得呢”，而是在帮助用户做 product judgment。
+它的设计目的：
+* 让用户确认真正的 problem framing；
+* 避免 AI 单方面下结论；
+* 推动用户从“描述用户反馈”进入“判断哪个解释更成立”。
 
-| Question | Score |
-| --- | --- |
-| How clear does the Murmur product direction feel right now? | 1-5 |
-| How confident are you about what to discuss with a mentor next? | 1-5 |
+⸻
 
-After the demo, ask the same two questions again, then ask:
+5. User Clarification：用户确认核心判断
+用户原文 Script
+I think B is the strongest.
+She doesn’t really need more restaurants. Actually, having more restaurants might make it worse. She also doesn’t sound like she wants a spreadsheet-style comparison tool.
+It’s more like, when she’s hungry, she just wants the app to help her make a decision faster. She wants something good enough, quick enough, and not too expensive. So I think the real need is reducing the decision burden.
 
-| Question | Evidence |
-| --- | --- |
-| What became clearer? | User names a clearer product frame or interaction model |
-| What new idea or concern appeared? | User names a new direction, risk, or missing validation question |
-| What would you show to a mentor? | User points to map/brief content |
+⸻
 
-Primary target: clarity lift `+1`, next-step confidence lift `+1`, at least one new insight.
+UI 当前状态：Updated Thinking State
+Updated Thinking State
 
----
+Confirmed Insight:
+The core need is not more discovery or more comparison.
+The core need is reducing decision burden.
 
-# Scenario 1: Chinese Manual Capture, Product Core
+User’s own reasoning:
+- More restaurants may make the problem worse
+- Detailed comparison may increase effort
+- User wants a fast, good-enough choice
 
-**Purpose:** Test whether intentional voice capture can turn Xiao's real product thinking into a useful Chinese canvas structure.
+State Transition:
+S2 confirmed
 
-**Action:** Press `Cmd/Ctrl+Shift+Space`, speak, press again to stop.
+⸻
 
-**Chinese Transcript:**
+Expected Outcome
+用户应该在这个阶段完成一个清晰的认知转变：
+Before:
+Maybe the app needs better discovery or comparison.
 
-> 我现在想做的其实不是一个普通的语音转文字工具。  
-> 我想做的是一个可以陪用户一边说一边思考的画布。  
-> 用户说出来的想法可能很散，但是系统应该帮他变成一些可以看见、可以移动、可以继续发展的结构。  
-> 我最在意的是，它能不能真的帮助用户把思路变清楚，而不是只是生成一些看起来漂亮的卡片。
+After:
+The app should reduce decision burden when the user already has a simple intent.
+这个地方是 demo 的关键 moment。它证明 AI 的问题真的推动了用户思考，而不是只是在输出答案。
 
-**Expected Canvas Behavior:**
+⸻
 
-- Cards are in Simplified Chinese.
-- Central focus is around "语音思考画布" or "陪用户思考的画布".
-- Branches include: not transcription, visible structure, editable canvas, clarity as value.
-- No filler card like "我现在想做的其实是".
+6. AI Final Artifact：Product Opportunity Brief
+AI Reply
+Here is the product opportunity brief based on the current reasoning.
 
-**Success Metrics:**
+Product Opportunity Brief
 
-| Metric | Pass Criteria |
-| --- | --- |
-| Language | All main cards are Chinese |
-| Structure | 3-5 cards, not one transcript paragraph |
-| Faithfulness | Preserves "not transcript app" and "clarify thinking" |
-| Visual clarity | Cards are not crowded; edge labels are categorical |
-| Subjective clarity | User rates clarity help >= 4/5 |
+Problem Statement:
+Users do not always need more food options. When they are hungry, tired, or time-constrained, they need help making a faster, good-enough food decision.
 
----
+Evidence:
+- The user scrolls for 20–30 minutes before ordering.
+- She compares restaurants, delivery fees, discounts, ratings, and estimated arrival times.
+- She says there are too many options and many start to look the same.
+- She already has a simple intent, such as quick and not too expensive.
+- She gets tired before completing the order.
 
-# Scenario 2: English Manual Capture, Product Pitch
+Root Cause Hypothesis:
+The current app flow is optimized for broad restaurant browsing, but this user’s real need in the moment is decision reduction.
 
-**Purpose:** Test English language fidelity and whether Murmur can structure a rough product pitch.
+Product Opportunity:
+Create a “Quick Pick” mode that helps users make a fast, confident order decision from a small set of high-relevance options.
 
-**Action:** Press `Cmd/Ctrl+Shift+Space`, speak, press again to stop.
+MVP Direction:
+Quick Pick Mode
 
-**English Transcript:**
+Core Experience:
+1. User chooses a simple intent:
+   - quick
+   - cheap
+   - healthy
+   - comfort food
+2. App shows only 3 recommended options.
+3. Each option explains why it was selected:
+   - fastest arrival
+   - best value
+   - closest match to craving
+4. User can choose one or tap “show me 3 more.”
+5. The flow avoids returning the user to infinite browsing.
 
-> Murmur is a voice-first thinking canvas.  
-> The user should be able to talk naturally, and the canvas should grow with their thinking.  
-> The realtime Agent should not behave like a chatbot that keeps asking questions.  
-> It should help reallocate the user's attention: what is unclear, what is missing, and what might be worth exploring next.
+Success Metric:
+Reduce average decision time for users in quick-order mode from 20–30 minutes to under 5 minutes.
 
-**Expected Canvas Behavior:**
+Next Validation Step:
+Interview or test 5 users who often take more than 15 minutes to order food. Compare whether a 3-option recommendation flow helps them decide faster with similar or higher satisfaction.
 
-- Cards are in English.
-- Cards identify voice-first canvas, live canvas growth, Agent role, attention guidance.
-- The structure should be compact.
+⸻
 
-**Success Metrics:**
-
-| Metric | Pass Criteria |
-| --- | --- |
-| Language | All generated title/body text is English |
-| Quality | Captures "reallocate attention" as a core value |
-| Compactness | Max 5 cards |
-| Editability | User can edit title/body naturally |
-
----
-
-# Scenario 3: Casual Utterance Should Not Create Cards
-
-**Purpose:** Test that the canvas does not react to shallow conversation.
-
-**Action:** Start `Talk with Agent`, say each line separately.
-
-**Transcript:**
-
-> Hi.  
-> What's your name?  
-> 嗯，我想一下。  
-> Thank you.
-
-**Expected Behavior:**
-
-- Agent can answer briefly.
-- No mind map cards are created for greeting, name question, filler, or thanks.
-- No duplicate Agent reply.
-
-**Success Metrics:**
-
-| Metric | Pass Criteria |
-| --- | --- |
-| False positive card creation | 0 cards |
-| Agent response | 1 response per user turn |
-| Flow | User does not need to clean up useless cards |
-
----
-
-# Scenario 4: Realtime Agent Walkthrough
-
-**Purpose:** Test whether the Agent can say more when asked for a walkthrough and make the canvas evolve while speaking.
-
-**Action:** Start `Talk with Agent`, then ask for help.
-
-**Chinese Transcript:**
-
-> 你可以帮我把我现在这个产品想法整体走一遍吗？  
-> 我现在有点混乱，我知道它和语音、画布、Agent 都有关，但是我不知道应该怎么讲清楚它的核心价值。
-
-**English Transcript:**
-
-> Can you walk me through the whole picture of my product idea right now?  
-> I know it involves voice, canvas, and an Agent, but I am not sure how to explain the core value clearly.
-
-**Expected Agent Behavior:**
-
-- Agent gives a 3-5 sentence walkthrough, not just one tiny reply.
-- Agent should not end by simply throwing the question back to the user.
-- Agent frames the idea as: voice input, canvas external memory, Agent attention guidance, mentor-ready artifact.
-- Agent may create compact canvas cards while speaking.
-
-**Expected Canvas Behavior:**
-
-- New cards or updates appear around the product structure.
-- Possible cards: "Voice-first capture", "Living canvas", "Attention guidance", "Exploration brief", "Open validation question".
-- Connections are simple and readable.
-
-**Success Metrics:**
-
-| Metric | Pass Criteria |
-| --- | --- |
-| Walkthrough quality | Agent gives a useful structure, not generic encouragement |
-| Canvas evolution | At least 3 useful cards or updates appear |
-| No handoff loop | Agent does not end with only "what do you want to tackle?" |
-| Attention guidance | User can name what matters next |
-| Subjective value | User rates Agent guidance >= 4/5 |
-
----
-
-# Scenario 5: Ask Agent To Expand A Selected Node
-
-**Purpose:** Test precise Agent canvas writing.
-
-**Action:** Select a node such as "Attention guidance" or "Agent role", then talk to Agent.
-
-**Chinese Transcript:**
-
-> 在这个 Agent role 下面，帮我发散三个它应该做的事情。  
-> 一个是指出我没有讲清楚的地方，一个是提醒我遗漏了什么，一个是帮我把下一步验证问题写出来。  
-> 直接写到画布上。
-
-**English Transcript:**
-
-> Under the Agent role node, expand three things it should do.  
-> One is pointing out what is unclear, one is noticing what I missed, and one is writing the next validation question.  
-> Put them directly on the canvas.
-
-**Expected Behavior:**
-
-- Agent briefly confirms and writes to canvas.
-- Exactly or approximately 3 child cards appear.
-- Cards stay connected to the selected/current Agent role node.
-
-**Success Metrics:**
-
-| Metric | Pass Criteria |
-| --- | --- |
-| Command compliance | 3 cards are created |
-| Fidelity | The three cards match the requested functions |
-| Edge quality | Edges use categorical labels, not explanations |
-| Control | No unrelated cards are added |
-
----
-
-# Scenario 6: Research For Product Positioning
-
-**Purpose:** Test research as evidence cards, not a long markdown blob.
-
-**Action:** Ask Agent to research.
-
-**Chinese Transcript:**
-
-> 帮我查一下，voice note、mind mapping、AI brainstorming、creativity support tools 这些方向里，大家通常怎么评估一个工具有没有真的帮助用户思考？  
-> 我不只是想看功能有没有跑通，我想知道有没有主观的评价方式，比如思路更清楚了，产生了新想法，认知负担变低了。
-
-**English Transcript:**
-
-> Help me research how voice notes, mind mapping, AI brainstorming, and creativity support tools are usually evaluated.  
-> I do not only want functional metrics. I want subjective evaluation methods, like whether users feel clearer, generate new ideas, or reduce cognitive load.
-
-**Expected Behavior:**
-
-- Agent acknowledges briefly and triggers research.
-- Canvas receives several small connected research/evidence cards.
-- Brief can keep the fuller source-backed synthesis.
-- Markdown artifacts are removed from cards.
-
-**Success Metrics:**
-
-| Metric | Pass Criteria |
-| --- | --- |
-| Research trigger | Research task starts |
-| Canvas shape | 3-5 small cards, not one giant card |
-| Relevance | Cards mention subjective evaluation, clarity, creativity, cognitive load, or sensemaking |
-| Source handling | Sources stay in brief, not crowded into cards |
-| Insight value | User can use one metric in mentor discussion |
-
----
-
-# Scenario 7: Edit The Canvas Live
-
-**Purpose:** Show the canvas is editable, not just generated output.
-
-**Action:** Click a generated card and edit it.
-
-**Manual Test Text:**
+UI 当前状态：Final Product Brief
+Final Artifact
 
 Title:
+Quick Pick Mode
 
-```text
-Attention guidance
-```
+Core Insight:
+The user does not need more options.
+The user needs fewer, more confident options.
 
-Body:
+Product Judgment:
+This is a decision-reduction problem, not a discovery problem.
 
-```text
-Notice what is unclear.
-Surface missing assumptions.
-Suggest the next validation question.
-```
+MVP:
+3-option quick ordering flow based on current intent.
 
-**Expected Behavior:**
+Validation:
+Test whether reducing options lowers decision time without reducing satisfaction.
 
-- Title is bold and occupies the first line.
-- Body is normal weight.
-- Body wraps naturally.
-- Pressing Enter in body creates a line break.
+State:
+S3 Actionable
 
-**Success Metrics:**
+⸻
 
-| Metric | Pass Criteria |
-| --- | --- |
-| Title wrapping | Does not wrap after every character |
-| Body wrapping | Long text wraps naturally |
-| Enter behavior | Enter creates body line breaks |
-| Feeling | User feels they can shape the AI output |
+Expected Outcome
+PM manager 一眼应该能看到：
+这个最终结果是对的、自然的、有因果链的。
+它不是随便生成一个 feature，而是从用户反馈推出来的：
+User feedback:
+点餐太久、选择太多、比较太累
 
----
+AI reasoning:
+不是缺少餐厅，而是选择过载
 
-# Scenario 8: Export Exploration Brief For Mentor
+Product opportunity:
+减少决策负担
 
-**Purpose:** Test whether the final output helps mentor presentation.
+MVP:
+Quick Pick Mode
 
-**Action:** After scenarios 1, 4, and 6, export PDF.
+Validation:
+测试 3-option flow 是否减少点餐时间
 
-**Expected PDF Sections:**
+⸻
 
-- Exploration focus
-- Current product hypothesis
-- Core interaction model
-- Agent role
-- Evidence / research-backed evaluation metrics
-- Open questions
-- Suggested next validation steps
+7. Evaluation Overlay：展示 S0 → S3 轨迹
+UI 当前状态：Evaluation Panel
+Evaluation Panel
 
-**Success Metrics:**
+Cluster 1: Too Many Choices
+Initial State: S0
+User only described scrolling and too many options.
 
-| Metric | Pass Criteria |
-| --- | --- |
-| Not raw transcript | PDF is structured, not a chat log |
-| Mentor usefulness | A mentor can understand the product direction |
-| Evaluation clarity | Brief includes how to judge whether Murmur works |
-| Presentation readiness | User rates "I would show this to a mentor" >= 4/5 |
+Final State: S2
+System identified choice overload as a cause of decision fatigue.
 
----
+Cluster 2: Comparison Burden
+Initial State: S0
+User listed fees, discounts, ratings, and delivery time.
 
-# End-To-End Demo Flow
+Final State: S2
+System interpreted these as simultaneous comparison variables increasing cognitive load.
 
-Use this order for a polished live demo:
+Cluster 3: User Intent
+Initial State: S1
+User said she wants something quick and not too expensive.
 
-1. 20s intro: "I am going to use Murmur to think through Murmur itself."
-2. Scenario 1: Chinese manual capture of the product core.
-3. Scenario 3: Say "Hi" / "Thank you" to show no useless cards appear.
-4. Scenario 4: Ask Agent for a walkthrough and show canvas evolving.
-5. Scenario 5: Select Agent role and ask for three concrete functions.
-6. Scenario 6: Research subjective evaluation metrics.
-7. Scenario 7: Edit one generated card live.
-8. Scenario 8: Export the exploration brief.
+Final State: S3
+System turned this into an MVP interaction: intent-based Quick Pick mode.
 
-## Mentor Presentation Script
+Cluster 4: Product Direction
+Initial State: unclear
+User was unsure whether the problem was discovery, comparison, uncertainty, or fatigue.
 
-"The value I am testing is not whether Murmur can transcribe speech. The value is whether speaking can become a structured thinking artifact. In this demo, I use Murmur to think through Murmur itself: first I speak a messy idea, then the canvas turns it into movable structure, then the realtime Agent helps me notice what deserves attention next, and finally the session becomes an exploration brief I can discuss with a mentor."
+Final State: S3
+System converged on decision reduction and proposed a testable product direction.
 
-## Closing Line
+⸻
 
-"The success metric is not just whether the diagram is correct. It is whether I understand my own idea better after using it."
+Expected Outcome
+这个 overlay 是给 presentation 用的。它让 PM manager 不只是看到“结果不错”，而是看到：
+系统如何一步步把 thinking state 往前推进。
+你可以展示这个 summary：
+Before AI:
+The user had scattered observations and four possible problem framings.
 
-## Troubleshooting Notes
+After AI:
+The user reached a clear product judgment:
+This is a decision-reduction problem, not a discovery problem.
 
-| Problem | Demo Recovery |
-| --- | --- |
-| Chinese recognized as English | Repeat the line clearly; explain language fidelity is an active test |
-| Agent asks too many questions | Say: "Walk me through it and write the structure to the canvas" |
-| Too many cards | Delete one live to show user control |
-| Research is slow | Explain research is asynchronous and the brief updates when sources return |
-| Layout feels crowded | Drag the parent node or use this as a point about layout refinement |
+Final artifact:
+A testable Quick Pick MVP with evidence, hypothesis, and validation plan.
+
+⸻
+
+整体 1–7 流程总览
+Step	用户 / AI 发生什么	UI 显示什么	Cognitive State
+1	用户 messy debrief	Live Transcript	S0
+2	AI 梳理问题板块	Situation Map	S0 → S1
+3	AI 提出 competing hypotheses	Reasoning Panel	S1 → S2
+4	AI 问 targeted question	Intervention Card	S2 推进
+5	用户确认判断	Updated Thinking State	S2
+6	AI 生成 Product Brief	Final Artifact	S3
+7	系统展示评估轨迹	Evaluation Panel	S0 → S3 Evidence
+⸻
+
+这个 demo 的核心价值句
+你 present 的时候可以这样说：
+This demo shows how the system turns a messy product discovery debrief into a decision-ready product opportunity brief.
+The user starts with scattered observations from a food delivery interview: long scrolling time, too many options, comparison fatigue, and uncertainty about the real problem. Instead of immediately summarizing or generating feature ideas, the system first structures the situation into problem clusters, then compares competing hypotheses, asks one targeted question, and helps the user converge on a product judgment.
+The final insight is that this is not primarily a restaurant discovery problem. It is a decision-reduction problem. That reasoning leads to a clear MVP direction: Quick Pick Mode, a flow that gives users three high-confidence options based on their current intent.
+这个版本可以直接作为你后面自动化测试的 gold script。
+

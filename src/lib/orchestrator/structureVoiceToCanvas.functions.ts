@@ -14,11 +14,53 @@ import {
 import { createOpenAIProvider, normalizeAiModel, requireOpenAIKey } from "@/lib/ai-gateway.server";
 
 const IdeaKind = z.enum(["focus", "idea", "question", "decision", "risk", "next"]);
+type IdeaKindValue = z.infer<typeof IdeaKind>;
+
+const IDEA_KIND_ALIASES: Record<string, IdeaKindValue> = {
+  action: "next",
+  next_step: "next",
+  nextstep: "next",
+  todo: "next",
+  task: "next",
+  uncertainty: "question",
+  unknown: "question",
+  decision_point: "question",
+  decisionpoint: "question",
+  problem: "risk",
+  issue: "risk",
+  pain: "risk",
+  constraint: "risk",
+  assumption: "question",
+  evidence: "idea",
+  context: "idea",
+  background: "idea",
+};
+
+function trimToMax(value: unknown, max: number) {
+  if (typeof value !== "string") return value;
+  return value.trim().slice(0, max);
+}
+
+function boundedString(max: number) {
+  return z.preprocess((value) => trimToMax(value, max), z.string().max(max));
+}
+
+function boundedRequiredString(max: number) {
+  return z.preprocess((value) => trimToMax(value, max), z.string().min(1).max(max));
+}
+
+function normalizeIdeaKind(value: unknown) {
+  if (typeof value !== "string") return value;
+  const key = value.trim().toLowerCase().replace(/[\s-]+/g, "_");
+  return IDEA_KIND_ALIASES[key] ?? value;
+}
+
+const FlexibleIdeaKind = z.preprocess(normalizeIdeaKind, IdeaKind);
 
 const ExistingCardSchema = z.object({
-  title: z.string().max(160).default(""),
-  body: z.string().max(800).default(""),
-  kind: IdeaKind.default("idea"),
+  title: boundedString(160).default(""),
+  body: boundedString(800).default(""),
+  kind: FlexibleIdeaKind.default("idea"),
 });
 
 const InputSchema = z.object({
@@ -28,24 +70,24 @@ const InputSchema = z.object({
 });
 
 const CardSchema = z.object({
-  title: z.string().min(1).max(120),
-  body: z.string().max(500).default(""),
-  kind: IdeaKind.default("idea"),
-  role: z.string().max(40).default(""),
-  granularity: z.string().max(40).default(""),
-  attachToTitle: z.string().max(160).default(""),
-  relation: z.string().max(80).default(""),
+  title: boundedRequiredString(120),
+  body: boundedString(500).default(""),
+  kind: FlexibleIdeaKind.default("idea"),
+  role: boundedString(40).default(""),
+  granularity: boundedString(40).default(""),
+  attachToTitle: boundedString(160).default(""),
+  relation: boundedString(80).default(""),
 });
 
 const EdgeSchema = z.object({
-  sourceTitle: z.string().min(1).max(160),
-  targetTitle: z.string().min(1).max(160),
-  label: z.string().max(80).default(""),
+  sourceTitle: boundedRequiredString(160),
+  targetTitle: boundedRequiredString(160),
+  label: boundedString(80).default(""),
 });
 
 const OutputSchema = z.object({
-  title: z.string().max(120).default(""),
-  summary: z.string().max(500).default(""),
+  title: boundedString(120).default(""),
+  summary: boundedString(500).default(""),
   cards: z.array(CardSchema).min(1).max(7),
   edges: z.array(EdgeSchema).max(10).default([]),
 });
@@ -65,10 +107,38 @@ PRODUCT BEHAVIOR
 - Remove filler/repetition, but do not invent facts.
 - If the canvas already has cards, place the new thought in relation to them: attach new cards to the most relevant existing card title when appropriate.
 - Never rewrite existing cards. Only propose new cards and relationships.
-- Prefer 1-2 cards per turn. Use one card for one conceptual unit, not one sentence. Never exceed 3 cards unless the user explicitly asks for a numbered list.
+- Prefer one stable cognitive scaffold per substantial turn: one focus card plus four layer cards. For very small turns, 1-2 cards is acceptable.
 - Match the user's dominant language. Use Chinese when the user speaks Chinese; English when the user speaks English. Keep terms like API, MVP, Agent, Notion as-is.
 - Do not translate proper nouns, keyboard names, model names, code terms, or feature names.
 - Your output should use first narrative instead of saying "the user wants to XXX". You are representing the user.
+
+COGNITIVE TRAJECTORY GUIDELINE
+Your deeper job is to help the user move through four cognitive layers. Do not label
+cards mechanically as S0/S1/S2/S3 unless the user asks, but make the layer visible in
+the card content and structure.
+- S0 Descriptive: what happened, what the user observed, what options/facts were named.
+- S1 Contextual: why it matters, the situation, constraints, user intent, background.
+- S2 Analytical: competing explanations, causal chain, tradeoff, assumption, root-cause hypothesis, product judgment.
+- S3 Actionable: concrete next step, MVP direction, validation question, success metric.
+- Prefer progression over volume: a good map with one S2 hypothesis and one S3 next step is better than many S0 notes.
+- If the transcript is only descriptive, capture S0 faithfully and add at most one S1/S2 question that would unlock progress.
+- If the transcript compares possible problem framings, create S2 cards that preserve the competing hypotheses and evidence.
+- If the transcript contains a product decision or validation move, create an S3 next-step card with a concrete action and success criterion.
+- Avoid jumping to S3 feature ideas when the user has not established S1 context or S2 reasoning.
+
+COGNITIVE SCAFFOLD OUTPUT
+- For substantial voice captures, prefer exactly five cards arranged as one centered focus plus four cognitive-layer cards.
+- Card 1 must be the focus card. Use kind="focus", role="FOCUS", granularity="FEATURE".
+- Then create one card for each layer, using these title prefixes exactly:
+  - "Observation"
+  - "Context"
+  - "Analysis"
+  - "Action"
+- The four layer cards must attachToTitle to the exact focus title.
+- Use each layer card body for 1-3 tight lines. Do not create separate cards for every detail.
+- If a layer is weak or missing, still create the layer card and write the best grounded gap/question for that layer.
+- Do not add top-level cross edges for scaffold captures. The UI will connect focus to the four layers.
+- Edge labels are not needed for scaffold captures.
 
 TIDY MAP QUALITY RULES
 - Make the map visually tidy: one clear central focus when possible, then compact branch cards.
@@ -197,10 +267,115 @@ function fallback(rawTranscript: string): StructuredVoiceCanvas {
   };
 }
 
+function hasCognitiveScaffold(cards: z.infer<typeof CardSchema>[]) {
+  const titles = cards.map((card) => card.title.trim().toUpperCase());
+  return (
+    cards.some((card) => card.kind === "focus") &&
+    titles.some((title) => title === "OBSERVATION" || title === "OBSERVATIONS" || /^S0\b/.test(title)) &&
+    titles.some((title) => title === "CONTEXT" || /^S1\b/.test(title)) &&
+    titles.some((title) => title === "ANALYSIS" || /^S2\b/.test(title)) &&
+    titles.some((title) => title === "ACTION" || /^S3\b/.test(title))
+  );
+}
+
+function layerBody(cards: z.infer<typeof CardSchema>[], matcher: (card: z.infer<typeof CardSchema>) => boolean) {
+  return cards
+    .filter(matcher)
+    .slice(0, 3)
+    .map((card) => {
+      const detail = card.body.trim();
+      return detail ? `${card.title.trim()}: ${detail}` : card.title.trim();
+    })
+    .filter(Boolean)
+    .join("\n");
+}
+
+function ensureCognitiveScaffold(parsed: z.infer<typeof OutputSchema>): z.infer<typeof OutputSchema> {
+  if (hasCognitiveScaffold(parsed.cards)) return parsed;
+
+  const focus = parsed.cards.find((card) => card.kind === "focus") ?? parsed.cards[0];
+  const focusTitle = focus?.title.trim() || parsed.title.trim() || "Current focus";
+  const observationBody = layerBody(parsed.cards, (card) => card.kind === "idea" || card.role === "OPTION") || parsed.summary;
+  const contextBody = layerBody(parsed.cards, (card) => card.role === "EVIDENCE" || card.granularity === "EVIDENCE");
+  const analysisBody = layerBody(
+    parsed.cards,
+    (card) =>
+      card.kind === "risk" ||
+      card.kind === "question" ||
+      card.role === "RISK" ||
+      card.role === "ASSUMPTION" ||
+      card.granularity === "RISK" ||
+      card.granularity === "ASSUMPTION" ||
+      card.granularity === "QUESTION",
+  );
+  const actionBody = layerBody(
+    parsed.cards,
+    (card) =>
+      card.kind === "next" ||
+      card.kind === "decision" ||
+      card.role === "NEXT_STEP" ||
+      card.granularity === "NEXT_STEP",
+  );
+
+  return {
+    ...parsed,
+    title: focusTitle,
+    cards: [
+      {
+        title: focusTitle,
+        body: focus?.body.trim() || parsed.summary,
+        kind: "focus",
+        role: "FOCUS",
+        granularity: "FEATURE",
+        attachToTitle: "",
+        relation: "",
+      },
+      {
+        title: "Observation",
+        body: observationBody || "What the user observed or named in this turn.",
+        kind: "idea",
+        role: "OPTION",
+        granularity: "FEATURE",
+        attachToTitle: focusTitle,
+        relation: "SUPPORTS",
+      },
+      {
+        title: "Context",
+        body: contextBody || "Why this matters, the situation, constraints, or user intent to clarify next.",
+        kind: "question",
+        role: "QUESTION",
+        granularity: "QUESTION",
+        attachToTitle: focusTitle,
+        relation: "SUPPORTS",
+      },
+      {
+        title: "Analysis",
+        body: analysisBody || "Compare possible explanations and identify the strongest product judgment.",
+        kind: "risk",
+        role: "RISK",
+        granularity: "RISK",
+        attachToTitle: focusTitle,
+        relation: "SUPPORTS",
+      },
+      {
+        title: "Action",
+        body: actionBody || "Define the next validation step, MVP direction, or success metric.",
+        kind: "next",
+        role: "NEXT_STEP",
+        granularity: "NEXT_STEP",
+        attachToTitle: focusTitle,
+        relation: "LEADS_TO",
+      },
+    ],
+    edges: [],
+  };
+}
+
 function applyCanvasContract(
   parsed: z.infer<typeof OutputSchema>,
   existingCards: Array<z.infer<typeof ExistingCardSchema>>,
 ): z.infer<typeof OutputSchema> {
+  parsed = ensureCognitiveScaffold(parsed);
   const validated = validateCanvasCommandResult({
     existingTitles: existingCards.map((card) => card.title),
     cards: parsed.cards.map((card) => ({
