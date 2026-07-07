@@ -61,8 +61,11 @@ function Onboarding() {
 
       if (files.length > 0) {
         setSubmitNote(`Uploading ${files.length} context file${files.length === 1 ? "" : "s"}…`);
-        const results = await Promise.allSettled(
-          files.map(async (file) => {
+        let failed = 0;
+        // Keep this sequential: summarizeContextFile appends to session.context_files,
+        // so concurrent writes can overwrite each other and leave only one file attached.
+        for (const file of files) {
+          try {
             const contentBase64 = await fileToBase64(file);
             const uploaded = await uploadCtx({
               data: {
@@ -82,11 +85,17 @@ function Onboarding() {
                 size: uploaded.size,
               },
             });
-          }),
-        );
-        const failed = results.filter((r) => r.status === "rejected").length;
+          } catch (error) {
+            console.warn("context file attach failed", file.name, error);
+            failed += 1;
+          }
+        }
         if (failed > 0) {
           setSubmitNote(`${failed} file${failed === 1 ? "" : "s"} failed to attach. Opening session anyway.`);
+        } else {
+          setSubmitNote(
+            `Context ready: ${files.length} file${files.length === 1 ? "" : "s"} attached. I'll use them as background while we think through the canvas.`,
+          );
         }
       }
 

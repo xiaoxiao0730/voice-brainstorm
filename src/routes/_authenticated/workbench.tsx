@@ -142,6 +142,24 @@ const EMPTY_THINKING_STATE: SessionThinkingState = {
   last_turn_id: null,
 };
 
+type SessionContextFile = {
+  name: string;
+  summary: string;
+  status: string;
+};
+
+function formatUploadedContextForAgent(files: SessionContextFile[]) {
+  const summarized = files
+    .filter((file) => file.status === "summarized" && file.summary.trim())
+    .slice(0, 6);
+  if (summarized.length === 0) return "";
+  return [
+    "[Uploaded context summary]",
+    "The user attached these files as background. Use them to ground the thinking state, but do not quote or regurgitate them unless useful.",
+    ...summarized.map((file, index) => `${index + 1}. ${file.name}: ${file.summary.trim().slice(0, 900)}`),
+  ].join("\n");
+}
+
 function relative(ts: string) {
   const diff = (Date.now() - new Date(ts).getTime()) / 1000;
   if (diff < 60) return "Just now";
@@ -459,6 +477,32 @@ function isCognitiveScaffoldCapture(result: StructuredVoiceCanvas) {
   return result.cards.some((card) => card.kind === "focus") && layerKeys.size >= 2;
 }
 
+function quietInsightParentPriority(kind: CanvasInsight["kind"]) {
+  switch (kind) {
+    case "next_step":
+      return ["ACTION", "ANALYSIS", "FOCUS"];
+    case "decision":
+    case "assumption":
+    case "contradiction":
+    case "gap":
+    default:
+      return ["ANALYSIS", "CONTEXT", "ACTION", "FOCUS"];
+  }
+}
+
+function findQuietInsightParent(nodes: IdeaFlowNode[], kind: CanvasInsight["kind"]) {
+  const byTitle = new Map<string, IdeaFlowNode>();
+  for (const node of nodes) {
+    const title = (node.data.title ?? "").trim().toUpperCase();
+    if (title) byTitle.set(title, node);
+  }
+  for (const title of quietInsightParentPriority(kind)) {
+    const direct = byTitle.get(title);
+    if (direct) return direct;
+  }
+  return nodes.find((node) => node.data.kind === "focus") ?? nodes[0] ?? null;
+}
+
 function mergeCognitiveScaffoldCanvasCapture(
   current: IdeaCanvasState,
   result: StructuredVoiceCanvas,
@@ -757,6 +801,8 @@ function Workbench() {
   const [thinkingState, setThinkingState] = useState<SessionThinkingState>(EMPTY_THINKING_STATE);
   const [quietInsight, setQuietInsight] = useState<CanvasInsight | null>(null);
   const [exportingBrief, setExportingBrief] = useState(false);
+  const [uploadedContextNote, setUploadedContextNote] = useState("");
+  const [uploadedContextFiles, setUploadedContextFiles] = useState<SessionContextFile[]>([]);
 
   // The audio panel and floating dock share one realtime session.
   const [audioCollapsed, setAudioCollapsed] = useState(() => {
@@ -794,6 +840,21 @@ function Workbench() {
     modelRef.current = model;
   }, [model]);
 
+  const contextFileStatus = useMemo(() => {
+    const total = uploadedContextFiles.length;
+    const summarized = uploadedContextFiles.filter((file) => file.status === "summarized").length;
+    const ready = total > 0 && summarized === total;
+    const label = ready
+      ? `Context: ${total} file${total === 1 ? "" : "s"} ready`
+      : total > 0
+        ? `Context: ${summarized}/${total} ready`
+        : "";
+    const detail = uploadedContextFiles
+      .map((file) => `${file.name} (${file.status || "attached"})`)
+      .join("\n");
+    return { total, summarized, ready, label, detail };
+  }, [uploadedContextFiles]);
+
   // Thinking template
   const [templateId, setTemplateId] = useState<string>(DEFAULT_TEMPLATE_ID);
   const template = useMemo(() => getTemplate(templateId), [templateId]);
@@ -813,6 +874,7 @@ function Workbench() {
   const docRef = useRef(doc);
   const ideaCanvasRef = useRef(ideaCanvas);
   const thinkingStateRef = useRef<SessionThinkingState>(EMPTY_THINKING_STATE);
+  const uploadedContextNoteRef = useRef("");
   const activeSessionRef = useRef(activeSessionId);
 
   // Agent refs
@@ -857,6 +919,9 @@ function Workbench() {
     ideaCanvasRef.current = ideaCanvas;
   }, [ideaCanvas]);
   useEffect(() => {
+    uploadedContextNoteRef.current = uploadedContextNote;
+  }, [uploadedContextNote]);
+  useEffect(() => {
     thinkingStateRef.current = thinkingState;
   }, [thinkingState]);
   useEffect(() => {
@@ -875,6 +940,45 @@ function Workbench() {
     setVoiceMode("idle");
     setQuietInsight(null);
   }, [activeSessionId]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const debugWindow = window as typeof window & {
+      __murmurRealtimeAgentReplies?: Array<{
+        sessionId: string;
+        text: string;
+        at: string;
+      }>;
+      __murmurDemoSnapshot?: unknown;
+    };
+    const realtimeAgentReplies = (debugWindow.__murmurRealtimeAgentReplies ?? []).filter(
+      (event) => !activeSessionId || event.sessionId === activeSessionId,
+    );
+    debugWindow.__murmurDemoSnapshot = {
+      sessionId: activeSessionId,
+      capturedAt: new Date().toISOString(),
+      canvas: {
+        nodes: ideaCanvas.nodes.map((node) => ({
+          id: node.id,
+          title: node.data.title,
+          body: node.data.body ?? "",
+          kind: node.data.kind,
+          position: node.position,
+        })),
+        edges: ideaCanvas.edges.map((edge) => ({
+          id: edge.id,
+          source: edge.source,
+          target: edge.target,
+          label: String(edge.label ?? ""),
+        })),
+      },
+      transcript: finals.map((item) => item.text),
+      realtimeAgentReplies,
+      contextFiles: uploadedContextFiles,
+      uploadedContextReady: contextFileStatus.ready,
+      uploadedContextLabel: contextFileStatus.label,
+    };
+  }, [activeSessionId, contextFileStatus.label, contextFileStatus.ready, finals, ideaCanvas, uploadedContextFiles]);
 
   const selectCaptureAnchor = useCallback((position: { x: number; y: number }) => {
     if (captureActiveRef.current) return;
@@ -1048,9 +1152,13 @@ function Workbench() {
       setMapLoading(true);
       try {
         const canvasBefore = ideaCanvasRef.current;
+        const uploadedContext = uploadedContextNoteRef.current.trim();
+        const structuredSource = uploadedContext
+          ? `${uploadedContext}\n\n[User voice input]\n${source}`
+          : source;
         const result = await structureCanvasCapture({
           data: {
-            rawTranscript: source.slice(0, 6000),
+            rawTranscript: structuredSource.slice(0, 6000),
             existingCards: ideaCanvasExistingCards(canvasBefore),
             model: modelRef.current,
           },
@@ -1108,10 +1216,15 @@ function Workbench() {
     canvasPushDebounceRef.current = setTimeout(() => {
       const client = realtimeRef.current;
       if (!client) return;
-      const text = formatAgentCanvasContext({
-        canvas: ideaCanvasRef.current,
-        recentTranscript: finals.map((item) => item.text),
-      });
+      const text = [
+        uploadedContextNoteRef.current.trim(),
+        formatAgentCanvasContext({
+          canvas: ideaCanvasRef.current,
+          recentTranscript: finals.map((item) => item.text),
+        }),
+      ]
+        .filter(Boolean)
+        .join("\n\n");
       try {
         client.updateCanvasSnapshot(text);
       } catch (err) {
@@ -1454,16 +1567,52 @@ function Workbench() {
 
   const applyAgentCanvasOps = useCallback(
     (ops: CanvasToolOp[]) => {
+      const looksLikeCanvasNoise = (value: string) => {
+        const text = value.toLowerCase();
+        return (
+          text.includes('{"') ||
+          text.includes("metadata") ||
+          text.includes("uuid") ||
+          text.includes("export json") ||
+          text.includes("export csv") ||
+          text.includes("uploaded context summary") ||
+          text.includes("patient") ||
+          text.includes("hospital")
+        );
+      };
+      const cleanBody = (value: string) => {
+        const trimmed = value.trim();
+        if (looksLikeCanvasNoise(trimmed)) return "";
+        return trimmed.length > 700 ? `${trimmed.slice(0, 697).trim()}...` : trimmed;
+      };
+      const layerTitles = new Set(["focus", "observation", "context", "analysis", "action"]);
+      const existingTitleKey = (title: string) => title.trim().toLowerCase();
+      const existingLayerTitles = new Set(
+        ideaCanvasRef.current.nodes
+          .map((node) => node.data.title.trim())
+          .filter((title) => layerTitles.has(existingTitleKey(title)))
+          .map(existingTitleKey),
+      );
       const normalized: ThoughtTurnCanvasOp[] = [];
       for (const op of ops) {
         if (op.action === "add_card" || op.action === "update_card") {
           const title = (op.title ?? op.targetTitle ?? "").trim();
+          const body = cleanBody(op.body ?? "");
           if (!title) continue;
+          if (looksLikeCanvasNoise(title) || (!body && looksLikeCanvasNoise(op.body ?? ""))) {
+            console.warn("[agent canvas ops] skipped noisy card", op);
+            continue;
+          }
+          const normalizedTitle = existingTitleKey(title);
+          const action =
+            op.action === "add_card" && existingLayerTitles.has(normalizedTitle)
+              ? "update_card"
+              : op.action;
           normalized.push({
-            action: op.action,
+            action,
             kind: op.kind ?? "idea",
             title,
-            body: (op.body ?? "").trim(),
+            body,
             sourceTitle: "",
             targetTitle: "",
             label: "",
@@ -1496,13 +1645,16 @@ function Workbench() {
     const title = card?.title.trim();
     if (!card || !title) return;
     const current = ideaCanvasRef.current;
+    const parent = findQuietInsightParent(current.nodes, quietInsight.kind);
     const width = 280;
-    const position = findOpenCanvasPosition(
-      current.nodes,
-      snapCanvasPosition({ x: 140, y: 160 + current.nodes.length * 28 }),
-      width,
-      178,
-    );
+    const parentIsLeft = parent ? parent.position.x < 0 : false;
+    const desired = parent
+      ? {
+          x: parent.position.x + (parentIsLeft ? -340 : 340),
+          y: parent.position.y + 96,
+        }
+      : { x: 140, y: 160 + current.nodes.length * 28 };
+    const position = findOpenCanvasPosition(current.nodes, snapCanvasPosition(desired), width, 178);
     const node: IdeaFlowNode = {
       id: nextIdeaId("insight"),
       type: "ideaNode",
@@ -1515,9 +1667,21 @@ function Workbench() {
         width,
       },
     };
+    const edge = parent
+      ? {
+          id: nextIdeaId("insight-edge"),
+          source: parent.id,
+          target: node.id,
+          sourceHandle: parentIsLeft ? "left" : "right",
+          targetHandle: parentIsLeft ? "right" : "left",
+          type: "editable",
+          label: "",
+        }
+      : null;
     setIdeaCanvas({
       ...current,
       nodes: [...current.nodes.map((item) => ({ ...item, selected: false })), node],
+      edges: edge ? [...current.edges, edge] : current.edges,
     });
     setQuietInsight(null);
   }, [quietInsight]);
@@ -1645,6 +1809,11 @@ function Workbench() {
         if (Object.keys(map).length === 0) {
           try {
             const ctx = await getCtx({ data: { sessionId: id } });
+            const contextNote = formatUploadedContextForAgent(ctx.contextFiles ?? []);
+            setUploadedContextNote(contextNote);
+            setUploadedContextFiles(ctx.contextFiles ?? []);
+            uploadedContextNoteRef.current = contextNote;
+            if (contextNote) scheduleInject(contextNote);
             if (ctx.prompt?.trim()) {
               const seeded: BriefBlock = {
                 id: crypto.randomUUID(),
@@ -1664,6 +1833,20 @@ function Workbench() {
             }
           } catch (e) {
             console.warn("getCtx failed", e);
+          }
+        } else {
+          try {
+            const ctx = await getCtx({ data: { sessionId: id } });
+            const contextNote = formatUploadedContextForAgent(ctx.contextFiles ?? []);
+            setUploadedContextNote(contextNote);
+            setUploadedContextFiles(ctx.contextFiles ?? []);
+            uploadedContextNoteRef.current = contextNote;
+            if (contextNote) scheduleInject(contextNote);
+          } catch (e) {
+            console.warn("getCtx failed", e);
+            setUploadedContextNote("");
+            setUploadedContextFiles([]);
+            uploadedContextNoteRef.current = "";
           }
         }
         if (seq !== openSessionSeqRef.current) return;
@@ -1685,6 +1868,9 @@ function Workbench() {
         if (seq !== openSessionSeqRef.current) return;
         setDoc({});
         docRef.current = {};
+        setUploadedContextNote("");
+        setUploadedContextFiles([]);
+        uploadedContextNoteRef.current = "";
         setActiveSessionId(id);
         navigate({ to: "/workbench", search: { session: id }, replace: true });
         setError(errorMessage(e));
@@ -2240,6 +2426,21 @@ function Workbench() {
           onAgentTranscript: (text) => {
             const sessionId = activeSessionRef.current;
             if (!sessionId || !text) return;
+            if (typeof window !== "undefined") {
+              const debugWindow = window as typeof window & {
+                __murmurRealtimeAgentReplies?: Array<{
+                  sessionId: string;
+                  text: string;
+                  at: string;
+                }>;
+              };
+              debugWindow.__murmurRealtimeAgentReplies = debugWindow.__murmurRealtimeAgentReplies ?? [];
+              debugWindow.__murmurRealtimeAgentReplies.push({
+                sessionId,
+                text,
+                at: new Date().toISOString(),
+              });
+            }
             // Surface the agent's spoken line in the transcript list and
             // persist it as a chunk so it shows up alongside user speech.
             const chunkId = crypto.randomUUID();
@@ -2280,11 +2481,24 @@ function Workbench() {
       });
       realtimeRef.current = client;
       connectAgentInFlightRef.current = false;
+      const uploadedContext = uploadedContextNoteRef.current.trim();
+      if (uploadedContext) {
+        try {
+          client.injectContext(uploadedContext);
+        } catch {
+          /* ignore */
+        }
+      }
       client.updateCanvasSnapshot(
-        formatAgentCanvasContext({
-          canvas: ideaCanvasRef.current,
-          recentTranscript: finals.map((item) => item.text),
-        }),
+        [
+          uploadedContext,
+          formatAgentCanvasContext({
+            canvas: ideaCanvasRef.current,
+            recentTranscript: finals.map((item) => item.text),
+          }),
+        ]
+          .filter(Boolean)
+          .join("\n\n"),
       );
     } catch (e: unknown) {
       connectAgentInFlightRef.current = false;
@@ -3192,6 +3406,28 @@ function Workbench() {
               onInlineDictationStart={startInlineDictation}
               onInlineDictationStop={stopInlineDictation}
             />
+            {contextFileStatus.total > 0 && (
+              <div className="pointer-events-none absolute left-5 top-5 z-20 max-w-[380px] rounded-lg border border-auralis bg-surface/95 px-3 py-2 text-xs shadow-sm backdrop-blur">
+                <div className="flex items-center gap-2 font-medium text-primary">
+                  <span
+                    className={`h-1.5 w-1.5 rounded-full ${
+                      contextFileStatus.ready ? "bg-emerald-500" : "bg-amber-500 animate-pulse"
+                    }`}
+                  />
+                  <span>{contextFileStatus.label}</span>
+                </div>
+                <div className="mt-1 flex flex-wrap gap-x-2 gap-y-1 text-[11px] leading-4 text-secondary">
+                  {uploadedContextFiles.slice(0, 3).map((file) => (
+                    <span key={`${file.name}-${file.status}`} className="max-w-[180px] truncate">
+                      {file.name}
+                    </span>
+                  ))}
+                  {uploadedContextFiles.length > 3 && (
+                    <span>+{uploadedContextFiles.length - 3} more</span>
+                  )}
+                </div>
+              </div>
+            )}
             {/* AI status indicators — pinned inside the canvas, above the lower chrome. */}
             {canvasStatusItems.length > 0 && (
               <div className="pointer-events-none absolute bottom-24 left-5 z-20 flex max-w-[360px] flex-col items-start gap-1.5">
@@ -3216,7 +3452,7 @@ function Workbench() {
                     onClick={addQuietInsightCard}
                     className="rounded px-2 py-1 text-[11px] font-medium text-primary hover:bg-surface-variant"
                   >
-                    Add as question
+                    Attach to canvas
                   </button>
                   <button
                     type="button"

@@ -127,7 +127,7 @@ the card content and structure.
 - Avoid jumping to S3 feature ideas when the user has not established S1 context or S2 reasoning.
 
 COGNITIVE SCAFFOLD OUTPUT
-- For substantial voice captures, prefer exactly five cards arranged as one centered focus plus four cognitive-layer cards.
+- For substantial voice captures, prefer one stable scaffold arranged as one centered focus plus four cognitive-layer cards.
 - Card 1 must be the focus card. Use kind="focus", role="FOCUS", granularity="FEATURE".
 - Then create one card for each layer, using these title prefixes exactly:
   - "Observation"
@@ -135,8 +135,13 @@ COGNITIVE SCAFFOLD OUTPUT
   - "Analysis"
   - "Action"
 - The four layer cards must attachToTitle to the exact focus title.
-- Use each layer card body for 1-3 tight lines. Do not create separate cards for every detail.
-- If a layer is weak or missing, still create the layer card and write the best grounded gap/question for that layer.
+- Use each layer card body for 0-2 tight lines. Do not create separate cards for every detail.
+- Progressively fill the scaffold. Do not make the first capture look like a completed answer.
+- Observation should contain only what the user has actually said or what uploaded context directly supports.
+- Context should name the background/workflow only when it is grounded; otherwise write a short question or "To clarify" line.
+- Analysis should preserve the current hypothesis or uncertainty. Do not resolve it until evidence appears.
+- Action should usually be a next thinking move, not a product solution, until Context and Analysis are grounded.
+- If a layer is weak or missing, keep it sparse and write the smallest grounded gap/question for that layer.
 - Do not add top-level cross edges for scaffold captures. The UI will connect focus to the four layers.
 - Edge labels are not needed for scaffold captures.
 
