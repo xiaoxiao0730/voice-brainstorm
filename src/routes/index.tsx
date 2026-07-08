@@ -1,19 +1,14 @@
-import { createFileRoute, redirect, useNavigate } from "@tanstack/react-router";
+import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useCallback, useRef, useState } from "react";
-import { supabase } from "@/integrations/supabase/client";
 import { useServerFn } from "@tanstack/react-start";
 import { createSession } from "@/lib/session.functions";
 import { summarizeContextFile } from "@/lib/context.functions";
+import { uploadContextFile } from "@/lib/storage.functions";
+import { CONTEXT_FILE_ACCEPT } from "@/lib/contextFiles";
 
 
 export const Route = createFileRoute("/")({
   ssr: false,
-  beforeLoad: async () => {
-    const { data, error } = await supabase.auth.getUser();
-    if (error || !data.user) {
-      throw redirect({ to: "/auth" });
-    }
-  },
   head: () => ({
     meta: [
       { title: "Murmur — What's on your mind?" },
@@ -32,7 +27,8 @@ export const Route = createFileRoute("/")({
 function Onboarding() {
   const navigate = useNavigate();
   const createS = useServerFn(createSession);
-  const summarize = useServerFn(summarizeContextFile);
+  const uploadCtx = useServerFn(uploadContextFile);
+  const summarizeCtx = useServerFn(summarizeContextFile);
   const [prompt, setPrompt] = useState("");
   const [files, setFiles] = useState<File[]>([]);
   const [dragging, setDragging] = useState(false);
@@ -60,40 +56,46 @@ function Onboarding() {
     setSubmitting(true);
     setSubmitNote(null);
     try {
-      // Get the signed-in user (needed for the per-user storage path).
-      const { data: userRes, error: userErr } = await supabase.auth.getUser();
-      if (userErr || !userRes.user) throw new Error(userErr?.message || "Not signed in");
-      const userId = userRes.user.id;
-
       // 1. Create the session row with the onboarding prompt.
       const session = await createS({ data: { prompt: prompt.trim() } });
 
-      // 2. Upload each file to private storage and ask the server to summarize it.
       if (files.length > 0) {
-        setSubmitNote(`Uploading ${files.length} file${files.length === 1 ? "" : "s"}…`);
+        setSubmitNote(`Uploading ${files.length} context file${files.length === 1 ? "" : "s"}…`);
+        let failed = 0;
+        // Keep this sequential: summarizeContextFile appends to session.context_files,
+        // so concurrent writes can overwrite each other and leave only one file attached.
         for (const file of files) {
-          const safeName = file.name.replace(/[^\w.\-]+/g, "_");
-          const path = `${userId}/${session.id}/${crypto.randomUUID()}-${safeName}`;
-          const { error: upErr } = await supabase.storage
-            .from("session-context")
-            .upload(path, file, {
-              contentType: file.type || "application/octet-stream",
-              upsert: false,
+          try {
+            const contentBase64 = await fileToBase64(file);
+            const uploaded = await uploadCtx({
+              data: {
+                sessionId: session.id,
+                name: file.name,
+                mime: file.type || "application/octet-stream",
+                size: file.size,
+                contentBase64,
+              },
             });
-          if (upErr) {
-            console.warn("Upload failed:", file.name, upErr.message);
-            continue;
+            await summarizeCtx({
+              data: {
+                sessionId: session.id,
+                path: uploaded.path,
+                name: uploaded.name,
+                mime: uploaded.mime,
+                size: uploaded.size,
+              },
+            });
+          } catch (error) {
+            console.warn("context file attach failed", file.name, error);
+            failed += 1;
           }
-          // Fire-and-forget summarization; don't block navigation on it.
-          void summarize({
-            data: {
-              sessionId: session.id,
-              path,
-              name: file.name,
-              mime: file.type || "application/octet-stream",
-              size: file.size,
-            },
-          }).catch((e) => console.warn("Summarize failed:", file.name, e?.message));
+        }
+        if (failed > 0) {
+          setSubmitNote(`${failed} file${failed === 1 ? "" : "s"} failed to attach. Opening session anyway.`);
+        } else {
+          setSubmitNote(
+            `Context ready: ${files.length} file${files.length === 1 ? "" : "s"} attached. I'll use them as background while we think through the canvas.`,
+          );
         }
       }
 
@@ -102,7 +104,7 @@ function Onboarding() {
       setSubmitNote(e?.message || "Couldn't start session");
       setSubmitting(false);
     }
-  }, [submitting, prompt, files, createS, summarize, navigate]);
+  }, [submitting, prompt, files, createS, uploadCtx, summarizeCtx, navigate]);
 
 
   const stopVoice = useCallback(() => {
@@ -233,6 +235,7 @@ function Onboarding() {
             ref={inputRef}
             type="file"
             multiple
+            accept={CONTEXT_FILE_ACCEPT}
             className="hidden"
             onChange={(e) => addFiles(e.target.files)}
           />
@@ -242,7 +245,7 @@ function Onboarding() {
               <span className="font-medium">Click to upload</span>
               <span className="text-secondary"> or drag and drop files here as context</span>
             </div>
-            <div className="text-xs text-secondary">PDF, images, docs, audio — anything that helps</div>
+            <div className="text-xs text-secondary">PDF, images, text, JSON, XML, HTML</div>
           </div>
 
           {files.length > 0 && (
@@ -269,4 +272,20 @@ function Onboarding() {
       </div>
     </main>
   );
+}
+
+function fileToBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(reader.error ?? new Error("Could not read file."));
+    reader.onload = () => {
+      const result = reader.result;
+      if (typeof result !== "string") {
+        reject(new Error("Could not encode file."));
+        return;
+      }
+      resolve(result);
+    };
+    reader.readAsDataURL(file);
+  });
 }

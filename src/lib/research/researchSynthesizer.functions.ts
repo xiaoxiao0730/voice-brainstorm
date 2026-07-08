@@ -5,7 +5,7 @@ import { Output, generateText } from "ai";
 import { z } from "zod";
 
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
-import { createLovableAiGatewayProvider } from "@/lib/ai-gateway.server";
+import { createOpenAIProvider, normalizeAiModel, requireOpenAIKey } from "@/lib/ai-gateway.server";
 
 const InputSchema = z.object({
   query: z.string().min(1),
@@ -25,7 +25,7 @@ const ResultSchema = z.object({
 });
 
 const SYSTEM_BASE = `Convert raw research notes into a clean structured result for a Live Brief.
-- title: ≤ 8 words
+- title: ≤ 8 words (and then enter a newline)
 - summary: 2–4 sentences of markdown
 - findings: 3–5 short bullets, each one concrete fact taken from the notes (do not invent)
 - links: only include URLs explicitly named in the notes; otherwise return an empty list
@@ -44,13 +44,13 @@ export const synthesizeResearch = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator((input: unknown) => InputSchema.parse(input))
   .handler(async ({ data }) => {
-    const key = process.env.LOVABLE_API_KEY;
-    if (!key) throw new Error("Missing LOVABLE_API_KEY");
-    const gateway = createLovableAiGatewayProvider(key);
+    const key = requireOpenAIKey();
+    if (!key) throw new Error("Missing OPENAI_API_KEY");
+    const gateway = createOpenAIProvider(key);
     const userPrompt = `Query: ${data.query}\n\nRaw notes:\n${data.notes || "(no notes available)"}\n\nProduce the structured ResearchResult now.`;
     try {
       const { experimental_output } = await generateText({
-        model: gateway(data.model),
+        model: gateway(normalizeAiModel(data.model)),
         system: buildSystem(),
         prompt: userPrompt,
         experimental_output: Output.object({ schema: ResultSchema }),

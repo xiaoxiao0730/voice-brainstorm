@@ -1,6 +1,8 @@
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
+import { getChatCompletionsConfig, normalizeAiModel, requireOpenAIKey } from "@/lib/ai-gateway.server";
+import { isSupportedContextMime } from "@/lib/contextFiles";
 
 const MAX_TEXT_BYTES = 200_000; // ~200KB plain text inlined
 const MAX_BINARY_BYTES = 8_000_000; // ~8MB for PDF/image summarization
@@ -52,14 +54,12 @@ async function summarizeWithGateway(args: {
     throw new Error(`Unsupported mime type for summarization: ${mime}`);
   }
 
-  const res = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+  const chat = getChatCompletionsConfig(apiKey);
+  const res = await fetch(chat.url, {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "Lovable-API-Key": apiKey,
-    },
+    headers: chat.headers,
     body: JSON.stringify({
-      model: "google/gemini-2.5-flash",
+      model: normalizeAiModel("openai/fast"),
       messages: [{ role: "user", content: userContent }],
       temperature: 0.2,
     }),
@@ -67,7 +67,7 @@ async function summarizeWithGateway(args: {
 
   if (!res.ok) {
     const t = await res.text().catch(() => "");
-    throw new Error(`Gateway ${res.status}: ${t.slice(0, 300)}`);
+    throw new Error(`OpenAI ${res.status}: ${t.slice(0, 300)}`);
   }
   const json: any = await res.json();
   const summary = json?.choices?.[0]?.message?.content;
@@ -125,12 +125,7 @@ export const summarizeContextFile = createServerFn({ method: "POST" })
       return { ok: true, skipped: true };
     }
 
-    const isSupported =
-      data.mime.startsWith("text/") ||
-      data.mime === "application/json" ||
-      data.mime === "application/xml" ||
-      data.mime.startsWith("image/") ||
-      data.mime === "application/pdf";
+    const isSupported = isSupportedContextMime(data.mime);
 
     let entry: ContextFile;
 
@@ -146,8 +141,8 @@ export const summarizeContextFile = createServerFn({ method: "POST" })
       };
     } else {
       try {
-        const lovableApiKey = process.env.LOVABLE_API_KEY;
-        if (!lovableApiKey) throw new Error("Missing LOVABLE_API_KEY");
+        const apiKey = requireOpenAIKey();
+        if (!apiKey) throw new Error("Missing OPENAI_API_KEY");
 
         // Download via the user-scoped client (RLS on storage.objects enforces ownership).
         const { data: blob, error: dlErr } = await supabase.storage
@@ -157,7 +152,7 @@ export const summarizeContextFile = createServerFn({ method: "POST" })
 
         const buffer = new Uint8Array(await blob.arrayBuffer());
         const summary = await summarizeWithGateway({
-          apiKey: lovableApiKey,
+          apiKey: apiKey,
           name: data.name,
           mime: data.mime,
           buffer,

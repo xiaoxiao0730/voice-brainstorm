@@ -1,0 +1,11 @@
+{
+  "env": {
+    "ANTHROPIC_BASE_URL": "http://127.0.0.1:23333/api/anthropic",
+    "ANTHROPIC_AUTH_TOKEN": "Powered by Agent Maestro",
+    "ANTHROPIC_MODEL": "claude-opus-4.8[1m]",
+    "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "935793",
+    "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": "85",
+    "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
+    "CLAUDE_CODE_ATTRIBUTION_HEADER": "0"
+  }
+}

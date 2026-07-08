@@ -28,6 +28,12 @@ export function attachCoordinator(sessionId: string, ctx: CoordinatorContext): (
 
   const slot = sessionStore.getOrCreate(sessionId);
 
+  // Rolling window of the user's recent spoken turns, oldest→newest. Passed to
+  // decideBrief so it can judge whether a short fragment continues, refines, or
+  // corrects prior thinking. Holds turns BEFORE the current one.
+  const RECENT_TURNS_MAX = 5;
+  const recentTurns: string[] = [];
+
   const off = slot.bus.on("thought_turn.finalized", (e) => {
     void slot.briefQueue.run(async () => {
       const endSpan = pipelineTracer.startSpan({
@@ -38,6 +44,8 @@ export function attachCoordinator(sessionId: string, ctx: CoordinatorContext): (
         turnId: e.turnId,
         meta: { chars: e.thoughtTurn.combinedText.length },
       });
+      // Snapshot the context as it was BEFORE this fragment.
+      const recentBefore = recentTurns.slice();
       try {
         const snapshot = ctx.getSnapshot();
         const model = ctx.getModel?.() ?? "google/gemini-3-flash-preview";
@@ -47,6 +55,7 @@ export function attachCoordinator(sessionId: string, ctx: CoordinatorContext): (
               combinedText: e.thoughtTurn.combinedText,
               boundaryReason: e.thoughtTurn.boundaryReason,
             },
+            recentTurns: recentBefore,
             snapshot,
             model,
           },
@@ -88,6 +97,13 @@ export function attachCoordinator(sessionId: string, ctx: CoordinatorContext): (
       } catch (err) {
         endSpan({ error: err instanceof Error ? err.message : String(err) });
         console.warn("[coordinator] decideBrief failed", err);
+      } finally {
+        // Record this turn so the NEXT call sees it as recent context.
+        const text = e.thoughtTurn.combinedText.trim();
+        if (text) {
+          recentTurns.push(text);
+          if (recentTurns.length > RECENT_TURNS_MAX) recentTurns.shift();
+        }
       }
     });
   });

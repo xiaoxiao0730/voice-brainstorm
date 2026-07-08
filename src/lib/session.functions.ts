@@ -1,6 +1,7 @@
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
+import { describeError } from "@/lib/errorDiagnostics";
 
 export const listSessions = createServerFn({ method: "GET" })
   .middleware([requireSupabaseAuth])
@@ -25,21 +26,25 @@ export const createSession = createServerFn({ method: "POST" })
       .parse(input),
   )
   .handler(async ({ data, context }) => {
-    const prompt = data.prompt?.trim() || "";
-    const title =
-      data.title?.trim() ||
-      (prompt ? prompt.split(/\s+/).slice(0, 8).join(" ") : "Untitled session");
-    const { data: row, error } = await context.supabase
-      .from("sessions")
-      .insert({
-        user_id: context.userId,
-        title,
-        prompt,
-      })
-      .select("id, title, status, started_at, ended_at, prompt")
-      .single();
-    if (error) throw new Error(error.message);
-    return row;
+    try {
+      const prompt = data.prompt?.trim() || "";
+      const title =
+        data.title?.trim() ||
+        (prompt ? prompt.split(/\s+/).slice(0, 8).join(" ") : "Untitled session");
+      const { data: row, error } = await context.supabase
+        .from("sessions")
+        .insert({
+          user_id: context.userId,
+          title,
+          prompt,
+        })
+        .select("id, title, status, started_at, ended_at, prompt")
+        .single();
+      if (error) throw new Error(error.message);
+      return row;
+    } catch (error) {
+      throw new Error(`Could not create session in Supabase: ${describeError(error)}`);
+    }
   });
 
 

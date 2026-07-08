@@ -10,7 +10,6 @@ import {
 import { useEffect, type ReactNode } from "react";
 
 import appCss from "../styles.css?url";
-import { reportLovableError } from "../lib/lovable-error-reporting";
 
 function NotFoundComponent() {
   return (
@@ -38,7 +37,7 @@ function ErrorComponent({ error, reset }: { error: Error; reset: () => void }) {
   console.error(error);
   const router = useRouter();
   useEffect(() => {
-    reportLovableError(error, { boundary: "tanstack_root_error_component" });
+    console.error("[root error boundary]", error);
   }, [error]);
 
   return (
@@ -77,20 +76,26 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
     meta: [
       { charSet: "utf-8" },
       { name: "viewport", content: "width=device-width, initial-scale=1" },
-      { title: "Lovable App" },
+      { title: "Murmur" },
       { name: "description", content: "Brainstorm Canvas is a collaborative AI workbench for real-time idea generation and visualization." },
-      { name: "author", content: "Lovable" },
-      { property: "og:title", content: "Lovable App" },
+      { name: "author", content: "Murmur" },
+      { property: "og:title", content: "Murmur" },
       { property: "og:description", content: "Brainstorm Canvas is a collaborative AI workbench for real-time idea generation and visualization." },
       { property: "og:type", content: "website" },
       { name: "twitter:card", content: "summary" },
-      { name: "twitter:site", content: "@Lovable" },
-      { name: "twitter:title", content: "Lovable App" },
+      { name: "twitter:title", content: "Murmur" },
       { name: "twitter:description", content: "Brainstorm Canvas is a collaborative AI workbench for real-time idea generation and visualization." },
-      { property: "og:image", content: "https://pub-bb2e103a32db4e198524a2e9ed8f35b4.r2.dev/c213ee8b-43e0-4b68-bcb2-227c1399669f/id-preview-272e4fb3--0aa1461e-cfb9-4aad-9983-bc60e396e376.lovable.app-1781503143837.png" },
-      { name: "twitter:image", content: "https://pub-bb2e103a32db4e198524a2e9ed8f35b4.r2.dev/c213ee8b-43e0-4b68-bcb2-227c1399669f/id-preview-272e4fb3--0aa1461e-cfb9-4aad-9983-bc60e396e376.lovable.app-1781503143837.png" },
     ],
     links: [
+      {
+        rel: "icon",
+        type: "image/png",
+        href: "/favicon.png",
+      },
+      {
+        rel: "apple-touch-icon",
+        href: "/favicon.png",
+      },
       {
         rel: "stylesheet",
         href: appCss,

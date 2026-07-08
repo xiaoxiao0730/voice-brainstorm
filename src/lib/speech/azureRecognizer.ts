@@ -16,6 +16,7 @@ export type StartOptions = {
   region: string;
   onEvent: (e: SpeechEvent) => void;
   languages?: string[]; // e.g. ["en-US", "zh-CN"]
+  micStream?: MediaStream;
 };
 
 export async function startAzureRecognizer(opts: StartOptions): Promise<SpeechRecognizerHandle> {
@@ -24,16 +25,14 @@ export async function startAzureRecognizer(opts: StartOptions): Promise<SpeechRe
   const speechConfig = sdk.SpeechConfig.fromAuthorizationToken(opts.token, opts.region);
   speechConfig.outputFormat = sdk.OutputFormat.Simple;
 
-  const audioConfig = sdk.AudioConfig.fromDefaultMicrophoneInput();
+  const audioConfig = opts.micStream
+    ? sdk.AudioConfig.fromStreamInput(opts.micStream)
+    : sdk.AudioConfig.fromDefaultMicrophoneInput();
 
-  const languages = opts.languages ?? ["en-US", "zh-CN"];
+  const languages = opts.languages ?? ["zh-CN", "en-US"];
   const autoDetectConfig = sdk.AutoDetectSourceLanguageConfig.fromLanguages(languages);
 
-  const recognizer = sdk.SpeechRecognizer.FromConfig(
-    speechConfig,
-    autoDetectConfig,
-    audioConfig,
-  );
+  const recognizer = sdk.SpeechRecognizer.FromConfig(speechConfig, autoDetectConfig, audioConfig);
 
   recognizer.recognizing = (_s, e) => {
     if (!e.result.text) return;
@@ -92,7 +91,11 @@ export async function startAzureRecognizer(opts: StartOptions): Promise<SpeechRe
             resolve();
           },
           () => {
-            try { recognizer.close(); } catch { /* ignore */ }
+            try {
+              recognizer.close();
+            } catch {
+              /* ignore */
+            }
             resolve();
           },
         );

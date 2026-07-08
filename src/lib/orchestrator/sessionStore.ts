@@ -36,6 +36,7 @@ export type SessionSlot = {
   sessionId: string;
   bus: SessionEventBus;
   briefQueue: Mutex;
+  canvasQueue: Mutex;
   thoughtTurnBuffer: ThoughtTurnBuffer;
   researchTasks: Map<string, ResearchTaskStatus>;
 };
@@ -52,12 +53,11 @@ function ensure(sessionId: string): SessionSlot {
   const bus = createSessionEventBus();
   wireTracerToBus(sessionId, bus);
   const thoughtTurnBuffer = createThoughtTurnBuffer(sessionId, bus);
-  // Voice grabbing the turn = user yielded → early-finalize the current ThoughtTurn.
-  bus.on("voice.response_started", () => thoughtTurnBuffer.onVoiceResponseStarted());
   const slot: SessionSlot = {
     sessionId,
     bus,
     briefQueue: createMutex(),
+    canvasQueue: createMutex(),
     thoughtTurnBuffer,
     researchTasks: new Map(),
   };
