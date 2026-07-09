@@ -92,6 +92,13 @@ import {
   loadThinkingState,
   type SessionThinkingState,
 } from "@/lib/agent/thinkingState.functions";
+import {
+  EMPTY_ARTIFACT_STATE,
+  createPrdArtifactState,
+  normalizeArtifactState,
+  type ArtifactState,
+  type PrdSectionId,
+} from "@/lib/agent/artifactState";
 import { AgentDock } from "@/components/agent/AgentDock";
 import { FullscreenBoard, ThinkingBoard } from "@/components/board/FullscreenBoard";
 
@@ -140,6 +147,7 @@ const EMPTY_THINKING_STATE: SessionThinkingState = {
   promising_directions: [],
   decision_points: [],
   last_turn_id: null,
+  artifact_state: EMPTY_ARTIFACT_STATE,
 };
 
 type SessionContextFile = {
@@ -175,6 +183,38 @@ function errorMessage(error: unknown, fallback = "Something went wrong") {
     if (typeof message === "string" && message.trim()) return message;
   }
   return fallback;
+}
+
+function looksLikeSpeechRecognitionNoise(text: string, lang?: string) {
+  const trimmed = text.trim();
+  if (!trimmed) return true;
+  const cjkCount = (trimmed.match(/[\u4e00-\u9fff]/g) ?? []).length;
+  const lower = trimmed.toLowerCase();
+  const knownNoise = [
+    "weather",
+    "temperature",
+    "attendance",
+    "venue",
+    "island",
+    "joshua",
+  ];
+  if (knownNoise.some((word) => lower.includes(word)) && cjkCount === 0) return true;
+  return false;
+}
+
+function normalizeSpeechForEchoCompare(text: string) {
+  return text
+    .toLowerCase()
+    .replace(/^agent\s*:/i, "")
+    .replace(/[\s\p{P}\p{S}]+/gu, "")
+    .trim();
+}
+
+function looksLikeAgentEcho(userText: string, recentAgentText: string) {
+  const user = normalizeSpeechForEchoCompare(userText);
+  const agent = normalizeSpeechForEchoCompare(recentAgentText);
+  if (!user || !agent || user.length < 8) return false;
+  return agent.includes(user) || user.includes(agent.slice(0, Math.min(agent.length, 40)));
 }
 
 function briefDocToPlainText(doc: BriefDoc) {
@@ -475,6 +515,142 @@ function createCognitiveLayerFallbackBody(layer: CognitiveLayerKey) {
 function isCognitiveScaffoldCapture(result: StructuredVoiceCanvas) {
   const layerKeys = new Set(result.cards.map((card) => cognitiveLayerKey(card.title)).filter(Boolean));
   return result.cards.some((card) => card.kind === "focus") && layerKeys.size >= 2;
+}
+
+const ARTIFACT_FOCUS_POSITION = { x: 120, y: 220 };
+const ARTIFACT_SECTION_POSITIONS: Record<PrdSectionId, { x: number; y: number }> = {
+  target_user: { x: 520, y: 40 },
+  user_need: { x: 520, y: 220 },
+  core_features: { x: 520, y: 400 },
+  market_research: { x: 520, y: 580 },
+};
+
+function artifactSectionPosition(sectionId: string, index: number) {
+  return (
+    ARTIFACT_SECTION_POSITIONS[sectionId as PrdSectionId] ??
+    { x: 520, y: 580 + Math.max(1, index - 3) * 180 }
+  );
+}
+
+function artifactNodeTitle(section: { title: string; status: string }) {
+  return section.status === "active" ? `${section.title}` : section.title;
+}
+
+function mergeArtifactCanvasState(current: IdeaCanvasState, artifactStateInput: ArtifactState) {
+  const artifactState = createPrdArtifactState(normalizeArtifactState(artifactStateInput));
+  if (artifactState.mode === "none") return current;
+
+  const nodes: IdeaFlowNode[] = current.nodes.map((node) => ({ ...node, selected: false }));
+  const edges = [...current.edges];
+  const byTitle = new Map<string, IdeaFlowNode>();
+  for (const node of nodes) {
+    const key = normalizeTitleKey(node.data.title ?? "");
+    if (key) byTitle.set(key, node);
+  }
+
+  const focusTitle = artifactState.artifactTitle || "AI 学习产品 PRD";
+  const focusKey = normalizeTitleKey(focusTitle);
+  let focusNode = byTitle.get(focusKey);
+  if (!focusNode) {
+    focusNode = {
+      id: nextIdeaId("artifact-focus"),
+      type: "ideaNode",
+      position: snapCanvasPosition(ARTIFACT_FOCUS_POSITION),
+      selected: true,
+      data: {
+        title: focusTitle,
+        body: "",
+        kind: "focus",
+        width: 300,
+      },
+    };
+    nodes.push(focusNode);
+    byTitle.set(focusKey, focusNode);
+  } else {
+    nodes.splice(
+      nodes.findIndex((node) => node.id === focusNode?.id),
+      1,
+      {
+        ...focusNode,
+        selected: true,
+        position: focusNode.position,
+        data: {
+          ...focusNode.data,
+          title: focusTitle,
+          body: "",
+          kind: "focus",
+          width: focusNode.data.width ?? 300,
+        },
+      },
+    );
+  }
+
+  const existingFocus = nodes.find((node) => normalizeTitleKey(node.data.title ?? "") === focusKey) ?? focusNode;
+  const edgeExists = (source: string, target: string) =>
+    edges.some((edge) => edge.source === source && edge.target === target);
+
+  for (const [index, section] of artifactState.sections.entries()) {
+    const sectionId = section.id;
+    const title = artifactNodeTitle(section);
+    const titleKey = normalizeTitleKey(title);
+    const position = snapCanvasPosition(artifactSectionPosition(sectionId, index));
+    const body = section.body.trim();
+    const kind: IdeaNodeKind = "idea";
+    const existing = byTitle.get(titleKey);
+    let sectionNode = existing;
+
+    if (existing) {
+      const nextNode: IdeaFlowNode = {
+        ...existing,
+        position: existing.position,
+        data: {
+          ...existing.data,
+          title,
+          body,
+          kind,
+          width: existing.data.width ?? 320,
+        },
+      };
+      nodes.splice(
+        nodes.findIndex((node) => node.id === existing.id),
+        1,
+        nextNode,
+      );
+      sectionNode = nextNode;
+    } else {
+      sectionNode = {
+        id: nextIdeaId(`artifact-${sectionId}`),
+        type: "ideaNode",
+        position,
+        selected: false,
+        data: {
+          title,
+          body,
+          kind,
+          width: 320,
+        },
+      };
+      nodes.push(sectionNode);
+      byTitle.set(titleKey, sectionNode);
+    }
+  }
+
+  const artifactTitles = new Set([
+    focusKey,
+    ...artifactState.sections.map((section) => normalizeTitleKey(artifactNodeTitle(section))),
+  ]);
+  const artifactNodeIds = new Set(
+    nodes
+      .filter((node) => artifactTitles.has(normalizeTitleKey(node.data.title ?? "")))
+      .map((node) => node.id),
+  );
+
+  return {
+    nodes,
+    edges: edges.filter(
+      (edge) => !(artifactNodeIds.has(edge.source) && artifactNodeIds.has(edge.target)),
+    ),
+  };
 }
 
 function quietInsightParentPriority(kind: CanvasInsight["kind"]) {
@@ -885,6 +1061,7 @@ function Workbench() {
   const recentThoughtTurnsRef = useRef<string[]>([]);
   const listeningRef = useRef(listening);
   const agentConnectedAtRef = useRef(Date.now());
+  const lastAgentTranscriptRef = useRef<{ text: string; at: number } | null>(null);
   const isEditingRef = useRef(false);
   const injectDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendingInjectRef = useRef<string | null>(null);
@@ -1561,12 +1738,30 @@ function Workbench() {
         }
       }
 
-      return { nodes, edges };
+      const next = { nodes, edges };
+      ideaCanvasRef.current = next;
+      return next;
+    });
+  }, []);
+
+  const applyArtifactStateToCanvas = useCallback((artifactState: ArtifactState) => {
+    const normalized = normalizeArtifactState(artifactState);
+    if (normalized.mode === "none") return;
+    setIdeaCanvas((current) => {
+      const next = mergeArtifactCanvasState(current, normalized);
+      ideaCanvasRef.current = next;
+      return next;
     });
   }, []);
 
   const applyAgentCanvasOps = useCallback(
     (ops: CanvasToolOp[]) => {
+      if (normalizeArtifactState(thinkingStateRef.current.artifact_state).mode !== "none") {
+        scheduleInject(
+          "[artifact canvas ownership]\nThe artifact scaffold is owned by the turn orchestrator. Keep voice replies aligned with the active PRD section instead of writing free-form canvas cards.",
+        );
+        return;
+      }
       const looksLikeCanvasNoise = (value: string) => {
         const text = value.toLowerCase();
         return (
@@ -1637,7 +1832,7 @@ function Workbench() {
       if (normalized.length === 0) return;
       applyCanvasOps(normalized);
     },
-    [applyCanvasOps],
+    [applyCanvasOps, scheduleInject],
   );
 
   const addQuietInsightCard = useCallback(() => {
@@ -1929,7 +2124,7 @@ function Workbench() {
   );
 
   const onSegment = useCallback(
-    async (segment: TranscriptSegment) => {
+    (segment: TranscriptSegment) => {
       pipelineTracer.log({
         sessionId: segment.sessionId,
         kind: "transcript.segment",
@@ -1939,29 +2134,26 @@ function Workbench() {
           boundary: segment.boundaryReason,
         },
       });
-      try {
-        await saveSegment({
-          data: {
-            segmentId: segment.segmentId,
-            sessionId: segment.sessionId,
-            chunkIds: segment.chunkIds,
-            rawText: segment.rawText,
-            startTimeMs: segment.startTimeMs,
-            endTimeMs: segment.endTimeMs,
-            boundaryReason: segment.boundaryReason,
-          },
-        });
-      } catch (e: unknown) {
-        console.warn("persistSegment failed", e);
-      }
 
-      // Feed the long-form ThoughtTurn buffer. The slow-lane coordinator
-      // (decideBrief) runs when this buffer finalizes a turn (~1.8s pause).
       try {
         sessionStore.getOrCreate(segment.sessionId).thoughtTurnBuffer.ingest(segment);
       } catch (e) {
         console.warn("thoughtTurnBuffer.ingest failed", e);
       }
+
+      saveSegment({
+        data: {
+          segmentId: segment.segmentId,
+          sessionId: segment.sessionId,
+          chunkIds: segment.chunkIds,
+          rawText: segment.rawText,
+          startTimeMs: segment.startTimeMs,
+          endTimeMs: segment.endTimeMs,
+          boundaryReason: segment.boundaryReason,
+        },
+      }).catch((e: unknown) => {
+        console.warn("persistSegment failed", e);
+      });
     },
     [saveSegment],
   );
@@ -2244,11 +2436,37 @@ function Workbench() {
           if (e.kind === "partial") {
             setPartial(e.text);
           } else if (e.kind === "final") {
+            if (looksLikeSpeechRecognitionNoise(e.text, e.lang)) {
+              setPartial("");
+              pipelineTracer.log({
+                sessionId,
+                kind: "azure.final_chunk",
+                meta: { skipped: true, reason: "recognition_noise", lang: e.lang, sample: e.text.slice(0, 80) },
+              });
+              return;
+            }
+            const recentAgent = lastAgentTranscriptRef.current;
+            if (
+              recentAgent &&
+              Date.now() - recentAgent.at < 12_000 &&
+              looksLikeAgentEcho(e.text, recentAgent.text)
+            ) {
+              setPartial("");
+              pipelineTracer.log({
+                sessionId,
+                kind: "azure.final_chunk",
+                meta: { skipped: true, reason: "agent_echo", sample: e.text.slice(0, 80) },
+              });
+              return;
+            }
             const chunkId = crypto.randomUUID();
             setPartial("");
             setFinals((f) => [...f, { id: chunkId, text: e.text }]);
             if (captureActiveRef.current && e.text.trim()) {
               captureTextsRef.current.push(e.text.trim());
+            }
+            if (!captureActiveRef.current && e.text.trim()) {
+              setBriefThinking(true);
             }
             pipelineTracer.log({
               sessionId,
@@ -2426,6 +2644,7 @@ function Workbench() {
           onAgentTranscript: (text) => {
             const sessionId = activeSessionRef.current;
             if (!sessionId || !text) return;
+            lastAgentTranscriptRef.current = { text, at: Date.now() };
             if (typeof window !== "undefined") {
               const debugWindow = window as typeof window & {
                 __murmurRealtimeAgentReplies?: Array<{
@@ -2864,7 +3083,8 @@ function Workbench() {
       if (e.sessionId !== activeSessionRef.current) return;
       if (
         voiceModeRef.current === "canvas_capture" ||
-        voiceModeRef.current === "inline_dictation"
+        voiceModeRef.current === "inline_dictation" ||
+        voiceModeRef.current === "conversation"
       ) {
         return;
       }
@@ -2889,18 +3109,15 @@ function Workbench() {
 
   useEffect(() => {
     if (!activeSessionId) return;
-    if (MANUAL_CANVAS_CAPTURE) return;
     const slot = sessionStore.getOrCreate(activeSessionId);
     const offTurn = slot.bus.on("thought_turn.finalized", (e) => {
       if (e.sessionId !== activeSessionRef.current) return;
       if (coThinkingTurnIdsRef.current.has(e.turnId)) return;
 
       const text = e.thoughtTurn.combinedText.trim();
+      if (/^agent\s*:/i.test(text)) return;
       if (text.length < 16) return;
 
-      const now = Date.now();
-      if (now - lastAutoMapAtRef.current < 5000) return;
-      lastAutoMapAtRef.current = now;
       coThinkingTurnIdsRef.current.add(e.turnId);
 
       const briefText = briefDocToPlainText(docRef.current).slice(0, 6000);
@@ -2933,15 +3150,21 @@ function Workbench() {
           if (briefOps.length > 0) {
             applyProposedPatches(e.sessionId, operationId, briefOps);
           }
+          const shouldRenderArtifact = contract.artifactState.mode !== "none";
+          if (shouldRenderArtifact) {
+            applyArtifactStateToCanvas(contract.artifactState);
+          }
           if (contract.canvasOps.length > 0) {
             applyCanvasOps(contract.canvasOps);
           }
 
           const voiceContext = [
+            `Interaction mode: ${contract.interactionMode}`,
             `Intent: ${contract.intent}`,
             `Update kind: ${contract.updateKind}`,
             `Mode: ${contract.replyMode}`,
             `Thinking state:\n${formatThinkingState(contract.thinkingState)}`,
+            contract.artifactState.mode !== "none" ? "Artifact mode is active. The orchestrator owns canvas artifact updates; realtime voice should guide the active section, not write free-form cards." : "",
             contract.nextDirections.length ? "Next directions:" : "",
             ...contract.nextDirections.map(
               (d, i) => `${i + 1}. ${d.title}${d.why ? ` - ${d.why}` : ""}`,
@@ -2959,7 +3182,7 @@ function Workbench() {
     });
 
     return () => offTurn();
-  }, [activeSessionId, applyCanvasOps, applyProposedPatches, planContract, scheduleInject]);
+  }, [activeSessionId, applyArtifactStateToCanvas, applyCanvasOps, applyProposedPatches, planContract, scheduleInject]);
 
   const blockCount = Object.keys(doc).length;
   const activeSession = sessions.find((s) => s.id === activeSessionId);

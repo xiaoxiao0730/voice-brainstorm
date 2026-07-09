@@ -26,7 +26,7 @@ import { pipelineTracer } from "@/lib/debug/pipelineTracer";
 export const THOUGHT_TURN_CONSTANTS = {
   MAX_SEGMENTS: 2,
   HARD_LIMIT_MS: 60_000,
-  SEMANTIC_PAUSE_MS: 1_200,
+  SEMANTIC_PAUSE_MS: 500,
   MAX_GAP_MS: 8_000,
 };
 

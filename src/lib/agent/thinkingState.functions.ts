@@ -4,6 +4,12 @@ import { z } from "zod";
 
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
 import { createOpenAIProvider, normalizeAiModel, requireOpenAIKey } from "@/lib/ai-gateway.server";
+import {
+  EMPTY_ARTIFACT_STATE,
+  ArtifactStateSchema,
+  formatArtifactState,
+  normalizeArtifactState,
+} from "@/lib/agent/artifactState";
 
 const ThinkingStateSchema = z.object({
   current_goal: z.string().max(500).default(""),
@@ -13,6 +19,7 @@ const ThinkingStateSchema = z.object({
   promising_directions: z.array(z.string().max(240)).max(8).default([]),
   decision_points: z.array(z.string().max(240)).max(8).default([]),
   last_turn_id: z.string().max(120).nullable().default(null),
+  artifact_state: ArtifactStateSchema.default(EMPTY_ARTIFACT_STATE),
 });
 
 export type SessionThinkingState = z.infer<typeof ThinkingStateSchema>;
@@ -25,6 +32,7 @@ const EMPTY_STATE: SessionThinkingState = {
   promising_directions: [],
   decision_points: [],
   last_turn_id: null,
+  artifact_state: EMPTY_ARTIFACT_STATE,
 };
 
 const UpdateInputSchema = z.object({
@@ -59,7 +67,11 @@ RULES
 
 function normalizeState(input: unknown): SessionThinkingState {
   const parsed = ThinkingStateSchema.safeParse(input);
-  return parsed.success ? parsed.data : EMPTY_STATE;
+  if (!parsed.success) return EMPTY_STATE;
+  return {
+    ...parsed.data,
+    artifact_state: normalizeArtifactState(parsed.data.artifact_state),
+  };
 }
 
 export function formatThinkingState(state: SessionThinkingState): string {
@@ -76,6 +88,8 @@ export function formatThinkingState(state: SessionThinkingState): string {
     list(s.promising_directions),
     "decision_points:",
     list(s.decision_points),
+    "artifact_state:",
+    formatArtifactState(s.artifact_state),
   ].join("\n");
 }
 
@@ -99,6 +113,7 @@ export const loadThinkingState = createServerFn({ method: "GET" })
       promising_directions: r.promising_directions ?? [],
       decision_points: r.decision_points ?? [],
       last_turn_id: r.last_turn_id ?? null,
+      artifact_state: r.artifact_state ?? EMPTY_ARTIFACT_STATE,
     });
   });
 
@@ -147,6 +162,7 @@ Return the updated session thinking state.`;
       promising_directions: nextState.promising_directions,
       decision_points: nextState.decision_points,
       last_turn_id: data.turnId,
+      artifact_state: nextState.artifact_state,
     });
     if (error) throw new Error(error.message);
 

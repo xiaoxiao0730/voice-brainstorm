@@ -5,7 +5,7 @@ import type { BoundaryReason, TranscriptChunk, TranscriptSegment } from "./types
 const EN_WORD_LIMIT = 150;
 const CN_CHAR_LIMIT = 240;
 const TIME_LIMIT_MS = 30_000;
-const SILENCE_MS = 5_000;
+const SILENCE_MS = 700;
 
 function isCjk(text: string): boolean {
   // Quick heuristic: >30% CJK chars means treat as CJK.
