@@ -352,7 +352,7 @@ Operation rules:
 - add_edge: use includes for parent/child hierarchy, contradicts for tension, leads_to for causal/next-step flow.
 - set_focus: use when the latest segment makes one node the current center of attention.
 - update_control: use for goal, unresolvedQuestionIds, artifactProgress, or other control fields.
-- set_stage: explore for messy ideation, clarify for defining terms/users/needs, analyze for tradeoffs/causes, decide for convergence, draft for producing an artifact.
+- set_stage: explore for messy ideation, analyze for tradeoffs/causes, decide for convergence, draft for producing or filling an artifact. Keep clarify only as a backward-compatible label for defining terms/users/needs when no artifact section is being developed.
 
 Quality rules:
 - Prefer 1-4 meaningful ops per turn.
@@ -360,6 +360,11 @@ Quality rules:
 - If the current focus node is an agent-created placeholder or section node with empty/weak content, fill it with update_node instead of adding a parallel node.
 - If the user explicitly corrects or replaces a prior claim, update the existing node. Do not add a second competing node unless the user is comparing both options.
 - If the user jumps to a different artifact section or idea type, follow the user's attention. Create/update the relevant node and set_focus to it.
+- If the user does not explicitly change focus, treat the current focus as sticky. Attach refinements, details, examples, evidence, and constraints under the current focus or update the current focus instead of creating a new top-level node.
+- When an artifact scaffold or section focus already exists, interpret continued user content as developing that structure. Prefer update_node or child nodes under the active focus; do not set clarify merely because more details are needed.
+- In artifact development, use draft when the user is filling/producing the artifact, analyze when the user introduces tensions/risks/causes, and decide when the user commits to a choice.
+- Change focus only when the user clearly switches topic, introduces a new artifact area, asks to park the current topic, corrects/replaces the current goal, or gives a new branch that should be discussed independently.
+- When adding a node while focus remains the same, prefer an includes edge from the current focus or its nearest suitable parent to the new node.
 - If a focus node now has enough who + pain / claim + evidence / mechanism + purpose, treat it as saturated and move focus along the most relevant leads_to edge when one exists.
 - Filter speech filler, hesitation, and irrelevant side comments. Do not write them into nodes.
 - Node content must be semantic compression, not transcript copying. Use one concise claim, ideally under 18 Chinese characters or 8 English words.
@@ -383,13 +388,14 @@ Good ops:
 - add_node question how_to_enable_understanding: 如何让学生真正理解？
 - add_edge answer_to_understanding leads_to how_to_enable_understanding
 - set_focus how_to_enable_understanding
-- update_control unresolvedQuestionIds=["students_do_not_learn","how_to_enable_understanding"], interactionStage="clarify"
+- update_control unresolvedQuestionIds=["students_do_not_learn","how_to_enable_understanding"], interactionStage="draft"
 Bad ops:
 - add_node with the full user sentence as content.
 - duplicate node with the same meaning as students_do_not_learn.
 
 Section/focus examples:
 - If current focus is sec_1 with empty content and the user gives target-user details, update sec_1, then move focus to sec_2 if sec_1 now has a clear subject and pain.
+- If current focus is an artifact section and the user adds examples/details, update that section or add child nodes under it; keep the stage as draft unless the user is analyzing a tension or making a decision.
 - If the user says "目标用户先放放" and gives a feature idea, create/update a feature/mechanism node and set_focus there.
 - If the user says "不对" or "我仔细想了下", update the relevant prior node instead of adding a duplicate.
 - If the user says there is a conflict/risk, represent both the positive direction and risk, then add a contradicts edge.

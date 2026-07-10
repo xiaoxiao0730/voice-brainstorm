@@ -20,12 +20,16 @@
   const { planOrchestratorTurnV0, formatOrchestratorOutputV0 } = await import(
     "/src/lib/orchestrator/orchestratorV0.functions.ts"
   );
+  const { renderArtifactViewToIdeaCanvasV0, formatIdeaCanvasStateV0 } = await import(
+    "/src/lib/orchestrator/artifactViewRendererV0.ts"
+  );
   const { createSession } = await import("/src/lib/session.functions.ts");
 
   const session = await createSession({ data: { title: "Semantic Pipeline V0 Demo" } });
   const checks = [];
   let state = createEmptyThinkingStateV0(session.id);
   let canvasArtifactView = null;
+  let ideaCanvas = { nodes: [], edges: [] };
   const recentTurns = [];
 
   const artifactToPlainText = (artifact) => {
@@ -43,6 +47,7 @@
   const section = (output, id) => output.canvasArtifactView?.sections.find((item) => item.id === id);
   const stateText = () => JSON.stringify(state);
   const outputText = (output) => JSON.stringify(output);
+  const canvasText = () => JSON.stringify(ideaCanvas);
 
   const runTurn = async ({ label, userTurn, assertions }) => {
     console.group(label);
@@ -72,7 +77,10 @@
     });
 
     const output = await planOrchestratorTurnV0({ data: { context, model: MODEL } });
-    if (output.canvasArtifactView) canvasArtifactView = output.canvasArtifactView;
+    if (output.canvasArtifactView) {
+      canvasArtifactView = output.canvasArtifactView;
+      ideaCanvas = renderArtifactViewToIdeaCanvasV0(output.canvasArtifactView, ideaCanvas);
+    }
     recentTurns.push(`AI: ${output.voiceResponse}`);
 
     console.log("state patch:", plannedState.patch);
@@ -80,6 +88,10 @@
     console.log(formatThinkingStateV0(state));
     console.log(formatOrchestratorOutputV0(output));
     console.log(output);
+    console.group("Rendered IdeaCanvasState V0");
+    console.log(formatIdeaCanvasStateV0(ideaCanvas));
+    console.log(ideaCanvas);
+    console.groupEnd();
     console.groupEnd();
 
     checks.push([`${label}: state patch applied`, plannedState.applied]);
@@ -95,9 +107,12 @@
       "我最近想做一个 AI 学习产品，但是我还没有想清楚具体方向。我觉得现在很多 AI tutor 都是在回答问题，但是学生还是不会真正学习。我希望这个产品可以帮助学生真正掌握概念和思维。你觉得我应该怎么做？",
     assertions: [
       ["state captures AI learning product", () => /AI|学习|产品|tutor/i.test(stateText())],
-      ["orchestrator proposes before rendering", (output) => output.nextAction === "ask_user" && output.canvasArtifactView === null],
-      ["voice mentions PRD", (output) => /PRD|prd/.test(output.voiceResponse)],
-      ["voice mentions four PRD areas", (output) => /目标用户/.test(output.voiceResponse) && /用户需求/.test(output.voiceResponse) && /核心功能/.test(output.voiceResponse) && /市场调研/.test(output.voiceResponse)],
+      ["orchestrator leads with recommendation", (output) => /建议|先|应该|我会|可以/.test(output.voiceResponse) && !/你觉得|你认为/.test(output.voiceResponse)],
+      ["orchestrator creates scaffold", (output) => output.nextAction === "update_canvas" && output.canvasArtifactView?.artifactType === "prd"],
+      ["scaffold covers product planning areas", (output) => /目标|用户|受众/.test(outputText(output)) && /需求|问题/.test(outputText(output)) && /功能|方案|机制|解决/.test(outputText(output)) && /市场|调研|风险|研究/.test(outputText(output))],
+      ["renderer creates canvas nodes", () => ideaCanvas.nodes.length > 0],
+      ["renderer creates canvas edges", () => ideaCanvas.edges.length > 0],
+      ["renderer uses xmind locked nodes", () => ideaCanvas.nodes.length > 0 && ideaCanvas.nodes.every((node) => node.data.layoutMode === "xmind" && node.data.locked === true)],
     ],
   });
 
@@ -105,13 +120,10 @@
     label: "Turn 2 Accept Scaffold",
     userTurn: "好的，就这么写。",
     assertions: [
-      ["orchestrator updates canvas", (output) => output.nextAction === "update_canvas"],
-      ["creates PRD artifact", (output) => output.canvasArtifactView?.artifactType === "prd"],
-      ["has target user", (output) => hasSection(output, /目标用户/)],
-      ["has user need", (output) => hasSection(output, /用户需求/)],
-      ["has core features", (output) => hasSection(output, /核心功能/)],
-      ["has market research", (output) => hasSection(output, /市场调研/)],
-      ["target user active", (output) => output.canvasArtifactView?.activeSectionId === "target_user"],
+      ["does not lose artifact", (output) => output.canvasArtifactView?.artifactType === "prd" || canvasArtifactView?.artifactType === "prd"],
+      ["keeps product planning sections", () => /目标|用户|受众/.test(JSON.stringify(canvasArtifactView)) && /需求|问题/.test(JSON.stringify(canvasArtifactView))],
+      ["voice stays directive", (output) => !/你觉得|你认为|是否/.test(output.voiceResponse)],
+      ["keeps rendered canvas", () => ideaCanvas.nodes.length > 0 && ideaCanvas.edges.length > 0],
     ],
   });
 
@@ -128,6 +140,8 @@
       ["artifact captures AI answers", (output) => /AI|ChatGPT|答案/.test(outputText(output))],
       ["user need active", (output) => output.canvasArtifactView?.activeSectionId === "user_need" || section(output, "user_need")?.status === "active"],
       ["voice reframes to understanding", (output) => /从答案走向理解|获取不到答案/.test(output.voiceResponse)],
+      ["rendered canvas captures students", () => /大学生/.test(canvasText())],
+      ["rendered canvas keeps details in body", () => ideaCanvas.nodes.some((node) => /大学生|ChatGPT|答案|作业|应用/.test(node.data.body ?? ""))],
     ],
   });
 

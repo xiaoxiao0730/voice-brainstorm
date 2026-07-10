@@ -18,12 +18,23 @@
         id: "target_user",
         heading: "目标用户",
         bullets: ["大学生，已经使用 AI / ChatGPT 获取答案。"],
+        children: [],
         sourceNodeIds: ["target_students"],
         status: "active",
       },
-      { id: "user_need", heading: "用户需求", bullets: [], sourceNodeIds: [], status: "empty" },
-      { id: "core_features", heading: "核心功能", bullets: [], sourceNodeIds: [], status: "empty" },
-      { id: "market_research", heading: "市场调研", bullets: [], sourceNodeIds: [], status: "empty" },
+      {
+        id: "user_need",
+        heading: "用户需求",
+        bullets: [],
+        children: [
+          { id: "understand_concepts", heading: "理解新概念", bullets: [], sourceNodeIds: [], status: "empty" },
+          { id: "apply_practice", heading: "练习和应用", bullets: [], sourceNodeIds: [], status: "empty" },
+        ],
+        sourceNodeIds: [],
+        status: "empty",
+      },
+      { id: "core_features", heading: "核心功能", bullets: [], children: [], sourceNodeIds: [], status: "empty" },
+      { id: "market_research", heading: "市场调研", bullets: [], children: [], sourceNodeIds: [], status: "empty" },
     ],
   };
 
@@ -36,7 +47,8 @@
   const nodeText = (canvas) => JSON.stringify(canvas.nodes.map((node) => node.data));
   checks.push(["creates focus node", first.nodes.some((node) => node.data.kind === "focus" && node.data.title === "AI 学习助手")]);
   checks.push(["creates four section nodes", first.nodes.filter((node) => /目标用户|用户需求|核心功能|市场调研/.test(node.data.title)).length === 4]);
-  checks.push(["renders bullet node", first.nodes.some((node) => /ChatGPT/.test(node.data.title))]);
+  checks.push(["keeps detail bullet in card body", first.nodes.some((node) => node.data.title === "目标用户" && /ChatGPT/.test(node.data.body ?? ""))]);
+  checks.push(["renders children as nodes", first.nodes.some((node) => node.data.title === "理解新概念") && first.nodes.some((node) => node.data.title === "练习和应用")]);
   checks.push(["active section selected", first.nodes.some((node) => node.selected && node.data.title === "目标用户")]);
   checks.push(["focus connects to sections", first.edges.filter((edge) => edge.source.includes("focus")).length === 4]);
   checks.push(["no dangling edges", first.edges.every((edge) => first.nodes.some((node) => node.id === edge.source) && first.nodes.some((node) => node.id === edge.target))]);
@@ -62,7 +74,7 @@
   console.groupEnd();
 
   checks.push(["updates without duplicating focus", updated.nodes.filter((node) => node.data.title === "AI 学习助手").length === 1]);
-  checks.push(["updates user need bullet node", updated.nodes.some((node) => /从答案走向理解/.test(node.data.title))]);
+  checks.push(["updates user need card body", updated.nodes.some((node) => node.data.title === "用户需求" && /从答案走向理解/.test(node.data.body ?? ""))]);
   checks.push(["moves active selection", updated.nodes.some((node) => node.selected && node.data.title === "用户需求")]);
   checks.push(["keeps focus-section edges", updated.edges.filter((edge) => edge.source.includes("focus")).length === 4]);
 

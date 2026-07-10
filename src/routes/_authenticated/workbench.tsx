@@ -89,9 +89,21 @@ import { exportExplorationBrief } from "@/lib/orchestrator/exportExplorationBrie
 import { cleanVoiceCapture } from "@/lib/orchestrator/cleanVoiceCapture.functions";
 import {
   formatThinkingState,
+  createEmptyThinkingStateV0,
+  formatThinkingStateV0,
   loadThinkingState,
+  planThinkingStatePatchV0,
   type SessionThinkingState,
+  type ThinkingStateV0,
 } from "@/lib/agent/thinkingState.functions";
+import { buildOrchestratorContextV0 } from "@/lib/orchestrator/orchestratorContextV0.functions";
+import {
+  formatOrchestratorOutputV0,
+  planOrchestratorTurnV0,
+  type CanvasArtifactViewV0,
+  type OrchestratorOutputV0,
+} from "@/lib/orchestrator/orchestratorV0.functions";
+import { renderArtifactViewToIdeaCanvasV0 } from "@/lib/orchestrator/artifactViewRendererV0";
 import {
   EMPTY_ARTIFACT_STATE,
   createPrdArtifactState,
@@ -266,6 +278,7 @@ function summarizeResearchBody(text: string, max = 220) {
 
 const BRIEF_NODE_PREFIX = "brief-block-";
 const MANUAL_CANVAS_CAPTURE = true;
+const USE_SEMANTIC_PIPELINE_V0 = true;
 
 function mergeBriefIntoCanvas(doc: BriefDoc, canvas: IdeaCanvasState): IdeaCanvasState {
   if (MANUAL_CANVAS_CAPTURE) {
@@ -953,6 +966,8 @@ function Workbench() {
   const loadCanvas = useServerFn(loadIdeaCanvas);
   const saveCanvas = useServerFn(saveIdeaCanvas);
   const planContract = useServerFn(planThoughtTurnContract);
+  const planThinkingPatchV0 = useServerFn(planThinkingStatePatchV0);
+  const planOrchestratorV0 = useServerFn(planOrchestratorTurnV0);
   const structureCanvasCapture = useServerFn(structureVoiceToCanvas);
   const generateQuietInsight = useServerFn(generateCanvasInsight);
   const buildExplorationBrief = useServerFn(exportExplorationBrief);
@@ -1050,6 +1065,8 @@ function Workbench() {
   const docRef = useRef(doc);
   const ideaCanvasRef = useRef(ideaCanvas);
   const thinkingStateRef = useRef<SessionThinkingState>(EMPTY_THINKING_STATE);
+  const thinkingStateV0Ref = useRef<ThinkingStateV0 | null>(null);
+  const artifactViewV0Ref = useRef<CanvasArtifactViewV0 | null>(null);
   const uploadedContextNoteRef = useRef("");
   const activeSessionRef = useRef(activeSessionId);
 
@@ -1059,12 +1076,15 @@ function Workbench() {
   const policyRef = useRef(createPolicyEngine(null));
   const recentTextsRef = useRef<string[]>([]);
   const recentThoughtTurnsRef = useRef<string[]>([]);
+  const recentSemanticTurnsV0Ref = useRef<string[]>([]);
+  const lastOrchestratorOutputV0Ref = useRef<OrchestratorOutputV0 | null>(null);
   const listeningRef = useRef(listening);
   const agentConnectedAtRef = useRef(Date.now());
   const lastAgentTranscriptRef = useRef<{ text: string; at: number } | null>(null);
   const isEditingRef = useRef(false);
   const injectDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendingInjectRef = useRef<string | null>(null);
+  const semanticPipelineV0QueueRef = useRef<Promise<void>>(Promise.resolve());
   const captureAnchorRef = useRef<{ x: number; y: number } | null>(null);
   const captureTextsRef = useRef<string[]>([]);
   const captureActiveRef = useRef(false);
@@ -1075,6 +1095,7 @@ function Workbench() {
   const loadedIdeaCanvasSessionRef = useRef<string | null>(null);
   const ideaCanvasSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastPersistedIdeaCanvasRef = useRef<IdeaCanvasState>({ nodes: [], edges: [] });
+  const uploadedContextFilesRef = useRef<SessionContextFile[]>([]);
   const openSessionSeqRef = useRef(0);
   const pendingBriefWritesRef = useRef<Set<Promise<unknown>>>(new Set());
   const lastAutoMapAtRef = useRef(0);
@@ -1099,6 +1120,9 @@ function Workbench() {
     uploadedContextNoteRef.current = uploadedContextNote;
   }, [uploadedContextNote]);
   useEffect(() => {
+    uploadedContextFilesRef.current = uploadedContextFiles;
+  }, [uploadedContextFiles]);
+  useEffect(() => {
     thinkingStateRef.current = thinkingState;
   }, [thinkingState]);
   useEffect(() => {
@@ -1106,7 +1130,11 @@ function Workbench() {
     policyRef.current = createPolicyEngine(activeSessionId);
     recentTextsRef.current = [];
     recentThoughtTurnsRef.current = [];
+    recentSemanticTurnsV0Ref.current = [];
+    lastOrchestratorOutputV0Ref.current = null;
     coThinkingTurnIdsRef.current.clear();
+    thinkingStateV0Ref.current = activeSessionId ? createEmptyThinkingStateV0(activeSessionId) : null;
+    artifactViewV0Ref.current = null;
     lastAutoMapAtRef.current = 0;
     captureAnchorRef.current = null;
     captureTextsRef.current = [];
@@ -1151,6 +1179,12 @@ function Workbench() {
       },
       transcript: finals.map((item) => item.text),
       realtimeAgentReplies,
+      semanticPipelineV0: {
+        enabled: USE_SEMANTIC_PIPELINE_V0,
+        thinkingState: thinkingStateV0Ref.current,
+        artifactView: artifactViewV0Ref.current,
+        lastOutput: lastOrchestratorOutputV0Ref.current,
+      },
       contextFiles: uploadedContextFiles,
       uploadedContextReady: contextFileStatus.ready,
       uploadedContextLabel: contextFileStatus.label,
@@ -3073,11 +3107,127 @@ function Workbench() {
       });
   }, [genMindMap, briefPlainText, liveText]);
 
-  // Per-turn: the Thought Turn Contract is the main co-thinking orchestrator.
-  // One model call decides state, brief ops, canvas ops, next directions, and a
-  // grounding hint for the realtime voice agent.
+  // Semantic Pipeline V0 is the formal UI chain:
+  // user turn -> ThinkingStateV0 -> OrchestratorV0 -> ArtifactViewV0 -> Canvas.
+  useEffect(() => {
+    if (!activeSessionId || !USE_SEMANTIC_PIPELINE_V0) return;
+    const slot = sessionStore.getOrCreate(activeSessionId);
+    const offTurn = slot.bus.on("thought_turn.finalized", (e) => {
+      if (e.sessionId !== activeSessionRef.current) return;
+      if (voiceModeRef.current === "canvas_capture" || voiceModeRef.current === "inline_dictation") return;
+
+      const text = e.thoughtTurn.combinedText.trim();
+      if (/^agent\s*:/i.test(text)) return;
+      if (text.length < 8) return;
+
+      const run = async () => {
+        const currentSessionId = activeSessionRef.current;
+        if (!currentSessionId || e.sessionId !== currentSessionId) return;
+        const currentState = thinkingStateV0Ref.current ?? createEmptyThinkingStateV0(e.sessionId);
+        const recentTurns = recentSemanticTurnsV0Ref.current.slice(-8);
+
+        setBriefThinking(true);
+        try {
+          const plannedState = await planThinkingPatchV0({
+            data: {
+              sessionId: e.sessionId,
+              turnId: e.turnId,
+              thoughtSegment: text,
+              currentState,
+              model: modelRef.current,
+            },
+          });
+          if (e.sessionId !== activeSessionRef.current) return;
+
+          thinkingStateV0Ref.current = plannedState.nextState;
+          recentSemanticTurnsV0Ref.current = [...recentTurns, `User: ${text}`].slice(-8);
+
+          const canvasBefore = ideaCanvasRef.current;
+          const context = buildOrchestratorContextV0({
+            thinkingState: plannedState.nextState,
+            recentTurns: recentSemanticTurnsV0Ref.current,
+            uploadedContext: uploadedContextFilesRef.current.map((file, index) => ({
+              id: `${index + 1}`,
+              title: file.name,
+              summary: file.summary,
+              sourceType: "file" as const,
+              relevantSnippets: [],
+            })),
+            canvasSnapshot: {
+              plainText: ideaCanvasToPlainText(canvasBefore),
+              nodes: canvasBefore.nodes.map((node) => ({
+                id: node.id,
+                title: node.data.title ?? "",
+                body: node.data.body ?? "",
+                kind: node.data.kind ?? "idea",
+                selected: Boolean(node.selected),
+              })),
+              edges: canvasBefore.edges.map((edge) => ({
+                source: edge.source,
+                target: edge.target,
+                label: String(edge.label ?? ""),
+              })),
+            },
+          });
+
+          const output = await planOrchestratorV0({ data: { context, model: modelRef.current } });
+          if (e.sessionId !== activeSessionRef.current) return;
+
+          lastOrchestratorOutputV0Ref.current = output;
+          recentSemanticTurnsV0Ref.current = [
+            ...recentSemanticTurnsV0Ref.current,
+            `AI: ${output.voiceResponse}`,
+          ].slice(-8);
+
+          if (output.canvasArtifactView) {
+            artifactViewV0Ref.current = output.canvasArtifactView;
+            const nextCanvas = renderArtifactViewToIdeaCanvasV0(
+              output.canvasArtifactView,
+              ideaCanvasRef.current,
+            );
+            ideaCanvasRef.current = nextCanvas;
+            setIdeaCanvas(nextCanvas);
+          }
+
+          const contextNote = [
+            `Latest user turn: ${text}`,
+            `Voice response: ${output.voiceResponse}`,
+            `Next action: ${output.nextAction}`,
+            output.canvasArtifactView
+              ? `Canvas artifact: ${output.canvasArtifactView.title}; active section: ${output.canvasArtifactView.activeSectionId ?? "none"}`
+              : "Canvas artifact: unchanged",
+          ].join("\n");
+          scheduleInject(`[semantic pipeline v0]\n${contextNote}`);
+
+          console.log("[semanticPipelineV0]", {
+            statePatch: plannedState.patch,
+            stateDiagnostics: plannedState.diagnostics,
+            state: formatThinkingStateV0(plannedState.nextState),
+            output: formatOrchestratorOutputV0(output),
+            canvas: output.canvasArtifactView,
+          });
+        } catch (err) {
+          console.warn("[semanticPipelineV0] failed", err);
+          setError(errorMessage(err, "Semantic pipeline failed"));
+        } finally {
+          if (e.sessionId === activeSessionRef.current) setBriefThinking(false);
+        }
+      };
+
+      semanticPipelineV0QueueRef.current = semanticPipelineV0QueueRef.current
+        .catch(() => undefined)
+        .then(run);
+      void semanticPipelineV0QueueRef.current;
+    });
+
+    return () => offTurn();
+  }, [activeSessionId, planOrchestratorV0, planThinkingPatchV0, scheduleInject]);
+
+  // Per-turn: the Thought Turn Contract was the previous co-thinking orchestrator.
+  // V0 owns the formal UI chain when enabled.
   useEffect(() => {
     if (!activeSessionId) return;
+    if (USE_SEMANTIC_PIPELINE_V0) return;
     const slot = sessionStore.getOrCreate(activeSessionId);
     const offTurn = slot.bus.on("thought_turn.finalized", (e) => {
       if (e.sessionId !== activeSessionRef.current) return;
@@ -3109,6 +3259,7 @@ function Workbench() {
 
   useEffect(() => {
     if (!activeSessionId) return;
+    if (USE_SEMANTIC_PIPELINE_V0) return;
     const slot = sessionStore.getOrCreate(activeSessionId);
     const offTurn = slot.bus.on("thought_turn.finalized", (e) => {
       if (e.sessionId !== activeSessionRef.current) return;
@@ -3211,7 +3362,12 @@ function Workbench() {
     if (mapLoading) {
       items.push({ id: "map", text: "AI is weaving your thoughts into the canvas..." });
     } else if (briefThinking) {
-      items.push({ id: "brief", text: "AI is structuring the latest thought..." });
+      items.push({
+        id: "brief",
+        text: USE_SEMANTIC_PIPELINE_V0
+          ? "Semantic pipeline is updating the canvas..."
+          : "AI is structuring the latest thought...",
+      });
     }
     if (aiLoading) {
       items.push({ id: "write", text: "AI is writing to the canvas..." });

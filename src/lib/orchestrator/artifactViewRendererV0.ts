@@ -43,6 +43,14 @@ function sectionKind(status: "empty" | "active" | "filled"): IdeaNodeKind {
   return "idea";
 }
 
+function bodyFromBullets(bullets: string[]) {
+  return bullets
+    .map((bullet) => clean(bullet.replace(/^[-•]\s*/, "")))
+    .filter(Boolean)
+    .map((bullet) => `- ${bullet}`)
+    .join("\n");
+}
+
 function splitSides(count: number) {
   return Array.from({ length: count }, (_, index) => {
     if (count === 1) return 1;
@@ -189,7 +197,7 @@ export function renderArtifactViewToIdeaCanvasV0(
       nodes,
       id: artifactNodeId(`section-${slug(section.id || section.heading, `section-${index + 1}`)}`),
       title: section.heading,
-      body: "",
+      body: bodyFromBullets(section.bullets),
       kind: sectionKind(isActive ? "active" : section.status),
       position,
       width: SECTION_SIZE.width,
@@ -200,18 +208,20 @@ export function renderArtifactViewToIdeaCanvasV0(
     artifactNodeIds.add(sectionNode.id);
     artifactEdges.push(makeArtifactEdge(focusNode.id, sectionNode.id, branchColor));
 
-    const bullets = section.bullets.map((bullet) => clean(bullet.replace(/^[-•]\s*/, ""))).filter(Boolean).slice(0, 6);
-    for (const [bulletIndex, bullet] of bullets.entries()) {
+    const children = (section.children ?? []).slice(0, 8);
+    for (const [childIndex, child] of children.entries()) {
+      const childTitle = clean(child.heading);
+      if (!childTitle) continue;
       const bulletNode = updateOrCreateNode({
         nodes,
-        id: artifactNodeId(`bullet-${slug(section.id || section.heading, `section-${index + 1}`)}-${bulletIndex + 1}`),
-        title: bullet,
-        body: "",
-        kind: "idea",
-        position: bulletPosition(position, index, bulletIndex, bullets.length, artifact.sections.length),
+        id: artifactNodeId(`child-${slug(section.id || section.heading, `section-${index + 1}`)}-${slug(child.id || child.heading, `${childIndex + 1}`)}`),
+        title: childTitle,
+        body: bodyFromBullets(child.bullets),
+        kind: sectionKind(child.status),
+        position: bulletPosition(position, index, childIndex, children.length, artifact.sections.length),
         width: BULLET_SIZE.width,
         height: BULLET_SIZE.height,
-        selected: false,
+        selected: child.status === "active" || child.id === artifact.activeSectionId,
         branchColor,
       });
       artifactNodeIds.add(bulletNode.id);
