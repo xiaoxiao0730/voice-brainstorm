@@ -30,6 +30,9 @@ export type IdeaNodeData = {
   title: string;
   body?: string;
   kind: IdeaNodeKind;
+  layoutMode?: "free" | "xmind";
+  locked?: boolean;
+  branchColor?: string;
   width?: number;
   height?: number;
   textSize?: IdeaTextSize;
@@ -91,6 +94,8 @@ type BoardEdgePath = {
   d: string;
   handleX: number;
   handleY: number;
+  locked?: boolean;
+  color?: string;
 };
 
 type DragState = {
@@ -264,6 +269,37 @@ function IdeaCard({
   ) => void;
 }) {
   const style = KIND_STYLE[data.kind] ?? KIND_STYLE.idea;
+  const isXMind = data.layoutMode === "xmind";
+  const branchColor = data.branchColor || style.accent;
+  if (isXMind) {
+    return (
+      <div
+        className="flex h-full flex-col justify-center overflow-hidden rounded-lg border bg-white px-4 py-2 text-center shadow-sm"
+        style={{
+          borderColor: `${branchColor}28`,
+          background: data.kind === "focus" ? "#ffffff" : `${branchColor}24`,
+          boxShadow: data.kind === "focus" ? "0 10px 24px rgba(20, 24, 31, 0.08)" : "none",
+        }}
+      >
+        <input
+          className={`w-full bg-transparent text-center text-primary outline-none ${
+            data.kind === "focus" ? "text-2xl font-semibold" : "text-sm font-medium"
+          }`}
+          value={data.title}
+          onChange={(e) => onChange(id, { title: e.target.value })}
+          placeholder="Untitled"
+        />
+        {data.body ? (
+          <textarea
+            className="mt-1 min-h-0 flex-1 resize-none bg-transparent text-center text-xs leading-snug text-secondary outline-none"
+            value={data.body ?? ""}
+            onChange={(e) => onChange(id, { body: e.target.value })}
+            placeholder=""
+          />
+        ) : null}
+      </div>
+    );
+  }
   return (
     <div
       className="group flex h-full cursor-grab flex-col rounded-sm border bg-white shadow-sm transition hover:-translate-y-px hover:shadow-md active:cursor-grabbing"
@@ -562,6 +598,7 @@ export function IdeaCanvas({
   const beginDrag = useCallback((event: PointerEvent<HTMLDivElement>, node: IdeaFlowNode) => {
     const target = event.target as HTMLElement;
     if (target.closest("input, textarea, select, button")) return;
+    if (node.data.locked || node.data.layoutMode === "xmind") return;
 
     event.currentTarget.setPointerCapture(event.pointerId);
     dragRef.current = {
@@ -673,8 +710,9 @@ export function IdeaCanvas({
         const baseBusX = (sx + tx) / 2;
         const busX = baseBusX + (edgeOffsets[edge.id] ?? 0);
         const { d, handleX, handleY } = orthogonalPath(sx, sMidY, tx, tMidY, busX);
+        const data = edge.data as { locked?: boolean; branchColor?: string } | undefined;
 
-        return [{ id: edge.id, d, handleX, handleY }];
+        return [{ id: edge.id, d, handleX, handleY, locked: Boolean(data?.locked), color: data?.branchColor }];
       });
       setEdgePaths(nextPaths);
     };
@@ -738,15 +776,15 @@ export function IdeaCanvas({
                     <path
                       d={path.d}
                       fill="none"
-                      stroke="#9da3a8"
+                      stroke={path.color || "#9da3a8"}
                       strokeLinecap="round"
                       strokeWidth="2"
-                      opacity="0.48"
+                      opacity={path.locked ? "0.74" : "0.48"}
                     />
                   </g>
                 ))}
               </svg>
-              {edgePaths.map((path) => (
+              {edgePaths.filter((path) => !path.locked).map((path) => (
                 <div
                   key={`handle-${path.id}`}
                   className="group/handle absolute z-20 h-4 w-4 -translate-x-1/2 -translate-y-1/2 cursor-ew-resize rounded-full border border-white bg-[#9da3a8]/60 opacity-0 transition-opacity hover:bg-sky-500 hover:opacity-100"
@@ -778,14 +816,16 @@ export function IdeaCanvas({
                     onPointerCancel={endDrag}
                   >
                     <IdeaCard id={node.id} data={node.data} onChange={updateNodeData} />
-                    <button
-                      type="button"
-                      onPointerDown={(event) => beginResize(event, node)}
-                      className="absolute bottom-1 right-1 h-4 w-4 cursor-nwse-resize rounded-sm opacity-0 transition-opacity hover:bg-black/5 group-hover:opacity-100"
-                      title="Resize note"
-                    >
-                      <span className="absolute bottom-1 right-1 h-2 w-2 border-b border-r border-secondary/70" />
-                    </button>
+                    {!node.data.locked && node.data.layoutMode !== "xmind" && (
+                      <button
+                        type="button"
+                        onPointerDown={(event) => beginResize(event, node)}
+                        className="absolute bottom-1 right-1 h-4 w-4 cursor-nwse-resize rounded-sm opacity-0 transition-opacity hover:bg-black/5 group-hover:opacity-100"
+                        title="Resize note"
+                      >
+                        <span className="absolute bottom-1 right-1 h-2 w-2 border-b border-r border-secondary/70" />
+                      </button>
+                    )}
                   </div>
                 );
               })}
