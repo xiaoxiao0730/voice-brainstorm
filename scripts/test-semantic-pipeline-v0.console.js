@@ -112,7 +112,7 @@
       ["scaffold covers product planning areas", (output) => /目标|用户|受众/.test(outputText(output)) && /需求|问题/.test(outputText(output)) && /功能|方案|机制|解决/.test(outputText(output)) && /市场|调研|风险|研究/.test(outputText(output))],
       ["renderer creates canvas nodes", () => ideaCanvas.nodes.length > 0],
       ["renderer creates canvas edges", () => ideaCanvas.edges.length > 0],
-      ["renderer uses xmind locked nodes", () => ideaCanvas.nodes.length > 0 && ideaCanvas.nodes.every((node) => node.data.layoutMode === "xmind" && node.data.locked === true)],
+      ["renderer uses artifact locked nodes", () => ideaCanvas.nodes.length > 0 && ideaCanvas.nodes.every((node) => node.data.layoutMode === "artifact" && node.data.locked === true)],
     ],
   });
 

@@ -30,7 +30,7 @@ export type IdeaNodeData = {
   title: string;
   body?: string;
   kind: IdeaNodeKind;
-  layoutMode?: "free" | "xmind";
+  layoutMode?: "free" | "xmind" | "artifact";
   locked?: boolean;
   branchColor?: string;
   width?: number;
@@ -270,28 +270,69 @@ function IdeaCard({
 }) {
   const style = KIND_STYLE[data.kind] ?? KIND_STYLE.idea;
   const isXMind = data.layoutMode === "xmind";
+  const isArtifact = data.layoutMode === "artifact";
   const branchColor = data.branchColor || style.accent;
-  if (isXMind) {
+  if (isArtifact) {
+    const hasBody = Boolean(data.body?.trim());
+    const isFocus = data.kind === "focus";
     return (
       <div
-        className="flex h-full flex-col justify-center overflow-hidden rounded-lg border bg-white px-4 py-2 text-center shadow-sm"
+        className={`flex h-full flex-col justify-center overflow-hidden text-left ${
+          isFocus ? "items-center rounded-full px-4 py-2" : "rounded-md border px-4 py-3 shadow-sm"
+        }`}
         style={{
-          borderColor: `${branchColor}28`,
-          background: data.kind === "focus" ? "#ffffff" : `${branchColor}24`,
-          boxShadow: data.kind === "focus" ? "0 10px 24px rgba(20, 24, 31, 0.08)" : "none",
+          borderColor: isFocus ? "transparent" : `${branchColor}55`,
+          background: isFocus ? "transparent" : "#fff8d8",
+          borderTopWidth: isFocus ? 0 : 3,
+          borderTopColor: branchColor,
+          boxShadow: isFocus ? "none" : "0 12px 26px rgba(24, 28, 36, 0.08)",
         }}
       >
         <input
-          className={`w-full bg-transparent text-center text-primary outline-none ${
-            data.kind === "focus" ? "text-2xl font-semibold" : "text-sm font-medium"
+          className={`w-full bg-transparent text-primary outline-none ${
+            isFocus ? "text-center text-2xl font-semibold" : "text-sm font-semibold"
+          }`}
+          value={data.title}
+          onChange={(e) => onChange(id, { title: e.target.value })}
+          placeholder={isFocus ? "Focus" : "Untitled"}
+        />
+        {!isFocus && hasBody ? (
+          <textarea
+            className="mt-2 min-h-0 flex-1 resize-none bg-transparent text-xs leading-relaxed text-secondary outline-none"
+            value={data.body ?? ""}
+            onChange={(e) => onChange(id, { body: e.target.value })}
+            placeholder=""
+          />
+        ) : null}
+        {!isFocus && !hasBody ? (
+          <div className="mt-2 text-xs leading-relaxed text-secondary/50">Awaiting signal</div>
+        ) : null}
+      </div>
+    );
+  }
+  if (isXMind) {
+    const hasBody = Boolean(data.body?.trim());
+    return (
+      <div
+        className="flex h-full flex-col justify-center overflow-hidden rounded-md border bg-white px-4 py-3 text-left shadow-sm"
+        style={{
+          borderColor: data.kind === "focus" ? "#d8d6d0" : `${branchColor}66`,
+          background: data.kind === "focus" ? "#ffffff" : "#fffefa",
+          borderLeftWidth: data.kind === "focus" ? 1 : 4,
+          boxShadow: data.kind === "focus" ? "0 10px 24px rgba(20, 24, 31, 0.08)" : "0 8px 18px rgba(20, 24, 31, 0.06)",
+        }}
+      >
+        <input
+          className={`w-full bg-transparent text-primary outline-none ${
+            data.kind === "focus" ? "text-lg font-semibold" : "text-sm font-semibold"
           }`}
           value={data.title}
           onChange={(e) => onChange(id, { title: e.target.value })}
           placeholder="Untitled"
         />
-        {data.body ? (
+        {hasBody ? (
           <textarea
-            className="mt-1 min-h-0 flex-1 resize-none bg-transparent text-center text-xs leading-snug text-secondary outline-none"
+            className="mt-2 min-h-0 flex-1 resize-none bg-transparent text-xs leading-relaxed text-secondary outline-none"
             value={data.body ?? ""}
             onChange={(e) => onChange(id, { body: e.target.value })}
             placeholder=""
@@ -598,7 +639,7 @@ export function IdeaCanvas({
   const beginDrag = useCallback((event: PointerEvent<HTMLDivElement>, node: IdeaFlowNode) => {
     const target = event.target as HTMLElement;
     if (target.closest("input, textarea, select, button")) return;
-    if (node.data.locked || node.data.layoutMode === "xmind") return;
+    if (node.data.locked || node.data.layoutMode === "xmind" || node.data.layoutMode === "artifact") return;
 
     event.currentTarget.setPointerCapture(event.pointerId);
     dragRef.current = {
@@ -816,7 +857,7 @@ export function IdeaCanvas({
                     onPointerCancel={endDrag}
                   >
                     <IdeaCard id={node.id} data={node.data} onChange={updateNodeData} />
-                    {!node.data.locked && node.data.layoutMode !== "xmind" && (
+                    {!node.data.locked && node.data.layoutMode !== "xmind" && node.data.layoutMode !== "artifact" && (
                       <button
                         type="button"
                         onPointerDown={(event) => beginResize(event, node)}

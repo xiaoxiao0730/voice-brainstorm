@@ -96,7 +96,11 @@ import {
   type SessionThinkingState,
   type ThinkingStateV0,
 } from "@/lib/agent/thinkingState.functions";
-import { buildOrchestratorContextV0 } from "@/lib/orchestrator/orchestratorContextV0.functions";
+import {
+  buildOrchestratorContextV0,
+  formatOrchestratorContextV0,
+  type OrchestratorContextV0,
+} from "@/lib/orchestrator/orchestratorContextV0.functions";
 import {
   formatOrchestratorOutputV0,
   planOrchestratorTurnV0,
@@ -166,6 +170,21 @@ type SessionContextFile = {
   name: string;
   summary: string;
   status: string;
+};
+
+type SemanticPipelineV0DebugSnapshot = {
+  turnId: string;
+  userTurn: string;
+  statePatch: unknown;
+  stateDiagnostics: unknown;
+  thinkingStateText: string;
+  context: OrchestratorContextV0;
+  contextText: string;
+  output: OrchestratorOutputV0;
+  outputText: string;
+  injectedContext: string;
+  renderedCanvas: IdeaCanvasState;
+  capturedAt: string;
 };
 
 function formatUploadedContextForAgent(files: SessionContextFile[]) {
@@ -1078,6 +1097,7 @@ function Workbench() {
   const recentThoughtTurnsRef = useRef<string[]>([]);
   const recentSemanticTurnsV0Ref = useRef<string[]>([]);
   const lastOrchestratorOutputV0Ref = useRef<OrchestratorOutputV0 | null>(null);
+  const lastSemanticPipelineV0DebugRef = useRef<SemanticPipelineV0DebugSnapshot | null>(null);
   const listeningRef = useRef(listening);
   const agentConnectedAtRef = useRef(Date.now());
   const lastAgentTranscriptRef = useRef<{ text: string; at: number } | null>(null);
@@ -1132,6 +1152,7 @@ function Workbench() {
     recentThoughtTurnsRef.current = [];
     recentSemanticTurnsV0Ref.current = [];
     lastOrchestratorOutputV0Ref.current = null;
+    lastSemanticPipelineV0DebugRef.current = null;
     coThinkingTurnIdsRef.current.clear();
     thinkingStateV0Ref.current = activeSessionId ? createEmptyThinkingStateV0(activeSessionId) : null;
     artifactViewV0Ref.current = null;
@@ -1155,6 +1176,7 @@ function Workbench() {
         at: string;
       }>;
       __murmurDemoSnapshot?: unknown;
+      __murmurSemanticV0?: SemanticPipelineV0DebugSnapshot | null;
     };
     const realtimeAgentReplies = (debugWindow.__murmurRealtimeAgentReplies ?? []).filter(
       (event) => !activeSessionId || event.sessionId === activeSessionId,
@@ -1184,11 +1206,13 @@ function Workbench() {
         thinkingState: thinkingStateV0Ref.current,
         artifactView: artifactViewV0Ref.current,
         lastOutput: lastOrchestratorOutputV0Ref.current,
+        lastDebug: lastSemanticPipelineV0DebugRef.current,
       },
       contextFiles: uploadedContextFiles,
       uploadedContextReady: contextFileStatus.ready,
       uploadedContextLabel: contextFileStatus.label,
     };
+    debugWindow.__murmurSemanticV0 = lastSemanticPipelineV0DebugRef.current;
   }, [activeSessionId, contextFileStatus.label, contextFileStatus.ready, finals, ideaCanvas, uploadedContextFiles]);
 
   const selectCaptureAnchor = useCallback((position: { x: number; y: number }) => {
@@ -3179,6 +3203,7 @@ function Workbench() {
             `AI: ${output.voiceResponse}`,
           ].slice(-8);
 
+          let renderedCanvas = ideaCanvasRef.current;
           if (output.canvasArtifactView) {
             artifactViewV0Ref.current = output.canvasArtifactView;
             const nextCanvas = renderArtifactViewToIdeaCanvasV0(
@@ -3186,6 +3211,7 @@ function Workbench() {
               ideaCanvasRef.current,
             );
             ideaCanvasRef.current = nextCanvas;
+            renderedCanvas = nextCanvas;
             setIdeaCanvas(nextCanvas);
           }
 
@@ -3199,13 +3225,35 @@ function Workbench() {
           ].join("\n");
           scheduleInject(`[semantic pipeline v0]\n${contextNote}`);
 
-          console.log("[semanticPipelineV0]", {
+          const debugSnapshot: SemanticPipelineV0DebugSnapshot = {
+            turnId: e.turnId,
+            userTurn: text,
             statePatch: plannedState.patch,
             stateDiagnostics: plannedState.diagnostics,
-            state: formatThinkingStateV0(plannedState.nextState),
-            output: formatOrchestratorOutputV0(output),
-            canvas: output.canvasArtifactView,
-          });
+            thinkingStateText: formatThinkingStateV0(plannedState.nextState),
+            context,
+            contextText: formatOrchestratorContextV0(context),
+            output,
+            outputText: formatOrchestratorOutputV0(output),
+            injectedContext: contextNote,
+            renderedCanvas,
+            capturedAt: new Date().toISOString(),
+          };
+          lastSemanticPipelineV0DebugRef.current = debugSnapshot;
+
+          console.groupCollapsed(`[semanticPipelineV0] ${text.slice(0, 80)}`);
+          console.log("1. Raw user turn", text);
+          console.log("2. State patch", plannedState.patch);
+          console.log("2b. State diagnostics", plannedState.diagnostics);
+          console.log("3. ThinkingStateV0", debugSnapshot.thinkingStateText, plannedState.nextState);
+          console.log("4. OrchestratorContextV0", debugSnapshot.contextText, context);
+          console.log("5. Orchestrator LM output", debugSnapshot.outputText, output);
+          console.log("6. Recommended voiceResponse", output.voiceResponse);
+          console.log("7. CanvasArtifactView", output.canvasArtifactView);
+          console.log("8. Rendered IdeaCanvasState", renderedCanvas);
+          console.log("9. Injected into realtime agent", contextNote);
+          console.log("Full debug snapshot", debugSnapshot);
+          console.groupEnd();
         } catch (err) {
           console.warn("[semanticPipelineV0] failed", err);
           setError(errorMessage(err, "Semantic pipeline failed"));

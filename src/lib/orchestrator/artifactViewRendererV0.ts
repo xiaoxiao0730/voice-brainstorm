@@ -5,13 +5,14 @@ import type { CanvasArtifactViewV0 } from "@/lib/orchestrator/orchestratorV0.fun
 
 const ARTIFACT_NODE_PREFIX = "artifact-view-v0-";
 const FOCUS_POSITION = { x: 520, y: 320 };
-const FOCUS_SIZE = { width: 260, height: 88 };
-const SECTION_SIZE = { width: 220, height: 72 };
-const BULLET_SIZE = { width: 260, height: 54 };
-const HORIZONTAL_GAP = 300;
-const BULLET_GAP = 250;
-const SECTION_VERTICAL_GAP = 132;
-const BULLET_VERTICAL_GAP = 72;
+const MIN_NODE_SIZE = { width: 160, height: 80 };
+const FOCUS_SIZE = { width: 300, height: 88 };
+const SECTION_SIZE = { width: 250, height: 132 };
+const CHILD_SIZE = { width: 220, height: 88 };
+const HORIZONTAL_GAP = 390;
+const CHILD_GAP = 310;
+const SECTION_VERTICAL_GAP = 180;
+const CHILD_VERTICAL_GAP = 118;
 const BRANCH_COLORS = ["#ff6467", "#ff9f68", "#94d1b1", "#7edfd2", "#67c7ef", "#b7a6f6"];
 
 function clean(value: string) {
@@ -51,6 +52,14 @@ function bodyFromBullets(bullets: string[]) {
     .join("\n");
 }
 
+function estimateHeight(title: string, body: string, base: number) {
+  const titleLines = Math.ceil(Math.max(clean(title).length, 1) / 14);
+  const bodyLines = body
+    ? body.split("\n").reduce((sum, line) => sum + Math.max(1, Math.ceil(clean(line).length / 22)), 0)
+    : 0;
+  return Math.max(MIN_NODE_SIZE.height, Math.min(220, base + titleLines * 10 + bodyLines * 22));
+}
+
 function splitSides(count: number) {
   return Array.from({ length: count }, (_, index) => {
     if (count === 1) return 1;
@@ -63,22 +72,32 @@ function sideIndex(index: number) {
 }
 
 function sectionPosition(index: number, count: number) {
-  const side = splitSides(count)[index] ?? 1;
-  const rank = sideIndex(index);
-  const sideCount = splitSides(count).filter((item) => item === side).length;
-  const offset = rank - (sideCount - 1) / 2;
+  const presets = [
+    { x: 0, y: -230 },
+    { x: HORIZONTAL_GAP, y: 0 },
+    { x: 0, y: 230 },
+    { x: -HORIZONTAL_GAP, y: 0 },
+    { x: -HORIZONTAL_GAP, y: -230 },
+    { x: HORIZONTAL_GAP, y: -230 },
+    { x: HORIZONTAL_GAP, y: 230 },
+    { x: -HORIZONTAL_GAP, y: 230 },
+  ];
+  const preset = presets[index] ?? {
+    x: (splitSides(count)[index] ?? 1) * HORIZONTAL_GAP,
+    y: (sideIndex(index) - 1) * SECTION_VERTICAL_GAP,
+  };
   return snap({
-    x: FOCUS_POSITION.x + side * HORIZONTAL_GAP,
-    y: FOCUS_POSITION.y + offset * SECTION_VERTICAL_GAP,
+    x: FOCUS_POSITION.x + preset.x,
+    y: FOCUS_POSITION.y + preset.y,
   });
 }
 
-function bulletPosition(sectionPos: { x: number; y: number }, sectionIndex: number, bulletIndex: number, bulletCount: number, sectionCount: number) {
+function childPosition(sectionPos: { x: number; y: number }, sectionIndex: number, childIndex: number, childCount: number, sectionCount: number) {
   const side = splitSides(sectionCount)[sectionIndex] ?? 1;
-  const offset = bulletIndex - (bulletCount - 1) / 2;
+  const offset = childIndex - (childCount - 1) / 2;
   return snap({
-    x: sectionPos.x + side * BULLET_GAP,
-    y: sectionPos.y + offset * BULLET_VERTICAL_GAP,
+    x: sectionPos.x + side * CHILD_GAP,
+    y: sectionPos.y + offset * CHILD_VERTICAL_GAP,
   });
 }
 
@@ -112,11 +131,11 @@ function updateOrCreateNode(args: {
           title: args.title,
           body: args.body,
           kind: args.kind,
-          layoutMode: "xmind",
+          layoutMode: "artifact",
           locked: true,
           branchColor: args.branchColor,
-          width: args.width,
-          height: args.height,
+          width: Math.max(MIN_NODE_SIZE.width, args.width),
+          height: Math.max(MIN_NODE_SIZE.height, args.height),
         },
       }
     : {
@@ -128,11 +147,11 @@ function updateOrCreateNode(args: {
           title: args.title,
           body: args.body,
           kind: args.kind,
-          layoutMode: "xmind",
+          layoutMode: "artifact",
           locked: true,
           branchColor: args.branchColor,
-          width: args.width,
-          height: args.height,
+          width: Math.max(MIN_NODE_SIZE.width, args.width),
+          height: Math.max(MIN_NODE_SIZE.height, args.height),
         },
       };
 
@@ -193,39 +212,40 @@ export function renderArtifactViewToIdeaCanvasV0(
     const isActive = section.id === artifact.activeSectionId || section.status === "active";
     const branchColor = BRANCH_COLORS[index % BRANCH_COLORS.length];
     const position = sectionPosition(index, artifact.sections.length);
+    const sectionBody = bodyFromBullets(section.bullets);
     const sectionNode = updateOrCreateNode({
       nodes,
       id: artifactNodeId(`section-${slug(section.id || section.heading, `section-${index + 1}`)}`),
       title: section.heading,
-      body: bodyFromBullets(section.bullets),
+      body: sectionBody,
       kind: sectionKind(isActive ? "active" : section.status),
       position,
       width: SECTION_SIZE.width,
-      height: SECTION_SIZE.height,
+      height: estimateHeight(section.heading, sectionBody, SECTION_SIZE.height),
       selected: isActive,
       branchColor,
     });
     artifactNodeIds.add(sectionNode.id);
-    artifactEdges.push(makeArtifactEdge(focusNode.id, sectionNode.id, branchColor));
 
     const children = (section.children ?? []).slice(0, 8);
     for (const [childIndex, child] of children.entries()) {
       const childTitle = clean(child.heading);
       if (!childTitle) continue;
-      const bulletNode = updateOrCreateNode({
+      const childBody = bodyFromBullets(child.bullets);
+      const childNode = updateOrCreateNode({
         nodes,
         id: artifactNodeId(`child-${slug(section.id || section.heading, `section-${index + 1}`)}-${slug(child.id || child.heading, `${childIndex + 1}`)}`),
         title: childTitle,
-        body: bodyFromBullets(child.bullets),
+        body: childBody,
         kind: sectionKind(child.status),
-        position: bulletPosition(position, index, childIndex, children.length, artifact.sections.length),
-        width: BULLET_SIZE.width,
-        height: BULLET_SIZE.height,
+        position: childPosition(position, index, childIndex, children.length, artifact.sections.length),
+        width: CHILD_SIZE.width,
+        height: estimateHeight(childTitle, childBody, CHILD_SIZE.height),
         selected: child.status === "active" || child.id === artifact.activeSectionId,
         branchColor,
       });
-      artifactNodeIds.add(bulletNode.id);
-      artifactEdges.push(makeArtifactEdge(sectionNode.id, bulletNode.id, branchColor));
+      artifactNodeIds.add(childNode.id);
+      artifactEdges.push(makeArtifactEdge(sectionNode.id, childNode.id, branchColor));
     }
   }
 

@@ -95,6 +95,11 @@ function asText(value: unknown, fallback = "") {
   return typeof value === "string" ? value : fallback;
 }
 
+function clampOptionalNumber(value: unknown, min: number, max: number) {
+  if (typeof value !== "number" || !Number.isFinite(value)) return undefined;
+  return Math.min(max, Math.max(min, value));
+}
+
 const PositionSchema = z.object({
   x: z.number(),
   y: z.number(),
@@ -108,8 +113,8 @@ const NodeSchema = z.object({
     title: z.string().max(500).default(""),
     body: z.string().max(3_000_000).optional(),
     kind: IdeaKind.default("idea"),
-    width: z.number().min(120).max(800).optional(),
-    height: z.number().min(80).max(800).optional(),
+    width: z.preprocess((value) => clampOptionalNumber(value, 120, 800), z.number().min(120).max(800).optional()),
+    height: z.preprocess((value) => clampOptionalNumber(value, 80, 800), z.number().min(80).max(800).optional()),
     textSize: TextSize.optional(),
     bold: z.boolean().optional(),
     italic: z.boolean().optional(),
