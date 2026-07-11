@@ -35,8 +35,8 @@ const BRANCHES: Branch[] = [
     accent: "#7c9cff",
     bullets: [
       { text: "面向独立开发者 & 早期 PM", hint: "not enterprise" },
-      { text: "从"想法"到"可行方案"的中间层" },
-      { text: "非白板、非文档 — 而是"思考轨迹"" },
+      { text: "从「想法」到「可行方案」的中间层" },
+      { text: "非白板、非文档 — 而是「思考轨迹」" },
     ],
     subs: [
       { label: "目标用户", tone: "idea" },
