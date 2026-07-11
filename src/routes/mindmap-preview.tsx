@@ -81,7 +81,7 @@ const BRANCHES: Branch[] = [
     accent: "#c48ad6",
     bullets: [
       { text: "免费额度 → Pro 订阅" },
-      { text: "以"每次深度思考"计费而非 token" },
+      { text: "以「每次深度思考」计费而非 token" },
       { text: "团队版共享 canvas" },
     ],
     subs: [
