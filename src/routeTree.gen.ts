@@ -9,11 +9,17 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from './routes/__root'
+import { Route as MindmapPreviewRouteImport } from './routes/mindmap-preview'
 import { Route as AuthRouteImport } from './routes/auth'
 import { Route as AuthenticatedRouteRouteImport } from './routes/_authenticated/route'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as AuthenticatedWorkbenchRouteImport } from './routes/_authenticated/workbench'
 
+const MindmapPreviewRoute = MindmapPreviewRouteImport.update({
+  id: '/mindmap-preview',
+  path: '/mindmap-preview',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const AuthRoute = AuthRouteImport.update({
   id: '/auth',
   path: '/auth',
@@ -37,11 +43,13 @@ const AuthenticatedWorkbenchRoute = AuthenticatedWorkbenchRouteImport.update({
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/auth': typeof AuthRoute
+  '/mindmap-preview': typeof MindmapPreviewRoute
   '/workbench': typeof AuthenticatedWorkbenchRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/auth': typeof AuthRoute
+  '/mindmap-preview': typeof MindmapPreviewRoute
   '/workbench': typeof AuthenticatedWorkbenchRoute
 }
 export interface FileRoutesById {
@@ -49,18 +57,20 @@ export interface FileRoutesById {
   '/': typeof IndexRoute
   '/_authenticated': typeof AuthenticatedRouteRouteWithChildren
   '/auth': typeof AuthRoute
+  '/mindmap-preview': typeof MindmapPreviewRoute
   '/_authenticated/workbench': typeof AuthenticatedWorkbenchRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/auth' | '/workbench'
+  fullPaths: '/' | '/auth' | '/mindmap-preview' | '/workbench'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/auth' | '/workbench'
+  to: '/' | '/auth' | '/mindmap-preview' | '/workbench'
   id:
     | '__root__'
     | '/'
     | '/_authenticated'
     | '/auth'
+    | '/mindmap-preview'
     | '/_authenticated/workbench'
   fileRoutesById: FileRoutesById
 }
@@ -68,10 +78,18 @@ export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   AuthenticatedRouteRoute: typeof AuthenticatedRouteRouteWithChildren
   AuthRoute: typeof AuthRoute
+  MindmapPreviewRoute: typeof MindmapPreviewRoute
 }
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
+    '/mindmap-preview': {
+      id: '/mindmap-preview'
+      path: '/mindmap-preview'
+      fullPath: '/mindmap-preview'
+      preLoaderRoute: typeof MindmapPreviewRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/auth': {
       id: '/auth'
       path: '/auth'
@@ -118,17 +136,8 @@ const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   AuthenticatedRouteRoute: AuthenticatedRouteRouteWithChildren,
   AuthRoute: AuthRoute,
+  MindmapPreviewRoute: MindmapPreviewRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
   ._addFileTypes<FileRouteTypes>()
-
-import type { getRouter } from './router.tsx'
-import type { startInstance } from './start.ts'
-declare module '@tanstack/react-start' {
-  interface Register {
-    ssr: true
-    router: Awaited<ReturnType<typeof getRouter>>
-    config: Awaited<ReturnType<typeof startInstance.getOptions>>
-  }
-}
