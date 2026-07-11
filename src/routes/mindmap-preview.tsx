@@ -110,7 +110,7 @@ const BRANCHES: Branch[] = [
     tag: "Market",
     accent: "#4fb0a8",
     bullets: [
-      { text: "vs Notion AI: 更专注"思考"而非"文档"" },
+      { text: "vs Notion AI: 更专注「思考」而非「文档」" },
       { text: "vs Whimsical: 语音优先、AI 原生" },
       { text: "vs Granola: 面向个人创造而非会议" },
     ],
