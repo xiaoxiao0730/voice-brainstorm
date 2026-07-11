@@ -51,7 +51,7 @@ const BRANCHES: Branch[] = [
     bullets: [
       { text: "语音输入 → 结构化 brief" },
       { text: "选中内容一键生成思维导图" },
-      { text: "Keep / Undo 粒度到"一次思考"" },
+      { text: "Keep / Undo 粒度到「一次思考」" },
     ],
     subs: [
       { label: "信息架构", tone: "idea" },
