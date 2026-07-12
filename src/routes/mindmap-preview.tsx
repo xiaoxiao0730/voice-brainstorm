@@ -1,5 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useMemo } from "react";
+import { useCallback, useMemo, useState } from "react";
 import {
   Background,
   BackgroundVariant,
@@ -33,8 +33,8 @@ type SubTopic = { label: string; leaves?: string[] };
 type Branch = {
   id: string;
   title: string;
-  color: string; // main branch hue
-  soft: string; // soft background for sub-nodes
+  color: string;
+  soft: string;
   side: "left" | "right";
   subs: SubTopic[];
 };
@@ -116,17 +116,121 @@ const BRANCHES: Branch[] = [
   },
 ];
 
+/* ---------- Editable label primitive ---------- */
+
+type EditableProps = {
+  value: string;
+  editing: boolean;
+  onStartEdit: () => void;
+  onCommit: (next: string) => void;
+  onCancel: () => void;
+  className?: string;
+  style?: React.CSSProperties;
+  multiline?: boolean;
+};
+
+function EditableLabel({
+  value,
+  editing,
+  onStartEdit,
+  onCommit,
+  onCancel,
+  className,
+  style,
+  multiline,
+}: EditableProps) {
+  const [draft, setDraft] = useState(value);
+  // Reset draft whenever we (re-)enter edit mode.
+  const enterKey = editing ? "on" : "off";
+
+  if (editing) {
+    return (
+      <input
+        key={enterKey}
+        autoFocus
+        defaultValue={value}
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={() => onCommit(draft || value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" && !e.shiftKey) {
+            e.preventDefault();
+            onCommit((e.target as HTMLInputElement).value || value);
+          } else if (e.key === "Escape") {
+            e.preventDefault();
+            onCancel();
+          }
+        }}
+        onClick={(e) => e.stopPropagation()}
+        className={`bg-transparent outline-none border-b border-white/50 min-w-[60px] w-full text-center ${className ?? ""}`}
+        style={style}
+      />
+    );
+  }
+
+  return (
+    <span
+      onDoubleClick={(e) => {
+        e.stopPropagation();
+        onStartEdit();
+      }}
+      className={`cursor-text ${className ?? ""}`}
+      style={style}
+    >
+      {value || (multiline ? " " : "…")}
+    </span>
+  );
+}
+
 /* ---------- Custom nodes ---------- */
 
-type CenterData = { title: string; subtitle: string };
-function CenterNode({ data }: NodeProps<Node<CenterData>>) {
+type NodeCallbacks = {
+  editingId: string | null;
+  setEditingId: (id: string | null) => void;
+  updateLabel: (id: string, next: string) => void;
+  updateSubtitle?: (id: string, next: string) => void;
+};
+
+type CenterData = {
+  title: string;
+  subtitle: string;
+  cb: NodeCallbacks;
+};
+function CenterNode({ id, data, selected }: NodeProps<Node<CenterData>>) {
+  const { cb } = data;
+  const editingTitle = cb.editingId === `${id}:title`;
+  const editingSub = cb.editingId === `${id}:sub`;
   return (
     <div
-      className="relative flex flex-col items-center justify-center text-center rounded-[28px] px-7 py-5 bg-[#1A1A1A] text-white shadow-[0_10px_40px_-10px_rgba(0,0,0,0.35)]"
-      style={{ width: 200 }}
+      className={`relative flex flex-col items-center justify-center text-center rounded-[28px] px-7 py-5 bg-[#1A1A1A] text-white shadow-[0_10px_40px_-10px_rgba(0,0,0,0.35)] transition-all ${
+        selected ? "ring-2 ring-white/80 ring-offset-2 ring-offset-background" : ""
+      }`}
+      style={{ width: 220 }}
     >
-      <div className="font-h1 text-[26px] leading-none tracking-tight">{data.title}</div>
-      <div className="text-[10.5px] opacity-70 mt-2 leading-snug px-2">{data.subtitle}</div>
+      <div className="font-h1 text-[26px] leading-none tracking-tight w-full">
+        <EditableLabel
+          value={data.title}
+          editing={editingTitle}
+          onStartEdit={() => cb.setEditingId(`${id}:title`)}
+          onCommit={(v) => {
+            cb.updateLabel(id, v);
+            cb.setEditingId(null);
+          }}
+          onCancel={() => cb.setEditingId(null)}
+        />
+      </div>
+      <div className="text-[10.5px] opacity-70 mt-2 leading-snug px-2 w-full">
+        <EditableLabel
+          value={data.subtitle}
+          editing={editingSub}
+          onStartEdit={() => cb.setEditingId(`${id}:sub`)}
+          onCommit={(v) => {
+            cb.updateSubtitle?.(id, v);
+            cb.setEditingId(null);
+          }}
+          onCancel={() => cb.setEditingId(null)}
+          multiline
+        />
+      </div>
       <Handle type="source" position={Position.Left} style={{ opacity: 0 }} />
       <Handle type="source" position={Position.Right} style={{ opacity: 0 }} />
       <Handle type="target" position={Position.Left} style={{ opacity: 0 }} />
@@ -135,65 +239,105 @@ function CenterNode({ data }: NodeProps<Node<CenterData>>) {
   );
 }
 
-type BranchData = { label: string; color: string; side: "left" | "right" };
-function BranchNode({ data }: NodeProps<Node<BranchData>>) {
+type BranchData = { label: string; color: string; side: "left" | "right"; cb: NodeCallbacks };
+function BranchNode({ id, data, selected }: NodeProps<Node<BranchData>>) {
   const src = data.side === "right" ? Position.Right : Position.Left;
   const tgt = data.side === "right" ? Position.Left : Position.Right;
+  const editing = data.cb.editingId === id;
   return (
     <div
-      className="rounded-[12px] px-4 py-2.5 text-white text-[14px] font-medium shadow-[0_6px_20px_-8px_rgba(0,0,0,0.25)] whitespace-nowrap"
-      style={{ background: data.color }}
+      className={`rounded-[12px] px-4 py-2.5 text-white text-[14px] font-medium shadow-[0_6px_20px_-8px_rgba(0,0,0,0.25)] whitespace-nowrap transition-all ${
+        selected ? "ring-2 ring-offset-2 ring-offset-background" : ""
+      }`}
+      style={{
+        background: data.color,
+        boxShadow: selected ? `0 0 0 2px ${data.color}, 0 6px 20px -8px rgba(0,0,0,0.35)` : undefined,
+      }}
     >
-      {data.label}
+      <EditableLabel
+        value={data.label}
+        editing={editing}
+        onStartEdit={() => data.cb.setEditingId(id)}
+        onCommit={(v) => {
+          data.cb.updateLabel(id, v);
+          data.cb.setEditingId(null);
+        }}
+        onCancel={() => data.cb.setEditingId(null)}
+      />
       <Handle type="target" position={tgt} style={{ opacity: 0 }} />
       <Handle type="source" position={src} style={{ opacity: 0 }} />
     </div>
   );
 }
 
-type SubData = { label: string; color: string; soft: string; side: "left" | "right" };
-function SubNode({ data }: NodeProps<Node<SubData>>) {
+type SubData = {
+  label: string;
+  color: string;
+  soft: string;
+  side: "left" | "right";
+  cb: NodeCallbacks;
+};
+function SubNode({ id, data, selected }: NodeProps<Node<SubData>>) {
   const src = data.side === "right" ? Position.Right : Position.Left;
   const tgt = data.side === "right" ? Position.Left : Position.Right;
+  const editing = data.cb.editingId === id;
   return (
     <div
-      className="rounded-[10px] px-3 py-1.5 text-[12.5px] whitespace-nowrap border"
+      className="rounded-[10px] px-3 py-1.5 text-[12.5px] whitespace-nowrap border transition-all"
       style={{
         background: data.soft,
         color: "#1A1A1A",
-        borderColor: data.color + "55",
+        borderColor: selected ? data.color : data.color + "55",
+        boxShadow: selected ? `0 0 0 2px ${data.color}55` : undefined,
       }}
     >
-      {data.label}
+      <EditableLabel
+        value={data.label}
+        editing={editing}
+        onStartEdit={() => data.cb.setEditingId(id)}
+        onCommit={(v) => {
+          data.cb.updateLabel(id, v);
+          data.cb.setEditingId(null);
+        }}
+        onCancel={() => data.cb.setEditingId(null)}
+      />
       <Handle type="target" position={tgt} style={{ opacity: 0 }} />
       <Handle type="source" position={src} style={{ opacity: 0 }} />
     </div>
   );
 }
 
-type LeafData = { label: string; color: string; side: "left" | "right" };
-function LeafNode({ data }: NodeProps<Node<LeafData>>) {
+type LeafData = { label: string; color: string; side: "left" | "right"; cb: NodeCallbacks };
+function LeafNode({ id, data, selected }: NodeProps<Node<LeafData>>) {
   const tgt = data.side === "right" ? Position.Left : Position.Right;
+  const editing = data.cb.editingId === id;
   return (
     <div
-      className="text-[11.5px] px-1.5 whitespace-nowrap"
-      style={{ color: "#4a4a4a" }}
+      className="text-[11.5px] px-1.5 whitespace-nowrap rounded transition-all"
+      style={{
+        color: "#4a4a4a",
+        background: selected ? data.color + "22" : "transparent",
+        boxShadow: selected ? `inset 0 0 0 1px ${data.color}66` : undefined,
+      }}
     >
-      {data.label}
+      <EditableLabel
+        value={data.label}
+        editing={editing}
+        onStartEdit={() => data.cb.setEditingId(id)}
+        onCommit={(v) => {
+          data.cb.updateLabel(id, v);
+          data.cb.setEditingId(null);
+        }}
+        onCancel={() => data.cb.setEditingId(null)}
+      />
       <Handle type="target" position={tgt} style={{ opacity: 0 }} />
     </div>
   );
 }
 
-/* ---------- Custom edge: smooth colored curve, tapered ---------- */
+/* ---------- Custom edge ---------- */
 
-function OrganicEdge({
-  sourceX,
-  sourceY,
-  targetX,
-  targetY,
-  data,
-}: EdgeProps) {
+function OrganicEdge({ sourceX, sourceY, targetX, targetY, data }: EdgeProps) {
   const color = (data as { color?: string; width?: number } | undefined)?.color ?? "#c9c6bd";
   const width = (data as { color?: string; width?: number } | undefined)?.width ?? 2;
   const dx = targetX - sourceX;
@@ -202,15 +346,7 @@ function OrganicEdge({
   const c2x = targetX - dx * 0.55;
   const c2y = targetY;
   const d = `M ${sourceX} ${sourceY} C ${c1x} ${c1y}, ${c2x} ${c2y}, ${targetX} ${targetY}`;
-  return (
-    <path
-      d={d}
-      stroke={color}
-      strokeWidth={width}
-      strokeLinecap="round"
-      fill="none"
-    />
-  );
+  return <path d={d} stroke={color} strokeWidth={width} strokeLinecap="round" fill="none" />;
 }
 
 const nodeTypes = {
@@ -219,42 +355,44 @@ const nodeTypes = {
   sub: SubNode,
   leaf: LeafNode,
 };
-
 const edgeTypes = { organic: OrganicEdge };
 
 /* ---------- Layout ---------- */
 
-const CENTER = { x: 0, y: 0 };
-const BRANCH_DX = 260; // horizontal offset from center to branch node
-const SUB_DX = 200; // branch → sub
-const LEAF_DX = 130; // sub → leaf
-const ROW_H = 44; // vertical spacing between sub rows
+const BRANCH_DX = 260;
+const SUB_DX = 200;
+const LEAF_DX = 130;
+const ROW_H = 44;
 
-function buildGraph(): { nodes: Node[]; edges: Edge[] } {
+type GraphState = {
+  centerTitle: string;
+  centerSubtitle: string;
+  branches: Branch[];
+};
+
+function buildGraph(state: GraphState, cb: NodeCallbacks): { nodes: Node[]; edges: Edge[] } {
   const nodes: Node[] = [];
   const edges: Edge[] = [];
 
   nodes.push({
     id: "center",
     type: "center",
-    position: { x: CENTER.x - 100, y: CENTER.y - 40 },
-    data: { title: CENTER_TITLE, subtitle: CENTER_SUBTITLE },
+    position: { x: -110, y: -40 },
+    data: { title: state.centerTitle, subtitle: state.centerSubtitle, cb },
     draggable: false,
   });
 
-  // Split branches per side, stack vertically centered.
   const perSide: Record<"left" | "right", Branch[]> = { left: [], right: [] };
-  BRANCHES.forEach((b) => perSide[b.side].push(b));
+  state.branches.forEach((b) => perSide[b.side].push(b));
 
   (["left", "right"] as const).forEach((side) => {
     const list = perSide[side];
-    // Each branch gets vertical slot proportional to its total sub rows.
     const branchHeights = list.map((b) =>
-      Math.max(1, b.subs.reduce((acc, s) => acc + Math.max(1, (s.leaves?.length ?? 0)), 0)),
+      Math.max(1, b.subs.reduce((acc, s) => acc + Math.max(1, s.leaves?.length ?? 0), 0)),
     );
     const totalRows = branchHeights.reduce((a, b) => a + b, 0);
-    const gapBetweenBranches = 60;
-    const totalHeight = totalRows * ROW_H + (list.length - 1) * gapBetweenBranches;
+    const gap = 60;
+    const totalHeight = totalRows * ROW_H + (list.length - 1) * gap;
     let cursorY = -totalHeight / 2;
 
     list.forEach((b, bi) => {
@@ -268,7 +406,7 @@ function buildGraph(): { nodes: Node[]; edges: Edge[] } {
         id: b.id,
         type: "branch",
         position: { x: branchX - 60, y: branchY - 20 },
-        data: { label: b.title, color: b.color, side: b.side },
+        data: { label: b.title, color: b.color, side: b.side, cb },
         draggable: false,
       });
       edges.push({
@@ -277,10 +415,8 @@ function buildGraph(): { nodes: Node[]; edges: Edge[] } {
         target: b.id,
         type: "organic",
         data: { color: b.color, width: 2.5 },
-        sourceHandle: side === "right" ? undefined : undefined,
       });
 
-      // Layout subs within block.
       let subCursor = cursorY;
       b.subs.forEach((s, si) => {
         const leafCount = Math.max(1, s.leaves?.length ?? 0);
@@ -293,7 +429,7 @@ function buildGraph(): { nodes: Node[]; edges: Edge[] } {
           id: subId,
           type: "sub",
           position: { x: subX - 60, y: subY - 16 },
-          data: { label: s.label, color: b.color, soft: b.soft, side: b.side },
+          data: { label: s.label, color: b.color, soft: b.soft, side: b.side, cb },
           draggable: false,
         });
         edges.push({
@@ -304,8 +440,7 @@ function buildGraph(): { nodes: Node[]; edges: Edge[] } {
           data: { color: b.color, width: 1.75 },
         });
 
-        // Leaves
-        if (s.leaves && s.leaves.length) {
+        if (s.leaves?.length) {
           s.leaves.forEach((lf, li) => {
             const leafY = subCursor + li * ROW_H + ROW_H / 2;
             const leafX = subX + dir * LEAF_DX;
@@ -314,7 +449,7 @@ function buildGraph(): { nodes: Node[]; edges: Edge[] } {
               id: leafId,
               type: "leaf",
               position: { x: leafX - 40, y: leafY - 10 },
-              data: { label: lf, color: b.color, side: b.side },
+              data: { label: lf, color: b.color, side: b.side, cb },
               draggable: false,
             });
             edges.push({
@@ -330,26 +465,101 @@ function buildGraph(): { nodes: Node[]; edges: Edge[] } {
         subCursor += subBlockH;
       });
 
-      cursorY += blockH + gapBetweenBranches;
+      cursorY += blockH + gap;
     });
   });
 
   return { nodes, edges };
 }
 
+/* ---------- Label update helper ---------- */
+
+function setLabelInState(state: GraphState, nodeId: string, next: string): GraphState {
+  if (nodeId === "center") {
+    return { ...state, centerTitle: next };
+  }
+  // ids: branch = branch.id; sub = "<branch>-s<i>"; leaf = "<branch>-s<i>-l<j>"
+  return {
+    ...state,
+    branches: state.branches.map((b) => {
+      if (b.id === nodeId) return { ...b, title: next };
+      if (!nodeId.startsWith(`${b.id}-s`)) return b;
+      const rest = nodeId.slice(b.id.length + 2); // after "-s"
+      const [siRaw, leafPart] = rest.split("-l");
+      const si = Number(siRaw);
+      if (Number.isNaN(si)) return b;
+      const subs = b.subs.map((s, i) => {
+        if (i !== si) return s;
+        if (leafPart === undefined) return { ...s, label: next };
+        const li = Number(leafPart);
+        if (Number.isNaN(li) || !s.leaves) return s;
+        const leaves = s.leaves.map((l, j) => (j === li ? next : l));
+        return { ...s, leaves };
+      });
+      return { ...b, subs };
+    }),
+  };
+}
+
 /* ---------- Page ---------- */
 
 function MindMapPreview() {
-  const { nodes, edges } = useMemo(() => buildGraph(), []);
+  const [state, setState] = useState<GraphState>(() => ({
+    centerTitle: CENTER_TITLE,
+    centerSubtitle: CENTER_SUBTITLE,
+    branches: BRANCHES,
+  }));
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+
+  const updateLabel = useCallback((nodeId: string, next: string) => {
+    setState((s) =>
+      nodeId === "center"
+        ? { ...s, centerTitle: next }
+        : setLabelInState(s, nodeId, next),
+    );
+  }, []);
+
+  const updateSubtitle = useCallback((_id: string, next: string) => {
+    setState((s) => ({ ...s, centerSubtitle: next }));
+  }, []);
+
+  const cb: NodeCallbacks = useMemo(
+    () => ({ editingId, setEditingId, updateLabel, updateSubtitle }),
+    [editingId, updateLabel, updateSubtitle],
+  );
+
+  const { nodes, edges } = useMemo(() => buildGraph(state, cb), [state, cb]);
+
+  // Apply selection flag onto nodes so React Flow renders the visual selection.
+  const displayNodes = useMemo(
+    () => nodes.map((n) => ({ ...n, selected: n.id === selectedId })),
+    [nodes, selectedId],
+  );
+
+  const handleKeyDown = useCallback(
+    (e: React.KeyboardEvent) => {
+      if (editingId) return; // let the input handle keys
+      if ((e.key === "Enter" || e.key === "F2") && selectedId) {
+        e.preventDefault();
+        setEditingId(selectedId);
+      }
+    },
+    [editingId, selectedId],
+  );
 
   return (
-    <div className="h-screen w-full flex flex-col bg-background text-primary">
+    <div
+      className="h-screen w-full flex flex-col bg-background text-primary outline-none"
+      tabIndex={0}
+      onKeyDown={handleKeyDown}
+    >
       <header className="border-b border-auralis bg-surface/80 backdrop-blur">
         <div className="max-w-[1400px] mx-auto px-6 py-3 flex items-center justify-between">
           <div className="flex items-baseline gap-3">
             <h1 className="font-h1 text-2xl leading-none">Mind map</h1>
             <span className="text-xs text-secondary">
-              XMind-style · React Flow · radial branches
+              点击选中 · 双击 或 Enter 编辑 · Esc 取消
             </span>
           </div>
           <div className="flex items-center gap-2">
@@ -368,7 +578,7 @@ function MindMapPreview() {
 
       <div className="flex-1 relative">
         <ReactFlow
-          nodes={nodes}
+          nodes={displayNodes}
           edges={edges}
           nodeTypes={nodeTypes}
           edgeTypes={edgeTypes}
@@ -378,16 +588,22 @@ function MindMapPreview() {
           maxZoom={1.6}
           nodesDraggable={false}
           nodesConnectable={false}
-          elementsSelectable={false}
+          elementsSelectable
+          selectNodesOnDrag={false}
+          onNodeClick={(_, n) => {
+            setSelectedId(n.id);
+            if (editingId && editingId.split(":")[0] !== n.id && editingId !== n.id) {
+              setEditingId(null);
+            }
+          }}
+          onPaneClick={() => {
+            setSelectedId(null);
+            setEditingId(null);
+          }}
           proOptions={{ hideAttribution: true }}
           panOnScroll
         >
-          <Background
-            variant={BackgroundVariant.Dots}
-            gap={22}
-            size={1}
-            color="#d9d6cd"
-          />
+          <Background variant={BackgroundVariant.Dots} gap={22} size={1} color="#d9d6cd" />
           <Controls
             showInteractive={false}
             className="!bg-surface !border !border-auralis !rounded-md !shadow-sm"
