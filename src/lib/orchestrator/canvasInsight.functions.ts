@@ -4,6 +4,7 @@ import { z } from "zod";
 
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
 import { createOpenAIProvider, normalizeAiModel, requireOpenAIKey } from "@/lib/ai-gateway.server";
+import { parseLlmJsonObject } from "@/lib/llm/json";
 
 const InsightKind = z.enum(["gap", "assumption", "contradiction", "decision", "next_step"]);
 const CardKind = z.enum(["focus", "idea", "question", "decision", "risk", "next"]);
@@ -62,13 +63,7 @@ Return STRICT JSON only:
 }`;
 
 function extractJSON(raw: string): unknown {
-  let cleaned = (raw ?? "").trim();
-  const fence = cleaned.match(/```(?:json)?\s*([\s\S]*?)```/i);
-  if (fence) cleaned = fence[1].trim();
-  const first = cleaned.indexOf("{");
-  const last = cleaned.lastIndexOf("}");
-  if (first >= 0 && last > first) cleaned = cleaned.slice(first, last + 1);
-  return JSON.parse(cleaned);
+  return parseLlmJsonObject(raw);
 }
 
 export const generateCanvasInsight = createServerFn({ method: "POST" })

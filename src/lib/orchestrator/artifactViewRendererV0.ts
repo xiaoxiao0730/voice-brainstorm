@@ -2,6 +2,7 @@ import type { IdeaCanvasState, IdeaFlowEdge, IdeaFlowNode, IdeaNodeKind } from "
 import {
   chooseConnectionHandles,
   makeParallelBranchLayout,
+  reflowParallelBranches,
   type CanvasSide,
 } from "@/lib/canvas/canvasLayoutEngine";
 import type { CanvasArtifactViewV0 } from "@/lib/orchestrator/orchestratorV0.functions";
@@ -276,7 +277,7 @@ export function renderArtifactViewToIdeaCanvasV0(
     (edge) => validNodeIds.has(edge.source) && validNodeIds.has(edge.target),
   );
 
-  return { nodes, edges };
+  return reflowParallelBranches(nodes, edges);
 }
 
 export function formatIdeaCanvasStateV0(canvas: IdeaCanvasState) {

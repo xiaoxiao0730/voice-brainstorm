@@ -4,6 +4,7 @@ import { z } from "zod";
 
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
 import { createOpenAIProvider, normalizeAiModel, requireOpenAIKey } from "@/lib/ai-gateway.server";
+import { parseLlmJsonObject } from "@/lib/llm/json";
 import {
   EMPTY_ARTIFACT_STATE,
   ArtifactStateSchema,
@@ -92,10 +93,7 @@ export type StateOp = z.infer<typeof StateOpSchema>;
 export type StatePatch = z.infer<typeof StatePatchSchema>;
 
 function parseJsonObject(text: string) {
-  const start = text.indexOf("{");
-  const end = text.lastIndexOf("}");
-  if (start < 0 || end <= start) throw new Error("Model did not return a JSON object");
-  return JSON.parse(text.slice(start, end + 1)) as unknown;
+  return parseLlmJsonObject(text);
 }
 
 function asRecord(value: unknown): Record<string, unknown> {

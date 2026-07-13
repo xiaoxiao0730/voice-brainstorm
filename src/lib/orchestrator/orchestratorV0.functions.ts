@@ -4,6 +4,7 @@ import { z } from "zod";
 
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
 import { createOpenAIProvider, normalizeAiModel, requireOpenAIKey } from "@/lib/ai-gateway.server";
+import { parseLlmJsonObject } from "@/lib/llm/json";
 import {
   formatOrchestratorContextV0,
   type OrchestratorContextV0,
@@ -214,6 +215,7 @@ const OUTPUT_CONTRACT_SYSTEM = `OUTPUT CONTRACT
 - nextAction must describe the immediate user-facing action.
 - Use nextAction="update_canvas" whenever canvasArtifactView is non-null.
 - canvasOps must always be []. V0 does not emit low-level canvas operations.
+- If the latest user turn explicitly asks to add, create, connect, or attach visible canvas nodes/cards/branches/edges under an existing node/card, keep canvasArtifactView null. That manual canvas edit is handled by the realtime canvas tool and deterministic layout engine, not by artifact replacement.
 - exportArtifact must be null unless a later version explicitly supports export.
 - If generating canvasArtifactView, every section must have id, heading, bullets, children, sourceNodeIds, and status.
 - If a section has no child branches, return children: [].
@@ -234,13 +236,7 @@ export function buildOrchestratorSystemPromptV0(context: OrchestratorContextV0) 
 }
 
 function parseJsonObject(text: string) {
-  let cleaned = (text ?? "").trim();
-  const fence = cleaned.match(/```(?:json)?\s*([\s\S]*?)```/i);
-  if (fence) cleaned = fence[1].trim();
-  const start = cleaned.indexOf("{");
-  const end = cleaned.lastIndexOf("}");
-  if (start < 0 || end <= start) throw new Error("Model did not return a JSON object");
-  return JSON.parse(cleaned.slice(start, end + 1)) as unknown;
+  return parseLlmJsonObject(text);
 }
 
 function latestUserTurnLanguage(context: OrchestratorContextV0): "zh" | "en" {

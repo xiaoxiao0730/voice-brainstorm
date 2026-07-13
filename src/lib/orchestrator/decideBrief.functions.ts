@@ -10,6 +10,7 @@ import { z } from "zod";
 
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
 import { createOpenAIProvider, normalizeAiModel, requireOpenAIKey } from "@/lib/ai-gateway.server";
+import { parseLlmJsonObject } from "@/lib/llm/json";
 
 const SnapshotLine = z.object({
   id: z.string(),
@@ -417,19 +418,11 @@ Max 3 patches. File this fragment under the right TOPIC: open a new H2 section (
         prompt: userPrompt,
       });
 
-      // Tolerant JSON extraction — strip code fences / leading prose if any.
-      let raw = (text ?? "").trim();
-      const fence = raw.match(/```(?:json)?\s*([\s\S]*?)```/i);
-      if (fence) raw = fence[1].trim();
-      const first = raw.indexOf("{");
-      const last = raw.lastIndexOf("}");
-      if (first >= 0 && last > first) raw = raw.slice(first, last + 1);
-
       let parsed: unknown;
       try {
-        parsed = JSON.parse(raw);
+        parsed = parseLlmJsonObject(text ?? "");
       } catch (e) {
-        console.warn("[decideBrief] JSON parse failed", (e as Error).message, "raw=", raw.slice(0, 200));
+        console.warn("[decideBrief] JSON parse failed", (e as Error).message, "raw=", (text ?? "").slice(0, 200));
         return { patches: [], proposeResearch: null, rationale: "" };
       }
 

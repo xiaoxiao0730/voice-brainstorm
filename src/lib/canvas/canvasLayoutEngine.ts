@@ -10,6 +10,8 @@ export const PARALLEL_BRANCH_LENGTH = 110;
 export const PARALLEL_BRANCH_GAP = 150;
 export const PARALLEL_BRANCH_SAFE_GAP = 34;
 
+const BRANCH_SIDE_ORDER: CanvasSide[] = ["right", "bottom", "left", "top"];
+
 export const OPPOSITE_SIDE: Record<CanvasSide, CanvasSide> = {
   top: "bottom",
   right: "left",
@@ -171,6 +173,122 @@ export function layoutParallelBranch(args: {
   });
 
   return { nodes, edges };
+}
+
+type Rect = { x: number; y: number; width: number; height: number };
+
+function nodeRect(node: IdeaFlowNode): Rect {
+  const size = estimateCanvasNodeSize(node);
+  return { x: node.position.x, y: node.position.y, width: size.width, height: size.height };
+}
+
+function expandRect(rect: Rect, padding: number): Rect {
+  return {
+    x: rect.x - padding,
+    y: rect.y - padding,
+    width: rect.width + padding * 2,
+    height: rect.height + padding * 2,
+  };
+}
+
+function overlapArea(a: Rect, b: Rect) {
+  const width = Math.min(a.x + a.width, b.x + b.width) - Math.max(a.x, b.x);
+  const height = Math.min(a.y + a.height, b.y + b.height) - Math.max(a.y, b.y);
+  return width > 0 && height > 0 ? width * height : 0;
+}
+
+function rectCenter(rect: Rect) {
+  return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
+}
+
+function distanceBetweenRects(a: Rect, b: Rect) {
+  const ac = rectCenter(a);
+  const bc = rectCenter(b);
+  return Math.hypot(ac.x - bc.x, ac.y - bc.y);
+}
+
+export function chooseBestBranchSide(args: {
+  nodes: IdeaFlowNode[];
+  edges: IdeaFlowEdge[];
+  sourceId: string;
+  newChildCount?: number;
+  preferredSide?: CanvasSide;
+}): CanvasSide {
+  const source = args.nodes.find((node) => node.id === args.sourceId);
+  if (!source) return args.preferredSide ?? "right";
+
+  const newChildCount = Math.max(1, args.newChildCount ?? 1);
+  const sourceRect = nodeRect(source);
+  let best: { side: CanvasSide; score: number } | null = null;
+
+  const sides = args.preferredSide
+    ? [args.preferredSide, ...BRANCH_SIDE_ORDER.filter((side) => side !== args.preferredSide)]
+    : BRANCH_SIDE_ORDER;
+
+  for (const side of sides) {
+    const branchEdges = args.edges.filter((edge) => {
+      const layout = edge.data?.branchLayout;
+      return edge.source === source.id && layout?.mode === "parallel" && layout.side === side;
+    });
+    const existingTargetIds = branchEdges.map((edge) => edge.target);
+    const simulatedIds = [
+      ...existingTargetIds,
+      ...Array.from({ length: newChildCount }, (_, index) => `__new_${index}__`),
+    ];
+    const count = simulatedIds.length;
+    const existingTargets = new Set(existingTargetIds);
+    const existingSizes = existingTargetIds
+      .map((id) => args.nodes.find((node) => node.id === id))
+      .filter((node): node is IdeaFlowNode => Boolean(node))
+      .map(estimateCanvasNodeSize);
+    const childWidth = Math.max(IDEA_NODE_DEFAULT_WIDTH, ...existingSizes.map((size) => size.width));
+    const childHeight = Math.max(IDEA_NODE_MIN_HEIGHT, ...existingSizes.map((size) => size.height));
+    const gap = Math.max(PARALLEL_BRANCH_GAP, childHeight + PARALLEL_BRANCH_SAFE_GAP);
+
+    const simulatedRects = simulatedIds.map((id, index) => {
+      const position = parallelChildPosition({
+        source,
+        side,
+        index,
+        count,
+        childWidth,
+        childHeight,
+        gap,
+      });
+      return {
+        id,
+        rect: { x: position.x, y: position.y, width: childWidth, height: childHeight },
+      };
+    });
+
+    const obstacleRects = args.nodes
+      .filter((node) => node.id !== source.id && !existingTargets.has(node.id))
+      .map(nodeRect)
+      .map((rect) => expandRect(rect, PARALLEL_BRANCH_SAFE_GAP));
+
+    let score = 0;
+    for (const simulated of simulatedRects) {
+      const rect = expandRect(simulated.rect, PARALLEL_BRANCH_SAFE_GAP);
+      for (const obstacle of obstacleRects) {
+        const overlap = overlapArea(rect, obstacle);
+        if (overlap > 0) {
+          score += overlap * 10;
+          continue;
+        }
+        const distance = distanceBetweenRects(rect, obstacle);
+        if (distance < 260) score += 260 - distance;
+      }
+      const distanceFromSource = distanceBetweenRects(rect, sourceRect);
+      score += Math.max(0, 180 - distanceFromSource) * 0.5;
+    }
+
+    score += branchEdges.length * 12;
+    if (side === args.preferredSide) score -= 24;
+
+    if (!best || score < best.score) best = { side, score };
+  }
+
+  return best?.side ?? args.preferredSide ?? "right";
 }
 
 export function reflowParallelBranches(nodes: IdeaFlowNode[], edges: IdeaFlowEdge[]) {

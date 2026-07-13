@@ -76,6 +76,7 @@ import { generateMindMap } from "@/lib/mindmap/generateMindMap.functions";
 import { loadIdeaCanvas, saveIdeaCanvas } from "@/lib/ideaCanvas.functions";
 import {
   chooseConnectionHandles,
+  chooseBestBranchSide,
   layoutParallelBranch,
   makeParallelBranchLayout,
   parallelChildPosition,
@@ -198,6 +199,17 @@ type SemanticPipelineV0DebugSnapshot = {
   renderedCanvas: IdeaCanvasState;
   capturedAt: string;
 };
+
+type SemanticV0VoiceDelivery =
+  | "hint_injected"
+  | "fallback_scheduled"
+  | "fallback_spoken"
+  | "skipped_duplicate"
+  | "skipped_empty"
+  | "skipped_fast_spoke"
+  | "skipped_agent_speaking"
+  | "skipped_no_realtime"
+  | "skipped_stale_session";
 
 function formatUploadedContextForAgent(files: SessionContextFile[]) {
   const summarized = files
@@ -389,14 +401,41 @@ function findCanvasAttachParent(nodes: IdeaFlowNode[], preferredTitle?: string) 
   );
 }
 
-function chooseAttachSide(parent: IdeaFlowNode, edges: IdeaFlowEdge[]): CanvasSide {
+function isExplicitManualCanvasEditTurn(text: string) {
+  const normalized = text.trim().toLowerCase();
+  if (!normalized) return false;
+  const mentionsCanvasTarget =
+    /\b(canvas|node|card|branch|edge|note)\b/.test(normalized) ||
+    /(画布|节点|卡片|分支|边|连线|note)/i.test(normalized);
+  const mentionsEditAction =
+    /\b(add|create|make|insert|connect|link|attach|under|below)\b/.test(normalized) ||
+    /(加|新增|创建|生成|建|连|连接|接到|下面|下方|分出|挂到)/i.test(normalized);
+  return mentionsCanvasTarget && mentionsEditAction;
+}
+
+function chooseAttachSide(
+  parent: IdeaFlowNode,
+  nodes: IdeaFlowNode[],
+  edges: IdeaFlowEdge[],
+  newChildCount = 1,
+): CanvasSide {
   const existing = edges.find((edge) => {
     const layout = edge.data?.branchLayout;
     return edge.source === parent.id && layout?.mode === "parallel";
   });
-  if (existing?.data?.branchLayout?.mode === "parallel") return existing.data.branchLayout.side;
   const artifactFocus = parent.data.layoutMode === "artifact" && parent.data.kind === "focus";
-  return artifactFocus ? "bottom" : "right";
+  const preferredSide = existing?.data?.branchLayout?.mode === "parallel"
+    ? existing.data.branchLayout.side
+    : artifactFocus
+      ? "bottom"
+      : "right";
+  return chooseBestBranchSide({
+    nodes,
+    edges,
+    sourceId: parent.id,
+    newChildCount,
+    preferredSide,
+  });
 }
 
 function oppositeCanvasSide(side: CanvasSide): CanvasSide {
@@ -451,6 +490,9 @@ function attachCanvasChildrenToParent(args: {
 const BRIEF_NODE_PREFIX = "brief-block-";
 const MANUAL_CANVAS_CAPTURE = true;
 const USE_SEMANTIC_PIPELINE_V0 = true;
+const ENABLE_SEMANTIC_V0_VOICE_FALLBACK = false;
+const SEMANTIC_V0_VOICE_FALLBACK_DELAY_MS = 2200;
+const SEMANTIC_V0_FAST_LANE_GRACE_MS = 3000;
 
 function mergeBriefIntoCanvas(doc: BriefDoc, canvas: IdeaCanvasState): IdeaCanvasState {
   if (MANUAL_CANVAS_CAPTURE) {
@@ -1252,8 +1294,12 @@ function Workbench() {
   const lastSemanticPipelineV0DebugRef = useRef<SemanticPipelineV0DebugSnapshot | null>(null);
   const listeningRef = useRef(listening);
   const agentConnectedAtRef = useRef(Date.now());
+  const lastAgentSpeakingStartedAtRef = useRef(0);
   const lastAgentTranscriptRef = useRef<{ text: string; at: number } | null>(null);
   const spokenSemanticTurnIdsRef = useRef<Set<string>>(new Set());
+  const semanticVoiceFallbackTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(
+    new Map(),
+  );
   const isEditingRef = useRef(false);
   const injectDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendingInjectRef = useRef<string | null>(null);
@@ -1306,6 +1352,9 @@ function Workbench() {
     recentSemanticTurnsV0Ref.current = [];
     lastOrchestratorOutputV0Ref.current = null;
     lastSemanticPipelineV0DebugRef.current = null;
+    lastAgentSpeakingStartedAtRef.current = 0;
+    semanticVoiceFallbackTimersRef.current.forEach((timer) => clearTimeout(timer));
+    semanticVoiceFallbackTimersRef.current.clear();
     spokenSemanticTurnIdsRef.current.clear();
     coThinkingTurnIdsRef.current.clear();
     thinkingStateV0Ref.current = activeSessionId ? createEmptyThinkingStateV0(activeSessionId) : null;
@@ -1913,6 +1962,20 @@ function Workbench() {
           .map((node) => [node.data.title.trim().toLowerCase(), node] as const)
           .filter(([title]) => title.length > 0),
       );
+      const pendingAddsByParent = new Map<string, number>();
+      for (const op of meaningful) {
+        const title = op.title.trim();
+        if (
+          (op.action !== "add_card" && op.action !== "update_card") ||
+          !title ||
+          byTitle.has(title.toLowerCase())
+        ) {
+          continue;
+        }
+        const parent = findCanvasAttachParent(nodes, op.targetTitle || op.sourceTitle);
+        if (!parent) continue;
+        pendingAddsByParent.set(parent.id, (pendingAddsByParent.get(parent.id) ?? 0) + 1);
+      }
       const addedByParent = new Map<string, { parent: IdeaFlowNode; side: CanvasSide; childIds: string[] }>();
 
       for (const op of meaningful) {
@@ -1937,7 +2000,9 @@ function Workbench() {
           }
 
           const parent = findCanvasAttachParent(nodes, op.targetTitle || op.sourceTitle);
-          const side = parent ? chooseAttachSide(parent, edges) : "right";
+          const side = parent
+            ? chooseAttachSide(parent, nodes, edges, pendingAddsByParent.get(parent.id) ?? 1)
+            : "right";
           const branch = parent
             ? edges.filter((edge) => {
                 const layout = edge.data?.branchLayout;
@@ -2025,9 +2090,16 @@ function Workbench() {
 
   const applyAgentCanvasOps = useCallback(
     (ops: CanvasToolOp[]) => {
+      const explicitTargetedCanvasEdit = ops.every((op) => {
+        if (op.action === "add_card") return Boolean(op.targetTitle?.trim());
+        if (op.action === "update_card") return Boolean((op.targetTitle ?? op.title)?.trim());
+        if (op.action === "connect") return Boolean(op.sourceTitle?.trim() && op.targetTitle?.trim());
+        return false;
+      });
       if (
-        normalizeArtifactState(thinkingStateRef.current.artifact_state).mode !== "none" ||
-        artifactViewV0Ref.current
+        !explicitTargetedCanvasEdit &&
+        (normalizeArtifactState(thinkingStateRef.current.artifact_state).mode !== "none" ||
+          artifactViewV0Ref.current)
       ) {
         scheduleInject(
           "[artifact canvas ownership]\nThe artifact scaffold is owned by the turn orchestrator. Keep voice replies aligned with the active PRD section instead of writing free-form canvas cards.",
@@ -2800,6 +2872,8 @@ function Workbench() {
         audioCtxRef.current = null;
       }
       analyserRef.current = null;
+      semanticVoiceFallbackTimersRef.current.forEach((timer) => clearTimeout(timer));
+      semanticVoiceFallbackTimersRef.current.clear();
       if (recognizerRef.current) {
         try {
           await recognizerRef.current.stop();
@@ -2893,7 +2967,10 @@ function Workbench() {
             agentConnectedAtRef.current = Date.now();
             setAgentStatus("listening");
           },
-          onAgentSpeakingStart: () => setAgentStatus("speaking"),
+          onAgentSpeakingStart: () => {
+            lastAgentSpeakingStartedAtRef.current = Date.now();
+            setAgentStatus("speaking");
+          },
           onAgentSpeakingEnd: () => setAgentStatus("listening"),
           onUserBargeIn: () => setAgentStatus("listening"),
           onStaySilent: (reason) => {
@@ -3345,11 +3422,11 @@ function Workbench() {
       const text = e.thoughtTurn.combinedText.trim();
       if (/^agent\s*:/i.test(text)) return;
       if (text.length < 8) return;
+      const turnFinalizedAt = Date.now();
 
       const run = async () => {
         const currentSessionId = activeSessionRef.current;
         if (!currentSessionId || e.sessionId !== currentSessionId) return;
-        const turnFinalizedAt = Date.now();
         const currentState = thinkingStateV0Ref.current ?? createEmptyThinkingStateV0(e.sessionId);
         const recentTurns = recentSemanticTurnsV0Ref.current.slice(-8);
         const endSemanticV0Span = pipelineTracer.startSpan({
@@ -3416,7 +3493,10 @@ function Workbench() {
 
           let renderedCanvas = ideaCanvasRef.current;
           let artifactPersistenceStatus = "unchanged";
-          if (output.canvasArtifactView) {
+          const manualCanvasEditTurn = isExplicitManualCanvasEditTurn(text);
+          if (output.canvasArtifactView && manualCanvasEditTurn) {
+            artifactPersistenceStatus = "skipped_manual_canvas_edit";
+          } else if (output.canvasArtifactView) {
             artifactViewV0Ref.current = output.canvasArtifactView;
             const nextCanvas = renderArtifactViewToIdeaCanvasV0(
               output.canvasArtifactView,
@@ -3438,10 +3518,12 @@ function Workbench() {
 
           const contextNote = [
             `Latest user turn: ${text}`,
-            `Voice response: ${output.voiceResponse}`,
+            `Background voice guidance for future replies only; do not start a new response solely because of this note: ${output.voiceResponse}`,
             `Next action: ${output.nextAction}`,
             output.canvasArtifactView
-              ? `Canvas artifact rendered: ${output.canvasArtifactView.title}; active section: ${output.canvasArtifactView.activeSectionId ?? "none"}`
+              ? manualCanvasEditTurn
+                ? `Canvas artifact skipped for explicit manual canvas edit: ${output.canvasArtifactView.title}`
+                : `Canvas artifact rendered: ${output.canvasArtifactView.title}; active section: ${output.canvasArtifactView.activeSectionId ?? "none"}`
               : "Canvas artifact: unchanged",
             output.canvasArtifactView
               ? `Canvas artifact persistence: ${artifactPersistenceStatus}`
@@ -3450,24 +3532,61 @@ function Workbench() {
           scheduleInject(`[semantic pipeline v0]\n${contextNote}`);
 
           const voiceResponse = output.voiceResponse.trim();
-          const realtime = realtimeRef.current;
-          const recentAgent = lastAgentTranscriptRef.current;
-          const agentAlreadySpokeForTurn = Boolean(recentAgent && recentAgent.at >= turnFinalizedAt);
-          let voiceDelivery: "spoken" | "skipped_no_realtime" | "skipped_already_spoke" | "skipped_agent_speaking" | "skipped_empty" | "skipped_duplicate" = "skipped_empty";
+          let voiceDelivery: SemanticV0VoiceDelivery = voiceResponse
+            ? "fallback_scheduled"
+            : "skipped_empty";
           if (!voiceResponse) {
             voiceDelivery = "skipped_empty";
           } else if (spokenSemanticTurnIdsRef.current.has(e.turnId)) {
             voiceDelivery = "skipped_duplicate";
-          } else if (!realtime) {
-            voiceDelivery = "skipped_no_realtime";
-          } else if (agentAlreadySpokeForTurn) {
-            voiceDelivery = "skipped_already_spoke";
-          } else if (realtime.isAgentSpeaking()) {
-            voiceDelivery = "skipped_agent_speaking";
+          } else if (!ENABLE_SEMANTIC_V0_VOICE_FALLBACK) {
+            voiceDelivery = "hint_injected";
           } else {
-            spokenSemanticTurnIdsRef.current.add(e.turnId);
-            realtime.speak(voiceResponse);
-            voiceDelivery = "spoken";
+            const existingTimer = semanticVoiceFallbackTimersRef.current.get(e.turnId);
+            if (existingTimer) clearTimeout(existingTimer);
+            const timer = setTimeout(() => {
+              semanticVoiceFallbackTimersRef.current.delete(e.turnId);
+              const currentRealtime = realtimeRef.current;
+              const recentAgent = lastAgentTranscriptRef.current;
+              const fastLaneAlreadyRespondedForTurn = Boolean(
+                recentAgent && recentAgent.at >= turnFinalizedAt,
+              ) || Boolean(
+                lastAgentSpeakingStartedAtRef.current >=
+                  turnFinalizedAt - SEMANTIC_V0_FAST_LANE_GRACE_MS,
+              );
+              let fallbackDelivery: SemanticV0VoiceDelivery = "fallback_spoken";
+              if (spokenSemanticTurnIdsRef.current.has(e.turnId)) {
+                fallbackDelivery = "skipped_duplicate";
+              } else if (e.sessionId !== activeSessionRef.current) {
+                fallbackDelivery = "skipped_stale_session";
+              } else if (!currentRealtime) {
+                fallbackDelivery = "skipped_no_realtime";
+              } else if (fastLaneAlreadyRespondedForTurn) {
+                fallbackDelivery = "skipped_fast_spoke";
+              } else if (currentRealtime.isAgentSpeaking()) {
+                fallbackDelivery = "skipped_agent_speaking";
+              } else {
+                spokenSemanticTurnIdsRef.current.add(e.turnId);
+                currentRealtime.speak(voiceResponse);
+              }
+              pipelineTracer.log({
+                sessionId: e.sessionId,
+                kind: "semanticV0.voice_delivery",
+                turnId: e.turnId,
+                meta: {
+                  delivery: fallbackDelivery,
+                  voiceChars: voiceResponse.length,
+                  realtimeConnected: Boolean(currentRealtime),
+                  fastLaneAlreadyRespondedForTurn,
+                  lastAgentSpeakingStartedAt: lastAgentSpeakingStartedAtRef.current,
+                  agentSpeaking: Boolean(currentRealtime?.isAgentSpeaking()),
+                  fallbackDelayMs: SEMANTIC_V0_VOICE_FALLBACK_DELAY_MS,
+                  fastLaneGraceMs: SEMANTIC_V0_FAST_LANE_GRACE_MS,
+                  sample: voiceResponse.slice(0, 80),
+                },
+              });
+            }, SEMANTIC_V0_VOICE_FALLBACK_DELAY_MS);
+            semanticVoiceFallbackTimersRef.current.set(e.turnId, timer);
           }
           pipelineTracer.log({
             sessionId: e.sessionId,
@@ -3476,9 +3595,17 @@ function Workbench() {
             meta: {
               delivery: voiceDelivery,
               voiceChars: voiceResponse.length,
-              realtimeConnected: Boolean(realtime),
-              agentAlreadySpokeForTurn,
-              agentSpeaking: Boolean(realtime?.isAgentSpeaking()),
+              realtimeConnected: Boolean(realtimeRef.current),
+              fastLaneAlreadyRespondedForTurn: Boolean(
+                lastAgentTranscriptRef.current && lastAgentTranscriptRef.current.at >= turnFinalizedAt,
+              ) || Boolean(
+                lastAgentSpeakingStartedAtRef.current >=
+                  turnFinalizedAt - SEMANTIC_V0_FAST_LANE_GRACE_MS,
+              ),
+              lastAgentSpeakingStartedAt: lastAgentSpeakingStartedAtRef.current,
+              agentSpeaking: Boolean(realtimeRef.current?.isAgentSpeaking()),
+              fallbackDelayMs: voiceDelivery === "fallback_scheduled" ? SEMANTIC_V0_VOICE_FALLBACK_DELAY_MS : 0,
+              fastLaneGraceMs: SEMANTIC_V0_FAST_LANE_GRACE_MS,
               sample: voiceResponse.slice(0, 80),
             },
           });

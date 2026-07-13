@@ -7,6 +7,7 @@ import { z } from "zod";
 
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
 import { createOpenAIProvider, normalizeAiModel, requireOpenAIKey } from "@/lib/ai-gateway.server";
+import { parseLlmJsonObject } from "@/lib/llm/json";
 
 const InputSchema = z.object({
   selectedText: z.string().min(1).max(8000),
@@ -103,14 +104,7 @@ export const generateMindMap = createServerFn({ method: "POST" })
         system: SYSTEM,
         prompt: userPrompt,
       });
-      let raw = (text ?? "").trim();
-      const fence = raw.match(/```(?:json)?\s*([\s\S]*?)```/i);
-      if (fence) raw = fence[1].trim();
-      const first = raw.indexOf("{");
-      const last = raw.lastIndexOf("}");
-      if (first >= 0 && last > first) raw = raw.slice(first, last + 1);
-
-      const parsed = JSON.parse(raw);
+      const parsed = parseLlmJsonObject(text ?? "");
       const out = OutputSchema.parse(parsed);
       return { root: ensureIds(out.root) };
     } catch (e) {

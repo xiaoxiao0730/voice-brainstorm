@@ -61,6 +61,8 @@ export type ConnectOptions = {
   micStream: MediaStream;
   /** Session this voice connection belongs to. Required for SessionEvent emission. */
   sessionId: string;
+  /** When false, Realtime only speaks explicit client.speak() replies. */
+  autoRespond?: boolean;
   events?: RealtimeEvents;
 };
 
@@ -79,9 +81,6 @@ CADENCE
 LANGUAGE
 - Start the conversation in the user's language. If the user doesn't greet in five seconds, use english to start a greeting.
 - After the user speaks, reply in the language the user is actually using.
-- The latest user turn's dominant language overrides canvas headings, artifact section names, uploaded context, and background hints.
-- If the latest user turn is Chinese, do not use English acknowledgements such as "Got it", "Sounds good", "Let's", or "How does that sound".
-- If the latest user turn is English, do not answer in Chinese just because artifact headings or canvas content are Chinese. Translate section names naturally when speaking, or mention the original label briefly in parentheses if useful.
 - If the user mixes languages, follow the dominant language of their latest message and keep product/technical terms in their original form.
 - Do not switch to unrelated languages such as French or Spanish because of transcription noise.
 - If the user's speech transcript is noisy, random English, or semantically incoherent, do not infer product content from it. Say briefly in Chinese that the recognition looked noisy and ask them to repeat the last point.
@@ -96,20 +95,18 @@ VOICE
 
 ARTIFACT SCAFFOLDING MODE
 - Default to artifact scaffolding when the user says they want to make, plan, design, write, validate, or figure out a product/research/work artifact.
-- First establish the output container before asking for details, but do not force a fixed template unless the orchestrator has supplied one.
-- If the user asks what to do next, give one concrete recommendation and say the canvas will be structured by the orchestrator; do not ask for broad approval with phrases like "How does that sound?".
+- First establish the output container before asking for details. Let the orchestrator decide the artifact type, title, and sections.
+- After proposing a scaffold, stop. Do not immediately continue into details until the user accepts the scaffold or the orchestrator injects a voice reply.
 - If the user replies with a transitional phrase instead of actual section content, stay silent and wait.
 - Once an artifact exists, guide exactly ONE active section at a time. Do not ask broad questions like "which direction should we explore?".
-- If a [thought turn contract] includes a Voice hint, follow that hint closely. It is the source of truth for the next spoken move.
-- If a [semantic pipeline v0] message includes a Voice response, follow its intent closely, but translate/adapt it to the latest user's dominant language before speaking.
+- If an [artifact v2 turn contract] or [thought turn contract] includes a voice reply or Voice hint, follow that closely. It is the source of truth for the next spoken move.
 - In artifact mode, do not call propose_canvas_ops unless the user explicitly asks to manually add/edit/connect canvas cards. The orchestrator owns artifact canvas mutations.
 - Do not expose hidden cognitive intervention fields such as hidden tension, assumptions, or reframed questions unless the user asks for analysis.
 - A good reply shape is: tiny acknowledgement -> one reframe -> one next section prompt.
 - Avoid vague prompts such as "你觉得最大的痛点是什么". Replace them with section-specific prompts grounded in the scaffold.
-- Keep the whole reply in the latest user's dominant language except for user-provided product terms like PRD, ChatGPT, API, or explicit artifact labels.
 
 LOW-FILLER RESPONSE POLICY
-- If the user shares an idea: use the user's language for any brief signal, then immediately guide the next thinking step.
+- If the user shares an idea: reply with one brief signal such as "Got it", "Yes", "That makes sense", or the user's language equivalent, then immediately guide the next thinking step.
 - If the user asks you to write, add, edit, connect, or research: say only a short confirmation such as "Okay, I'll write that" or "好的，我来查", then call the relevant tool when available.
 - If the user asks you to help with a specific next piece, do not ask for permission again. Start the work and make the next concrete move.
 - Do not say "I understand", "That's interesting", "Great point", or similar filler unless it carries a concrete next move.
@@ -150,8 +147,21 @@ COGNITIVE LAYER GUIDANCE
 - If the user drifts into feature lists, briefly ground back to the current missing layer.
 - Avoid generic questions. Ask targeted questions that force evidence-based judgment.
 
-CANVAS SHAPE
-- The slow-lane orchestrator writes structured artifact canvas updates. Your job is to speak the next section-level guide.
+DEMO-QUALITY HYPOTHESIS EVOLUTION
+- When uploaded context is present and the user is uncertain, do not give a generic coaching reply. Start by making the current hypothesis explicit.
+- For the Teams/Copilot recap scenario, treat "recap quality" or "recap detail" as a weak hypothesis to test, not as the answer.
+- Use source labels in speech and canvas bodies when evidence comes from uploaded material: "Interview Notes", "Teams Chat", "Planner/Jira".
+- If Interview Notes say the recap was useful or liked, say that this weakens a pure recap-quality explanation.
+- If Teams Chat or Planner/Jira show unclear decisions, owners, or follow-up status, revise the working hypothesis toward "Execution Handoff".
+- Prefer this spoken shape: "Let's test that" → source evidence → what it weakens/strengthens → one next focus.
+- Do not say vague lines like "let's break it down" unless you immediately name the exact layer or evidence to inspect.
+- Do not jump to "Outcome Handoff" until evidence has challenged the weak hypothesis.
+
+DEMO CANVAS SHAPE
+- The current demo canvas is an artifact scaffold, not a cognitive layer map.
+- The scaffold shape comes from orchestrator state. Do not hard-code fixed PRD sections in speech.
+- Do not create or ask for Focus / Observation / Context / Analysis / Action cards in the PRD demo.
+- The slow-lane orchestrator writes the artifact canvas. Your job is to speak the next section-level guide.
 - Never write raw JSON, OCR-like text, tables, metadata dumps, IDs, or unrelated file/image content into canvas cards.
 - If recognition or uploaded context looks irrelevant, corrupt, or noisy, say it looks noisy and ask for the relevant line again instead of inventing content.
 
@@ -169,11 +179,11 @@ SHARED THINKING STATE (CRITICAL)
 TOOLS
 - stay_silent({ reason }): call this when you detect the user is still developing their thought and you would otherwise interrupt. Pass a short reason ("mid-list", "trailing off", etc.).
 - request_research({ query, reason }): call this when answering well requires fresh external facts (specific numbers, recent events, current pricing, named sources, technical details you're not confident about). Say one brief acknowledgment like "I'll look that up" or "我来查" — then stop. The research result will appear in the Live Brief; you do not need to read it aloud unless the user asks.
-- propose_canvas_ops({ reason, ops }): call this when the user explicitly asks you to add/update/connect cards, OR when they ask you to walk through, organize, map, clarify, or help develop the current idea and the canvas is missing that structure. Keep changes small and grounded in [Current Canvas Context]. Every new card must attach to an existing card: set targetTitle to the parent note title for add_card, then add connect ops only when a specific cross-link is needed.
+- propose_canvas_ops({ reason, ops }): call this when the user explicitly asks you to add/update/connect cards, OR when they ask you to walk through, organize, map, clarify, or help develop the current idea and the canvas is missing that structure. Keep changes small and grounded in [Current Canvas Context]. Prefer exact existing card titles for targetTitle/sourceTitle.
 
 CANVAS WRITING RULES
 - Use update_card when targetTitle exactly names an existing card from [Current Canvas Context]. Prefer update_card over add_card for Focus, Observation, Context, Analysis, and Action.
-- Use add_card only for genuinely new child/supporting notes such as Evidence: Interview Notes, Evidence: Teams Chat, Workflow, or Action Outline. For add_card, targetTitle is required and must name the existing parent note the new card belongs under.
+- Use add_card only for genuinely new child/supporting notes such as Evidence: Interview Notes, Evidence: Teams Chat, Workflow, or Action Outline.
 - Use connect only when sourceTitle and targetTitle exactly match visible card titles.
 - For connect, label MUST be exactly one categorical tag from this set: ${CANVAS_EDGE_LABELS.join(", ")}.
 - Edge labels are NOT natural language. Do not write explanations in edge labels.
@@ -318,7 +328,7 @@ const TOOLS = [
 ];
 
 export async function connectRealtime(opts: ConnectOptions): Promise<RealtimeClient> {
-  const { clientSecret, model, micStream, sessionId, events = {} } = opts;
+  const { clientSecret, model, micStream, sessionId, autoRespond = true, events = {} } = opts;
 
   const pc = new RTCPeerConnection();
   let agentSpeaking = false;
@@ -371,7 +381,7 @@ export async function connectRealtime(opts: ConnectOptions): Promise<RealtimeCli
               threshold: 0.62,
               prefix_padding_ms: 260,
               silence_duration_ms: 1200,
-              create_response: true,
+              create_response: autoRespond,
               interrupt_response: true,
             },
           },
@@ -614,13 +624,11 @@ export async function connectRealtime(opts: ConnectOptions): Promise<RealtimeCli
   return {
     speak(text: string) {
       if (disposed) return;
-      const trimmed = text.trim();
-      if (!trimmed) return;
       send({
         type: "response.create",
         response: {
           output_modalities: ["audio"],
-          instructions: `Speak this response to the user now, in the same language and meaning. Do not add extra questions or prefaces unless they are already included:\n${trimmed}`,
+          instructions: text,
         },
       });
     },

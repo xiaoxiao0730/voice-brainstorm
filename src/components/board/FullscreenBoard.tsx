@@ -69,6 +69,7 @@ import {
   IDEA_NODE_MIN_HEIGHT,
   OPPOSITE_SIDE,
   PARALLEL_BRANCH_GAP,
+  chooseBestBranchSide,
   layoutParallelBranch,
   makeParallelBranchLayout,
   parallelChildPosition,
@@ -1073,8 +1074,17 @@ function BoardInner({
       if (!source) return;
 
       const width = IDEA_NODE_DEFAULT_WIDTH;
+      const branchSide = dropPosition
+        ? side
+        : chooseBestBranchSide({
+            nodes: current.nodes,
+            edges: current.edges,
+            sourceId,
+            newChildCount: 1,
+            preferredSide: side,
+          });
       const existingBranchEdges = current.edges.filter(
-        (edge) => edge.source === sourceId && edge.sourceHandle === side,
+        (edge) => edge.source === sourceId && edge.sourceHandle === branchSide,
       );
       const branchTargetIds = [
         ...existingBranchEdges.map((edge) => edge.target),
@@ -1085,7 +1095,7 @@ function BoardInner({
         ? { x: dropPosition.x - width / 2, y: dropPosition.y - 80 }
         : parallelChildPosition({
             source,
-            side,
+            side: branchSide,
             index: branchIndex,
             count: branchTargetIds.length,
             childWidth: width,
@@ -1113,12 +1123,12 @@ function BoardInner({
         id: crypto.randomUUID(),
         source: sourceId,
         target: id,
-        sourceHandle: side,
-        targetHandle: OPPOSITE_SIDE[side],
+        sourceHandle: branchSide,
+        targetHandle: OPPOSITE_SIDE[branchSide],
         type: "editable",
         data: {
           branchLayout: makeParallelBranchLayout({
-            side,
+            side: branchSide,
             index: branchIndex,
             count: branchTargetIds.length,
             gap: PARALLEL_BRANCH_GAP,
@@ -1129,7 +1139,7 @@ function BoardInner({
         nodes: [...current.nodes, node],
         edges: [...current.edges, edge],
         sourceId,
-        side,
+        side: branchSide,
         targetIds: [...existingBranchEdges.map((branchEdge) => branchEdge.target), id],
       });
       commitState({
