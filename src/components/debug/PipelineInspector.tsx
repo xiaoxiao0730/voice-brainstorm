@@ -35,6 +35,9 @@ const KIND_COLOR: Record<string, string> = {
   "insight.start": "#06b6d4",
   "insight.end": "#0891b2",
   "insight.created": "#0e7490",
+  "semanticV0.start": "#6366f1",
+  "semanticV0.end": "#4f46e5",
+  "semanticV0.voice_delivery": "#8b5cf6",
 };
 
 function fmtTime(t: number): string {

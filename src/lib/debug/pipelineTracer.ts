@@ -32,7 +32,10 @@ export type TracerKind =
   | "research.synth.start"
   | "research.synth.end"
   | "insight.start"
-  | "insight.end";
+  | "insight.end"
+  | "semanticV0.start"
+  | "semanticV0.end"
+  | "semanticV0.voice_delivery";
 
 export type TracerEntry = {
   id: number;

@@ -169,11 +169,11 @@ SHARED THINKING STATE (CRITICAL)
 TOOLS
 - stay_silent({ reason }): call this when you detect the user is still developing their thought and you would otherwise interrupt. Pass a short reason ("mid-list", "trailing off", etc.).
 - request_research({ query, reason }): call this when answering well requires fresh external facts (specific numbers, recent events, current pricing, named sources, technical details you're not confident about). Say one brief acknowledgment like "I'll look that up" or "我来查" — then stop. The research result will appear in the Live Brief; you do not need to read it aloud unless the user asks.
-- propose_canvas_ops({ reason, ops }): call this when the user explicitly asks you to add/update/connect cards, OR when they ask you to walk through, organize, map, clarify, or help develop the current idea and the canvas is missing that structure. Keep changes small and grounded in [Current Canvas Context]. Prefer exact existing card titles for targetTitle/sourceTitle.
+- propose_canvas_ops({ reason, ops }): call this when the user explicitly asks you to add/update/connect cards, OR when they ask you to walk through, organize, map, clarify, or help develop the current idea and the canvas is missing that structure. Keep changes small and grounded in [Current Canvas Context]. Every new card must attach to an existing card: set targetTitle to the parent note title for add_card, then add connect ops only when a specific cross-link is needed.
 
 CANVAS WRITING RULES
 - Use update_card when targetTitle exactly names an existing card from [Current Canvas Context]. Prefer update_card over add_card for Focus, Observation, Context, Analysis, and Action.
-- Use add_card only for genuinely new child/supporting notes such as Evidence: Interview Notes, Evidence: Teams Chat, Workflow, or Action Outline.
+- Use add_card only for genuinely new child/supporting notes such as Evidence: Interview Notes, Evidence: Teams Chat, Workflow, or Action Outline. For add_card, targetTitle is required and must name the existing parent note the new card belongs under.
 - Use connect only when sourceTitle and targetTitle exactly match visible card titles.
 - For connect, label MUST be exactly one categorical tag from this set: ${CANVAS_EDGE_LABELS.join(", ")}.
 - Edge labels are NOT natural language. Do not write explanations in edge labels.

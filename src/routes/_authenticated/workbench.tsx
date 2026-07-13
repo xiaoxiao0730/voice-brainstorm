@@ -7,6 +7,7 @@ import type { BriefDocumentHandle } from "@/components/brief/BriefDocument";
 import {
   mergeIdeaCanvas,
   treeToIdeaCanvas,
+  type IdeaFlowEdge,
   type IdeaFlowNode,
   type IdeaCanvasState,
   type IdeaNodeKind,
@@ -73,7 +74,13 @@ import { attachInsightCoordinator } from "@/lib/orchestrator/insightCoordinator"
 import { pipelineTracer } from "@/lib/debug/pipelineTracer";
 import { generateMindMap } from "@/lib/mindmap/generateMindMap.functions";
 import { loadIdeaCanvas, saveIdeaCanvas } from "@/lib/ideaCanvas.functions";
-import { chooseConnectionHandles } from "@/lib/canvas/canvasLayoutEngine";
+import {
+  chooseConnectionHandles,
+  layoutParallelBranch,
+  makeParallelBranchLayout,
+  parallelChildPosition,
+  type CanvasSide,
+} from "@/lib/canvas/canvasLayoutEngine";
 import {
   planThoughtTurnContract,
   type ThoughtTurnCanvasOp,
@@ -244,7 +251,28 @@ function browserPrefersChineseSpeech() {
   return languages.some((language) => language.startsWith("zh"));
 }
 
+function configuredSpeechLanguageMode() {
+  if (typeof window === "undefined") return null;
+  const params = new URLSearchParams(window.location.search);
+  const raw = params.get("speechLang") ?? window.localStorage.getItem("murmur.speechLang");
+  const value = raw?.trim().toLowerCase();
+  if (!value) return null;
+  if (["auto", "detect", "multi"].includes(value)) return "auto";
+  if (["zh", "zh-cn", "chinese", "中文"].includes(value)) return "zh-CN";
+  if (["en", "en-us", "english"].includes(value)) return "en-US";
+  return null;
+}
+
 function chooseSpeechRecognizerLanguages(recentUserTexts: string[] = []) {
+  const configured = configuredSpeechLanguageMode();
+  if (configured === "auto") return undefined;
+  if (configured) return [configured];
+  // Azure's continuous auto-detect is fragile for Chinese brainstorming: a
+  // greeting like "Hello" or filler like "uh/MMM" can pin the recognizer to
+  // English, after which Chinese is transcribed as pinyin-like English. Keep
+  // /workbench stable by defaulting to Chinese unless the user explicitly opts
+  // into auto/en with ?speechLang=auto or localStorage murmur.speechLang.
+  if (recentUserTexts.length === 0) return ["zh-CN"];
   if (browserPrefersChineseSpeech() || recentSpeechLooksChinese(recentUserTexts)) return ["zh-CN"];
   return undefined;
 }
@@ -339,6 +367,85 @@ function summarizeResearchBody(text: string, max = 220) {
   const cleaned = markdownToCanvasText(text).replace(/\s+/g, " ").trim();
   if (cleaned.length <= max) return cleaned;
   return `${cleaned.slice(0, max - 1).trim()}...`;
+}
+
+function nodeTitleKey(node: IdeaFlowNode) {
+  return node.data.title.trim().toLowerCase();
+}
+
+function findCanvasAttachParent(nodes: IdeaFlowNode[], preferredTitle?: string) {
+  const title = preferredTitle?.trim().toLowerCase();
+  if (title) {
+    const exact = nodes.find((node) => nodeTitleKey(node) === title);
+    if (exact) return exact;
+  }
+  return (
+    nodes.find((node) => node.selected && node.data.layoutMode === "artifact" && node.data.kind !== "focus") ??
+    nodes.find((node) => node.selected) ??
+    nodes.find((node) => node.data.kind === "focus" && node.data.layoutMode === "artifact") ??
+    nodes.find((node) => node.data.kind === "focus") ??
+    nodes[0] ??
+    null
+  );
+}
+
+function chooseAttachSide(parent: IdeaFlowNode, edges: IdeaFlowEdge[]): CanvasSide {
+  const existing = edges.find((edge) => {
+    const layout = edge.data?.branchLayout;
+    return edge.source === parent.id && layout?.mode === "parallel";
+  });
+  if (existing?.data?.branchLayout?.mode === "parallel") return existing.data.branchLayout.side;
+  const artifactFocus = parent.data.layoutMode === "artifact" && parent.data.kind === "focus";
+  return artifactFocus ? "bottom" : "right";
+}
+
+function oppositeCanvasSide(side: CanvasSide): CanvasSide {
+  if (side === "right") return "left";
+  if (side === "left") return "right";
+  if (side === "bottom") return "top";
+  return "bottom";
+}
+
+function attachCanvasChildrenToParent(args: {
+  nodes: IdeaFlowNode[];
+  edges: IdeaFlowEdge[];
+  parent: IdeaFlowNode;
+  childIds: string[];
+  side: CanvasSide;
+}) {
+  const existingBranchEdges = args.edges.filter((edge) => {
+    const layout = edge.data?.branchLayout;
+    return edge.source === args.parent.id && layout?.mode === "parallel" && layout.side === args.side;
+  });
+  const targetIds = [...existingBranchEdges.map((edge) => edge.target), ...args.childIds];
+  const existingTargets = new Set(existingBranchEdges.map((edge) => edge.target));
+  const edges = [...args.edges];
+  for (const childId of args.childIds) {
+    if (existingTargets.has(childId)) continue;
+    const index = targetIds.indexOf(childId);
+    edges.push({
+      id: nextIdeaId("canvas-edge"),
+      source: args.parent.id,
+      target: childId,
+      sourceHandle: args.side,
+      targetHandle: oppositeCanvasSide(args.side),
+      type: "editable",
+      data: {
+        branchLayout: makeParallelBranchLayout({
+          side: args.side,
+          index,
+          count: targetIds.length,
+        }),
+      },
+    });
+  }
+  return layoutParallelBranch({
+    nodes: args.nodes,
+    edges,
+    sourceId: args.parent.id,
+    side: args.side,
+    targetIds,
+  });
 }
 
 const BRIEF_NODE_PREFIX = "brief-block-";
@@ -1458,6 +1565,12 @@ function Workbench() {
     async (rawText: string, origin?: { x: number; y: number }) => {
       const source = rawText.trim();
       if (!source) return;
+      if (artifactViewV0Ref.current) {
+        scheduleInject(
+          "[artifact canvas ownership]\nThe V0 artifact renderer owns this canvas. Do not create a separate free-form map; guide the active artifact section instead.",
+        );
+        return;
+      }
       setMapLoading(true);
       try {
         const canvasBefore = ideaCanvasRef.current;
@@ -1800,14 +1913,7 @@ function Workbench() {
           .map((node) => [node.data.title.trim().toLowerCase(), node] as const)
           .filter(([title]) => title.length > 0),
       );
-      const kindCol: Record<ThoughtTurnCanvasOp["kind"], number> = {
-        focus: 0,
-        idea: 1,
-        question: 2,
-        risk: 3,
-        decision: 4,
-        next: 5,
-      };
+      const addedByParent = new Map<string, { parent: IdeaFlowNode; side: CanvasSide; childIds: string[] }>();
 
       for (const op of meaningful) {
         const title = op.title.trim();
@@ -1830,14 +1936,30 @@ function Workbench() {
             continue;
           }
 
-          const sameKindCount = nodes.filter((node) => node.data.kind === op.kind).length;
+          const parent = findCanvasAttachParent(nodes, op.targetTitle || op.sourceTitle);
+          const side = parent ? chooseAttachSide(parent, edges) : "right";
+          const branch = parent
+            ? edges.filter((edge) => {
+                const layout = edge.data?.branchLayout;
+                return edge.source === parent.id && layout?.mode === "parallel" && layout.side === side;
+              })
+            : [];
           const id = nextIdeaId(`contract-${op.kind}`);
-          const node = {
+          const fallbackIndex = nodes.filter((node) => node.data.kind === op.kind).length;
+          const position = parent
+            ? parallelChildPosition({
+                source: parent,
+                side,
+                index: branch.length,
+                count: branch.length + 1,
+              })
+            : { x: 120 + fallbackIndex * 42, y: 120 + fallbackIndex * 42 };
+          const node: IdeaFlowNode = {
             id,
             type: "ideaNode",
             position: {
-              x: 80 + kindCol[op.kind] * 260,
-              y: 100 + sameKindCount * 130,
+              x: Math.round(position.x),
+              y: Math.round(position.y),
             },
             data: {
               title,
@@ -1847,6 +1969,14 @@ function Workbench() {
           };
           nodes.push(node);
           byTitle.set(titleKey, node);
+          if (parent) {
+            const existing = addedByParent.get(`${parent.id}:${side}`);
+            if (existing) {
+              existing.childIds.push(node.id);
+            } else {
+              addedByParent.set(`${parent.id}:${side}`, { parent, side, childIds: [node.id] });
+            }
+          }
           continue;
         }
 
@@ -1868,7 +1998,16 @@ function Workbench() {
         }
       }
 
-      const next = { nodes, edges };
+      let next = { nodes, edges };
+      for (const group of addedByParent.values()) {
+        next = attachCanvasChildrenToParent({
+          nodes: next.nodes,
+          edges: next.edges,
+          parent: group.parent,
+          childIds: group.childIds,
+          side: group.side,
+        });
+      }
       ideaCanvasRef.current = next;
       return next;
     });
@@ -1886,7 +2025,10 @@ function Workbench() {
 
   const applyAgentCanvasOps = useCallback(
     (ops: CanvasToolOp[]) => {
-      if (normalizeArtifactState(thinkingStateRef.current.artifact_state).mode !== "none") {
+      if (
+        normalizeArtifactState(thinkingStateRef.current.artifact_state).mode !== "none" ||
+        artifactViewV0Ref.current
+      ) {
         scheduleInject(
           "[artifact canvas ownership]\nThe artifact scaffold is owned by the turn orchestrator. Keep voice replies aligned with the active PRD section instead of writing free-form canvas cards.",
         );
@@ -1938,8 +2080,8 @@ function Workbench() {
             kind: op.kind ?? "idea",
             title,
             body,
-            sourceTitle: "",
-            targetTitle: "",
+            sourceTitle: (op.sourceTitle ?? "").trim(),
+            targetTitle: (op.targetTitle ?? "").trim(),
             label: "",
           });
           continue;
@@ -1969,46 +2111,20 @@ function Workbench() {
     const card = quietInsight?.suggestedCard;
     const title = card?.title.trim();
     if (!card || !title) return;
-    const current = ideaCanvasRef.current;
-    const parent = findQuietInsightParent(current.nodes, quietInsight.kind);
-    const width = 280;
-    const parentIsLeft = parent ? parent.position.x < 0 : false;
-    const desired = parent
-      ? {
-          x: parent.position.x + (parentIsLeft ? -340 : 340),
-          y: parent.position.y + 96,
-        }
-      : { x: 140, y: 160 + current.nodes.length * 28 };
-    const position = findOpenCanvasPosition(current.nodes, snapCanvasPosition(desired), width, 178);
-    const node: IdeaFlowNode = {
-      id: nextIdeaId("insight"),
-      type: "ideaNode",
-      position,
-      selected: true,
-      data: {
+    const parent = findQuietInsightParent(ideaCanvasRef.current.nodes, quietInsight.kind);
+    applyCanvasOps([
+      {
+        action: "add_card",
+        kind: card.kind,
         title,
         body: card.body.trim(),
-        kind: card.kind,
-        width,
+        sourceTitle: "",
+        targetTitle: parent?.data.title ?? "",
+        label: "",
       },
-    };
-    const edge = parent
-      ? {
-          id: nextIdeaId("insight-edge"),
-          source: parent.id,
-          target: node.id,
-          ...chooseConnectionHandles(parent, node),
-          type: "editable",
-          label: "",
-        }
-      : null;
-    setIdeaCanvas({
-      ...current,
-      nodes: [...current.nodes.map((item) => ({ ...item, selected: false })), node],
-      edges: edge ? [...current.edges, edge] : current.edges,
-    });
+    ]);
     setQuietInsight(null);
-  }, [quietInsight]);
+  }, [applyCanvasOps, quietInsight]);
 
   // Stage 4: sync sessionStore + attach slow-lane coordinator to the active session.
   // Also subscribe to brief.proposed / research.requested / research.completed.
@@ -2780,6 +2896,10 @@ function Workbench() {
           onAgentSpeakingStart: () => setAgentStatus("speaking"),
           onAgentSpeakingEnd: () => setAgentStatus("listening"),
           onUserBargeIn: () => setAgentStatus("listening"),
+          onStaySilent: (reason) => {
+            console.info("[realtime] stay_silent", reason);
+            setAgentStatus("listening");
+          },
           onDisconnected: () => setAgentStatus("off"),
           onAgentTranscript: (text) => {
             const sessionId = activeSessionRef.current;
@@ -3232,6 +3352,14 @@ function Workbench() {
         const turnFinalizedAt = Date.now();
         const currentState = thinkingStateV0Ref.current ?? createEmptyThinkingStateV0(e.sessionId);
         const recentTurns = recentSemanticTurnsV0Ref.current.slice(-8);
+        const endSemanticV0Span = pipelineTracer.startSpan({
+          sessionId: e.sessionId,
+          kind: "semanticV0.start",
+          endKind: "semanticV0.end",
+          key: e.turnId,
+          turnId: e.turnId,
+          meta: { chars: text.length, sample: text.slice(0, 80) },
+        });
 
         setBriefThinking(true);
         try {
@@ -3341,6 +3469,19 @@ function Workbench() {
             realtime.speak(voiceResponse);
             voiceDelivery = "spoken";
           }
+          pipelineTracer.log({
+            sessionId: e.sessionId,
+            kind: "semanticV0.voice_delivery",
+            turnId: e.turnId,
+            meta: {
+              delivery: voiceDelivery,
+              voiceChars: voiceResponse.length,
+              realtimeConnected: Boolean(realtime),
+              agentAlreadySpokeForTurn,
+              agentSpeaking: Boolean(realtime?.isAgentSpeaking()),
+              sample: voiceResponse.slice(0, 80),
+            },
+          });
 
           const debugSnapshot: SemanticPipelineV0DebugSnapshot = {
             turnId: e.turnId,
@@ -3375,6 +3516,7 @@ function Workbench() {
           console.warn("[semanticPipelineV0] failed", err);
           setError(errorMessage(err, "Semantic pipeline failed"));
         } finally {
+          endSemanticV0Span({ activeSession: e.sessionId === activeSessionRef.current });
           if (e.sessionId === activeSessionRef.current) setBriefThinking(false);
         }
       };
