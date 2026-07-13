@@ -6,7 +6,11 @@ import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
 const IdeaKind = z.enum(["focus", "idea", "question", "decision", "risk", "next"]);
 const TextSize = z.enum(["small", "normal", "large"]);
 const TextAlign = z.enum(["left", "center", "right"]);
+const LayoutMode = z.enum(["free", "xmind", "artifact"]);
+const BranchSide = z.enum(["top", "right", "bottom", "left"]);
 type SerializableIdeaNodeKind = z.infer<typeof IdeaKind>;
+type SerializableLayoutMode = z.infer<typeof LayoutMode>;
+type SerializableBranchSide = z.infer<typeof BranchSide>;
 type SerializableIdeaCanvasState = {
   nodes: Array<{
     id: string;
@@ -18,6 +22,9 @@ type SerializableIdeaCanvasState = {
       kind: SerializableIdeaNodeKind;
       width?: number;
       height?: number;
+      layoutMode?: SerializableLayoutMode;
+      locked?: boolean;
+      branchColor?: string;
       textSize?: z.infer<typeof TextSize>;
       bold?: boolean;
       italic?: boolean;
@@ -28,11 +35,23 @@ type SerializableIdeaCanvasState = {
     id: string;
     source: string;
     target: string;
+    sourceHandle?: SerializableBranchSide;
+    targetHandle?: SerializableBranchSide;
     type?: string;
     label?: string;
     animated?: boolean;
     data?: {
       routeOffset?: number;
+      locked?: boolean;
+      branchColor?: string;
+      branchLayout?: {
+        mode: "parallel";
+        side: SerializableBranchSide;
+        index: number;
+        count: number;
+        fixedLength: number;
+        gap: number;
+      };
     };
   }>;
 };
@@ -72,6 +91,9 @@ type CanvasNodeRow = {
     bold?: unknown;
     italic?: unknown;
     align?: unknown;
+    layoutMode?: unknown;
+    locked?: unknown;
+    branchColor?: unknown;
   } | null;
 };
 
@@ -83,7 +105,12 @@ type CanvasEdgeRow = {
   label?: unknown;
   animated?: unknown;
   style?: {
+    sourceHandle?: unknown;
+    targetHandle?: unknown;
     routeOffset?: unknown;
+    locked?: unknown;
+    branchColor?: unknown;
+    branchLayout?: unknown;
   } | null;
 };
 
@@ -105,6 +132,15 @@ const PositionSchema = z.object({
   y: z.number(),
 });
 
+const BranchLayoutSchema = z.object({
+  mode: z.literal("parallel"),
+  side: BranchSide,
+  index: z.number().int().min(0).max(200),
+  count: z.number().int().min(1).max(200),
+  fixedLength: z.number().min(40).max(1000),
+  gap: z.number().min(40).max(1000),
+});
+
 const NodeSchema = z.object({
   id: z.string().min(1).max(200),
   type: z.string().min(1).max(80).optional(),
@@ -115,6 +151,9 @@ const NodeSchema = z.object({
     kind: IdeaKind.default("idea"),
     width: z.preprocess((value) => clampOptionalNumber(value, 120, 800), z.number().min(120).max(800).optional()),
     height: z.preprocess((value) => clampOptionalNumber(value, 80, 800), z.number().min(80).max(800).optional()),
+    layoutMode: LayoutMode.optional(),
+    locked: z.boolean().optional(),
+    branchColor: z.string().max(40).optional(),
     textSize: TextSize.optional(),
     bold: z.boolean().optional(),
     italic: z.boolean().optional(),
@@ -126,12 +165,17 @@ const EdgeSchema = z.object({
   id: z.string().min(1).max(240),
   source: z.string().min(1).max(200),
   target: z.string().min(1).max(200),
+  sourceHandle: BranchSide.optional(),
+  targetHandle: BranchSide.optional(),
   type: z.string().max(80).optional(),
   label: z.string().max(500).optional(),
   animated: z.boolean().optional(),
   data: z
     .object({
       routeOffset: z.number().min(-2000).max(2000).optional(),
+      locked: z.boolean().optional(),
+      branchColor: z.string().max(40).optional(),
+      branchLayout: BranchLayoutSchema.optional(),
     })
     .optional(),
   style: z.record(z.string(), z.unknown()).optional(),
@@ -169,6 +213,7 @@ export const loadIdeaCanvas = createServerFn({ method: "GET" })
         const kind = IdeaKind.safeParse(row.kind);
         const textSize = TextSize.safeParse(row.text_style?.size);
         const textAlign = TextAlign.safeParse(row.text_style?.align);
+        const layoutMode = LayoutMode.safeParse(row.text_style?.layoutMode);
         return {
           id: asText(row.id),
           type: asText(row.type, "ideaNode"),
@@ -179,6 +224,12 @@ export const loadIdeaCanvas = createServerFn({ method: "GET" })
             kind: kind.success ? kind.data : "idea",
             width: Number(row.width ?? 0) || undefined,
             height: Number(row.height ?? 0) || undefined,
+            layoutMode: layoutMode.success ? layoutMode.data : undefined,
+            locked: typeof row.text_style?.locked === "boolean" ? row.text_style.locked : undefined,
+            branchColor:
+              typeof row.text_style?.branchColor === "string"
+                ? row.text_style.branchColor
+                : undefined,
             textSize: textSize.success ? textSize.data : undefined,
             bold: typeof row.text_style?.bold === "boolean" ? row.text_style.bold : undefined,
             italic: typeof row.text_style?.italic === "boolean" ? row.text_style.italic : undefined,
@@ -188,17 +239,28 @@ export const loadIdeaCanvas = createServerFn({ method: "GET" })
       }),
       edges: (edgeRows ?? []).map((rawRow) => {
         const row = rawRow as CanvasEdgeRow;
+        const branchLayout = BranchLayoutSchema.safeParse(row.style?.branchLayout);
+        const sourceHandle = BranchSide.safeParse(row.style?.sourceHandle);
+        const targetHandle = BranchSide.safeParse(row.style?.targetHandle);
         return {
           id: asText(row.id),
           source: asText(row.source),
           target: asText(row.target),
+          sourceHandle: sourceHandle.success ? sourceHandle.data : undefined,
+          targetHandle: targetHandle.success ? targetHandle.data : undefined,
           type: typeof row.type === "string" ? row.type : undefined,
           label: typeof row.label === "string" ? row.label : undefined,
           animated: !!row.animated,
-          data:
-            typeof row.style?.routeOffset === "number"
+          data: {
+            ...(typeof row.style?.routeOffset === "number"
               ? { routeOffset: row.style.routeOffset }
-              : undefined,
+              : {}),
+            ...(typeof row.style?.locked === "boolean" ? { locked: row.style.locked } : {}),
+            ...(typeof row.style?.branchColor === "string"
+              ? { branchColor: row.style.branchColor }
+              : {}),
+            ...(branchLayout.success ? { branchLayout: branchLayout.data } : {}),
+          },
         };
       }),
     };
@@ -243,6 +305,9 @@ export const saveIdeaCanvas = createServerFn({ method: "POST" })
           bold: node.data.bold ?? false,
           italic: node.data.italic ?? false,
           align: node.data.textAlign ?? "left",
+          layoutMode: node.data.layoutMode ?? "free",
+          locked: node.data.locked ?? false,
+          branchColor: node.data.branchColor ?? null,
         },
       }));
       const { error: nodeError } = await supabase
@@ -283,9 +348,16 @@ export const saveIdeaCanvas = createServerFn({ method: "POST" })
           animated: edge.animated ?? false,
           style: {
             ...(edge.style ?? {}),
+            ...(edge.sourceHandle ? { sourceHandle: edge.sourceHandle } : {}),
+            ...(edge.targetHandle ? { targetHandle: edge.targetHandle } : {}),
             ...(typeof edge.data?.routeOffset === "number"
               ? { routeOffset: edge.data.routeOffset }
               : {}),
+            ...(typeof edge.data?.locked === "boolean" ? { locked: edge.data.locked } : {}),
+            ...(typeof edge.data?.branchColor === "string"
+              ? { branchColor: edge.data.branchColor }
+              : {}),
+            ...(edge.data?.branchLayout ? { branchLayout: edge.data.branchLayout } : {}),
           },
           marker_end: edge.markerEnd ?? null,
         })),

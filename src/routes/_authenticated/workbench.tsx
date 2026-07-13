@@ -73,6 +73,7 @@ import { attachInsightCoordinator } from "@/lib/orchestrator/insightCoordinator"
 import { pipelineTracer } from "@/lib/debug/pipelineTracer";
 import { generateMindMap } from "@/lib/mindmap/generateMindMap.functions";
 import { loadIdeaCanvas, saveIdeaCanvas } from "@/lib/ideaCanvas.functions";
+import { chooseConnectionHandles } from "@/lib/canvas/canvasLayoutEngine";
 import {
   planThoughtTurnContract,
   type ThoughtTurnCanvasOp,
@@ -107,6 +108,10 @@ import {
   type CanvasArtifactViewV0,
   type OrchestratorOutputV0,
 } from "@/lib/orchestrator/orchestratorV0.functions";
+import {
+  loadCanvasArtifactViewV0,
+  saveCanvasArtifactViewV0,
+} from "@/lib/orchestrator/canvasArtifactViewV0.functions";
 import { renderArtifactViewToIdeaCanvasV0 } from "@/lib/orchestrator/artifactViewRendererV0";
 import {
   EMPTY_ARTIFACT_STATE,
@@ -216,10 +221,38 @@ function errorMessage(error: unknown, fallback = "Something went wrong") {
   return fallback;
 }
 
-function looksLikeSpeechRecognitionNoise(text: string, lang?: string) {
+function countCjk(text: string) {
+  return (text.match(/[\u4e00-\u9fff]/g) ?? []).length;
+}
+
+function recentSpeechLooksChinese(texts: string[]) {
+  const recent = texts
+    .filter((text) => !/^agent\s*:/i.test(text.trim()))
+    .slice(-4)
+    .join(" ");
+  if (!recent.trim()) return false;
+  const cjkCount = countCjk(recent);
+  const latinCount = (recent.match(/[a-z]/gi) ?? []).length;
+  return cjkCount >= 8 && cjkCount >= latinCount * 0.4;
+}
+
+function browserPrefersChineseSpeech() {
+  if (typeof navigator === "undefined") return false;
+  const languages = [navigator.language, ...(navigator.languages ?? [])]
+    .filter(Boolean)
+    .map((language) => language.toLowerCase());
+  return languages.some((language) => language.startsWith("zh"));
+}
+
+function chooseSpeechRecognizerLanguages(recentUserTexts: string[] = []) {
+  if (browserPrefersChineseSpeech() || recentSpeechLooksChinese(recentUserTexts)) return ["zh-CN"];
+  return undefined;
+}
+
+function looksLikeSpeechRecognitionNoise(text: string, lang?: string, recentUserTexts: string[] = []) {
   const trimmed = text.trim();
   if (!trimmed) return true;
-  const cjkCount = (trimmed.match(/[\u4e00-\u9fff]/g) ?? []).length;
+  const cjkCount = countCjk(trimmed);
   const lower = trimmed.toLowerCase();
   const knownNoise = [
     "weather",
@@ -228,8 +261,21 @@ function looksLikeSpeechRecognitionNoise(text: string, lang?: string) {
     "venue",
     "island",
     "joshua",
+    "tianji",
+    "tianchi",
+    "dance yu",
+    "sheng sheng",
+    "wo jiang",
   ];
   if (knownNoise.some((word) => lower.includes(word)) && cjkCount === 0) return true;
+  if (
+    lang?.toLowerCase().startsWith("en") &&
+    cjkCount === 0 &&
+    recentSpeechLooksChinese(recentUserTexts) &&
+    lower.includes("to hosting")
+  ) {
+    return true;
+  }
   return false;
 }
 
@@ -782,13 +828,12 @@ function mergeCognitiveScaffoldCanvasCapture(
     }
 
     if (!edgeExists(focusNode.id, node.id)) {
-      const childIsLeft = node.position.x < focusNode.position.x;
+      const handles = chooseConnectionHandles(focusNode, node);
       edges.push({
         id: nextIdeaId("voice-edge"),
         source: focusNode.id,
         target: node.id,
-        sourceHandle: childIsLeft ? "left" : "right",
-        targetHandle: childIsLeft ? "right" : "left",
+        ...handles,
         type: "editable",
       });
     }
@@ -914,13 +959,12 @@ function mergeStructuredCanvasCapture(
     byTitle.set(titleKey, node);
 
     if (attachTo && !edgeExists(attachTo.id, node.id)) {
-      const childIsLeftOfParent = node.position.x < attachTo.position.x;
+      const handles = chooseConnectionHandles(attachTo, node);
       edges.push({
         id: nextIdeaId("voice-edge"),
         source: attachTo.id,
         target: node.id,
-        sourceHandle: childIsLeftOfParent ? "left" : "right",
-        targetHandle: childIsLeftOfParent ? "right" : "left",
+        ...handles,
         type: "editable",
       });
     }
@@ -946,8 +990,7 @@ function mergeStructuredCanvasCapture(
       id: nextIdeaId("voice-edge"),
       source: source.id,
       target: target.id,
-      sourceHandle: "right",
-      targetHandle: "left",
+      ...chooseConnectionHandles(source, target),
       type: "editable",
       label,
     });
@@ -984,6 +1027,8 @@ function Workbench() {
   const genMindMap = useServerFn(generateMindMap);
   const loadCanvas = useServerFn(loadIdeaCanvas);
   const saveCanvas = useServerFn(saveIdeaCanvas);
+  const loadArtifactViewV0 = useServerFn(loadCanvasArtifactViewV0);
+  const saveArtifactViewV0 = useServerFn(saveCanvasArtifactViewV0);
   const planContract = useServerFn(planThoughtTurnContract);
   const planThinkingPatchV0 = useServerFn(planThinkingStatePatchV0);
   const planOrchestratorV0 = useServerFn(planOrchestratorTurnV0);
@@ -1101,6 +1146,7 @@ function Workbench() {
   const listeningRef = useRef(listening);
   const agentConnectedAtRef = useRef(Date.now());
   const lastAgentTranscriptRef = useRef<{ text: string; at: number } | null>(null);
+  const spokenSemanticTurnIdsRef = useRef<Set<string>>(new Set());
   const isEditingRef = useRef(false);
   const injectDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendingInjectRef = useRef<string | null>(null);
@@ -1153,6 +1199,7 @@ function Workbench() {
     recentSemanticTurnsV0Ref.current = [];
     lastOrchestratorOutputV0Ref.current = null;
     lastSemanticPipelineV0DebugRef.current = null;
+    spokenSemanticTurnIdsRef.current.clear();
     coThinkingTurnIdsRef.current.clear();
     thinkingStateV0Ref.current = activeSessionId ? createEmptyThinkingStateV0(activeSessionId) : null;
     artifactViewV0Ref.current = null;
@@ -1191,12 +1238,22 @@ function Workbench() {
           body: node.data.body ?? "",
           kind: node.data.kind,
           position: node.position,
+          width: node.data.width,
+          height: node.data.height,
+          layoutMode: node.data.layoutMode,
+          locked: node.data.locked,
+          branchColor: node.data.branchColor,
         })),
         edges: ideaCanvas.edges.map((edge) => ({
           id: edge.id,
           source: edge.source,
           target: edge.target,
+          sourceHandle: edge.sourceHandle,
+          targetHandle: edge.targetHandle,
           label: String(edge.label ?? ""),
+          locked: Boolean(edge.data?.locked),
+          branchColor: typeof edge.data?.branchColor === "string" ? edge.data.branchColor : undefined,
+          branchLayout: edge.data?.branchLayout,
         })),
       },
       transcript: finals.map((item) => item.text),
@@ -1253,21 +1310,34 @@ function Workbench() {
     const emptyCanvas: IdeaCanvasState = { nodes: [], edges: [] };
     void (async () => {
       try {
-        const fromDb = (await loadCanvas({
-          data: { sessionId: activeSessionId },
-        })) as IdeaCanvasState;
+        const [fromDb, artifactView] = await Promise.all([
+          loadCanvas({
+            data: { sessionId: activeSessionId },
+          }) as Promise<IdeaCanvasState>,
+          loadArtifactViewV0({ data: { sessionId: activeSessionId } }).catch((e) => {
+            console.warn("[canvasArtifactViewV0] load failed", e);
+            return null;
+          }) as Promise<CanvasArtifactViewV0 | null>,
+        ]);
         if (cancelled) return;
+        artifactViewV0Ref.current = artifactView;
         const next = stripBriefMirrorNodes({
           nodes: Array.isArray(fromDb.nodes) ? fromDb.nodes : [],
           edges: Array.isArray(fromDb.edges) ? fromDb.edges : [],
         });
         const localCache = readIdeaCanvasCache(activeSessionId);
         const hasUnsyncedLocal = !!localCache && localCache.updatedAt > localCache.syncedAt;
-        const restored = hasUnsyncedLocal ? localCache.state : next;
+        const shouldRebuildCanvasFromArtifact = !hasUnsyncedLocal && next.nodes.length === 0 && !!artifactView;
+        const restored = hasUnsyncedLocal
+          ? localCache.state
+          : shouldRebuildCanvasFromArtifact
+            ? renderArtifactViewToIdeaCanvasV0(artifactView, next)
+            : next;
         lastPersistedIdeaCanvasRef.current = next;
         setIdeaCanvas(mergeBriefIntoCanvas(docRef.current, restored));
         loadedIdeaCanvasSessionRef.current = activeSessionId;
-        if (hasUnsyncedLocal) {
+        if (hasUnsyncedLocal || shouldRebuildCanvasFromArtifact) {
+          const restoredUpdatedAt = Date.now();
           void sessionStore
             .getOrCreate(activeSessionId)
             .canvasQueue.run(async () => {
@@ -1281,9 +1351,13 @@ function Workbench() {
               if (loadedIdeaCanvasSessionRef.current === activeSessionId) {
                 lastPersistedIdeaCanvasRef.current = restored;
               }
-              markIdeaCanvasCacheSynced(activeSessionId, restored, localCache.updatedAt);
+              markIdeaCanvasCacheSynced(
+                activeSessionId,
+                restored,
+                hasUnsyncedLocal ? localCache.updatedAt : restoredUpdatedAt,
+              );
             })
-            .catch((e) => console.warn("[ideaCanvas] restore unsynced local canvas failed", e));
+            .catch((e) => console.warn("[ideaCanvas] restore canvas snapshot failed", e));
         } else {
           markIdeaCanvasCacheSynced(activeSessionId, next, Date.now());
         }
@@ -1299,7 +1373,7 @@ function Workbench() {
     return () => {
       cancelled = true;
     };
-  }, [activeSessionId, loadCanvas, saveCanvas]);
+  }, [activeSessionId, loadArtifactViewV0, loadCanvas, saveCanvas]);
 
   useEffect(() => {
     if (!activeSessionId) return;
@@ -1700,8 +1774,7 @@ function Workbench() {
             id: nextIdeaId("research-edge"),
             source: parent.id,
             target: node.id,
-            sourceHandle: "right",
-            targetHandle: "left",
+            ...chooseConnectionHandles(parent, node),
             type: "editable",
             label: "SUPPORTS",
           });
@@ -1788,8 +1861,7 @@ function Workbench() {
             id,
             source: source.id,
             target: target.id,
-            sourceHandle: "right",
-            targetHandle: "left",
+            ...chooseConnectionHandles(source, target),
             type: "editable",
             label,
           });
@@ -1925,8 +1997,7 @@ function Workbench() {
           id: nextIdeaId("insight-edge"),
           source: parent.id,
           target: node.id,
-          sourceHandle: parentIsLeft ? "left" : "right",
-          targetHandle: parentIsLeft ? "right" : "left",
+          ...chooseConnectionHandles(parent, node),
           type: "editable",
           label: "",
         }
@@ -2486,15 +2557,26 @@ function Workbench() {
       bufferRef.current = buf;
 
       // Recognizer
+      const recognizerLanguages = chooseSpeechRecognizerLanguages(recentTextsRef.current);
+      pipelineTracer.log({
+        sessionId,
+        kind: "azure.final_chunk",
+        meta: {
+          setup: true,
+          languages: recognizerLanguages ?? ["zh-CN", "en-US"],
+          mode: recognizerLanguages?.length === 1 ? "fixed" : "auto_detect",
+        },
+      });
       const handle = await startAzureRecognizer({
         token,
         region,
+        languages: recognizerLanguages,
         micStream: stream,
         onEvent: (e) => {
           if (e.kind === "partial") {
             setPartial(e.text);
           } else if (e.kind === "final") {
-            if (looksLikeSpeechRecognitionNoise(e.text, e.lang)) {
+            if (looksLikeSpeechRecognitionNoise(e.text, e.lang, recentTextsRef.current)) {
               setPartial("");
               pipelineTracer.log({
                 sessionId,
@@ -3147,6 +3229,7 @@ function Workbench() {
       const run = async () => {
         const currentSessionId = activeSessionRef.current;
         if (!currentSessionId || e.sessionId !== currentSessionId) return;
+        const turnFinalizedAt = Date.now();
         const currentState = thinkingStateV0Ref.current ?? createEmptyThinkingStateV0(e.sessionId);
         const recentTurns = recentSemanticTurnsV0Ref.current.slice(-8);
 
@@ -3204,6 +3287,7 @@ function Workbench() {
           ].slice(-8);
 
           let renderedCanvas = ideaCanvasRef.current;
+          let artifactPersistenceStatus = "unchanged";
           if (output.canvasArtifactView) {
             artifactViewV0Ref.current = output.canvasArtifactView;
             const nextCanvas = renderArtifactViewToIdeaCanvasV0(
@@ -3213,6 +3297,15 @@ function Workbench() {
             ideaCanvasRef.current = nextCanvas;
             renderedCanvas = nextCanvas;
             setIdeaCanvas(nextCanvas);
+            artifactPersistenceStatus = "queued";
+            void saveArtifactViewV0({
+              data: {
+                sessionId: e.sessionId,
+                artifactView: output.canvasArtifactView,
+              },
+            }).catch((saveError) => {
+              console.warn("[canvasArtifactViewV0] save failed", saveError);
+            });
           }
 
           const contextNote = [
@@ -3220,10 +3313,34 @@ function Workbench() {
             `Voice response: ${output.voiceResponse}`,
             `Next action: ${output.nextAction}`,
             output.canvasArtifactView
-              ? `Canvas artifact: ${output.canvasArtifactView.title}; active section: ${output.canvasArtifactView.activeSectionId ?? "none"}`
+              ? `Canvas artifact rendered: ${output.canvasArtifactView.title}; active section: ${output.canvasArtifactView.activeSectionId ?? "none"}`
               : "Canvas artifact: unchanged",
+            output.canvasArtifactView
+              ? `Canvas artifact persistence: ${artifactPersistenceStatus}`
+              : "Canvas artifact persistence: unchanged",
           ].join("\n");
           scheduleInject(`[semantic pipeline v0]\n${contextNote}`);
+
+          const voiceResponse = output.voiceResponse.trim();
+          const realtime = realtimeRef.current;
+          const recentAgent = lastAgentTranscriptRef.current;
+          const agentAlreadySpokeForTurn = Boolean(recentAgent && recentAgent.at >= turnFinalizedAt);
+          let voiceDelivery: "spoken" | "skipped_no_realtime" | "skipped_already_spoke" | "skipped_agent_speaking" | "skipped_empty" | "skipped_duplicate" = "skipped_empty";
+          if (!voiceResponse) {
+            voiceDelivery = "skipped_empty";
+          } else if (spokenSemanticTurnIdsRef.current.has(e.turnId)) {
+            voiceDelivery = "skipped_duplicate";
+          } else if (!realtime) {
+            voiceDelivery = "skipped_no_realtime";
+          } else if (agentAlreadySpokeForTurn) {
+            voiceDelivery = "skipped_already_spoke";
+          } else if (realtime.isAgentSpeaking()) {
+            voiceDelivery = "skipped_agent_speaking";
+          } else {
+            spokenSemanticTurnIdsRef.current.add(e.turnId);
+            realtime.speak(voiceResponse);
+            voiceDelivery = "spoken";
+          }
 
           const debugSnapshot: SemanticPipelineV0DebugSnapshot = {
             turnId: e.turnId,
@@ -3235,7 +3352,7 @@ function Workbench() {
             contextText: formatOrchestratorContextV0(context),
             output,
             outputText: formatOrchestratorOutputV0(output),
-            injectedContext: contextNote,
+            injectedContext: `${contextNote}\nVoice delivery: ${voiceDelivery}`,
             renderedCanvas,
             capturedAt: new Date().toISOString(),
           };
@@ -3269,7 +3386,7 @@ function Workbench() {
     });
 
     return () => offTurn();
-  }, [activeSessionId, planOrchestratorV0, planThinkingPatchV0, scheduleInject]);
+  }, [activeSessionId, planOrchestratorV0, planThinkingPatchV0, saveArtifactViewV0, scheduleInject]);
 
   // Per-turn: the Thought Turn Contract was the previous co-thinking orchestrator.
   // V0 owns the formal UI chain when enabled.

@@ -63,6 +63,19 @@ import type {
   IdeaNodeData,
   IdeaNodeKind,
 } from "@/components/mindmap/IdeaCanvas";
+import {
+  IDEA_NODE_DEFAULT_HEIGHT,
+  IDEA_NODE_DEFAULT_WIDTH,
+  IDEA_NODE_MIN_HEIGHT,
+  OPPOSITE_SIDE,
+  PARALLEL_BRANCH_GAP,
+  layoutParallelBranch,
+  makeParallelBranchLayout,
+  parallelChildPosition,
+  reflowParallelBranches,
+  type CanvasSide,
+  type ParallelBranchLayout,
+} from "@/lib/canvas/canvasLayoutEngine";
 import { normalizeCanvasEdgeLabel } from "@/lib/canvas/edgeLabels";
 import { askCards, mergeCards } from "@/lib/orchestrator/boardActions.functions";
 
@@ -94,12 +107,9 @@ type CanvasProps = Props & {
   onCanvasPointSelect?: (position: { x: number; y: number }) => void;
 };
 
-type Side = "top" | "right" | "bottom" | "left";
+type Side = CanvasSide;
 
-type EditableEdgeData = {
-  routeOffset?: number;
-  autoRouteOffset?: number;
-};
+type EditableEdgeData = import("@/components/mindmap/IdeaCanvas").IdeaEdgeData;
 
 type EditableBoardEdge = Edge<EditableEdgeData>;
 
@@ -163,13 +173,6 @@ const SIDES: Array<{ side: Side; position: Position }> = [
   { side: "bottom", position: Position.Bottom },
   { side: "left", position: Position.Left },
 ];
-
-const OPPOSITE_SIDE: Record<Side, Side> = {
-  top: "bottom",
-  right: "left",
-  bottom: "top",
-  left: "right",
-};
 
 const QUICK_ADD_POSITION: Record<Side, string> = {
   top: "left-1/2 top-0 -translate-x-1/2 -translate-y-[34px]",
@@ -309,6 +312,7 @@ function orthogonalEdgePath({
   sourcePosition,
   targetPosition,
   routeOffset = 0,
+  branchLayout,
 }: {
   sourceX: number;
   sourceY: number;
@@ -317,6 +321,7 @@ function orthogonalEdgePath({
   sourcePosition: Position;
   targetPosition: Position;
   routeOffset?: number;
+  branchLayout?: ParallelBranchLayout;
 }) {
   const sourceVertical = sourcePosition === Position.Top || sourcePosition === Position.Bottom;
   const targetVertical = targetPosition === Position.Top || targetPosition === Position.Bottom;
@@ -324,6 +329,45 @@ function orthogonalEdgePath({
 
   let points: Array<{ x: number; y: number }>;
   let handle: { x: number; y: number; cursor: "ew-resize" | "ns-resize" };
+
+  if (branchLayout?.mode === "parallel") {
+    const fixedStub = Math.max(36, Math.min(72, branchLayout.fixedLength * 0.48));
+    if (branchLayout.side === "right" || branchLayout.side === "left") {
+      const dir = branchLayout.side === "right" ? 1 : -1;
+      const trunkX = sourceX + dir * fixedStub;
+      const targetStubX = targetX - dir * stub;
+      points = [
+        { x: sourceX, y: sourceY },
+        { x: trunkX, y: sourceY },
+        { x: trunkX, y: targetY },
+        { x: targetStubX, y: targetY },
+        { x: targetX, y: targetY },
+      ];
+      handle = { x: trunkX, y: (sourceY + targetY) / 2, cursor: "ew-resize" };
+    } else {
+      const dir = branchLayout.side === "bottom" ? 1 : -1;
+      const trunkY = sourceY + dir * fixedStub;
+      const targetStubY = targetY - dir * stub;
+      points = [
+        { x: sourceX, y: sourceY },
+        { x: sourceX, y: trunkY },
+        { x: targetX, y: trunkY },
+        { x: targetX, y: targetStubY },
+        { x: targetX, y: targetY },
+      ];
+      handle = { x: (sourceX + targetX) / 2, y: trunkY, cursor: "ns-resize" };
+    }
+
+    const path = roundedOrthogonalPath(points);
+    return {
+      path,
+      labelX: handle.x,
+      labelY: handle.y,
+      handleX: handle.x,
+      handleY: handle.y,
+      handleCursor: handle.cursor,
+    };
+  }
 
   if (sourceVertical && targetVertical) {
     const sourceDir = sourcePosition === Position.Bottom ? 1 : -1;
@@ -403,7 +447,8 @@ function SmartNote({ id, data, selected }: NodeProps<IdeaFlowNode>) {
   const showConnections = hovered || selected;
   const dictationCaret = data.dictationCaret;
   const onChange = data.onChange;
-  const noteWidth = Number(data.width ?? 260);
+  const savedWidth = Number(data.width ?? IDEA_NODE_DEFAULT_WIDTH);
+  const noteWidth = Math.max(savedWidth, IDEA_NODE_DEFAULT_WIDTH);
 
   useEffect(() => {
     const title = titleRef.current;
@@ -457,27 +502,6 @@ function SmartNote({ id, data, selected }: NodeProps<IdeaFlowNode>) {
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
     >
-      {selected && (
-        <>
-          <NodeResizeControl
-            position="left"
-            variant={ResizeControlVariant.Line}
-            resizeDirection="horizontal"
-            minWidth={190}
-            maxWidth={560}
-            color="#168cf5"
-          />
-          <NodeResizeControl
-            position="right"
-            variant={ResizeControlVariant.Line}
-            resizeDirection="horizontal"
-            minWidth={190}
-            maxWidth={560}
-            color="#168cf5"
-          />
-        </>
-      )}
-
       {SIDES.map(({ side, position }) => (
         <Handle
           key={side}
@@ -518,18 +542,28 @@ function SmartNote({ id, data, selected }: NodeProps<IdeaFlowNode>) {
       ))}
 
       <div
-        className={`relative flex min-h-[178px] w-full flex-col overflow-visible border transition-shadow ${
-          selected
+        className={`relative flex w-full flex-col overflow-visible border transition-all duration-200 ${
+          selected || data.activeWriting
             ? "shadow-[0_10px_24px_rgba(20,24,31,0.16)]"
-            : "shadow-[0_7px_18px_rgba(20,24,31,0.1)] hover:shadow-[0_10px_24px_rgba(20,24,31,0.14)]"
+            : "shadow-[0_6px_15px_rgba(20,24,31,0.08)] hover:shadow-[0_10px_24px_rgba(20,24,31,0.12)]"
         }`}
         style={{
           background: style.bg,
-          borderColor: selected ? "#168cf5" : style.border,
+          borderColor: selected || data.activeWriting ? "#168cf5" : style.border,
           borderRadius: 4,
           width: noteWidth,
+          minHeight: IDEA_NODE_DEFAULT_HEIGHT,
+          boxShadow: data.activeWriting
+            ? "0 0 0 2px rgba(22,140,245,0.16), 0 10px 24px rgba(20,24,31,0.16)"
+            : undefined,
         }}
       >
+        {data.activeWriting && (
+          <div className="pointer-events-none absolute right-3 top-3 flex items-center gap-1.5 rounded-full bg-white/70 px-2 py-1 text-[10px] font-medium text-[#168cf5] shadow-sm">
+            <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-[#168cf5]" />
+            Writing
+          </div>
+        )}
         <div className="flex min-h-[112px] min-w-0 flex-col px-5 pb-3 pt-5">
           <textarea
             ref={titleRef}
@@ -575,10 +609,17 @@ function SmartNote({ id, data, selected }: NodeProps<IdeaFlowNode>) {
             onChange={(event) => data.onChange?.(id, { body: event.target.value })}
             placeholder="Add details"
           />
+          {data.activeWriting && !data.body && (
+            <div className="pointer-events-none mt-3 space-y-2 overflow-hidden">
+              <div className="h-2.5 w-4/5 animate-pulse rounded bg-white/60" />
+              <div className="h-2.5 w-2/3 animate-pulse rounded bg-white/50" />
+              <div className="h-2.5 w-1/2 animate-pulse rounded bg-white/45" />
+            </div>
+          )}
         </div>
         <div className="mt-auto flex items-center justify-between gap-2 px-4 pb-3 pt-2">
           <select
-            className="nodrag min-w-0 cursor-pointer bg-transparent text-[10px] font-semibold uppercase tracking-[0.08em] outline-none"
+            className="nodrag min-w-0 cursor-pointer bg-transparent text-[9px] font-semibold uppercase tracking-[0.08em] outline-none"
             style={{ color: style.accent }}
             value={data.kind}
             onChange={(event) => data.onChange?.(id, { kind: event.target.value as IdeaNodeKind })}
@@ -776,6 +817,7 @@ function EditableEdge({
     targetY,
     targetPosition,
     routeOffset: Number(data?.routeOffset ?? 0) + Number(data?.autoRouteOffset ?? 0),
+    branchLayout: data?.branchLayout,
   });
 
   return (
@@ -872,6 +914,8 @@ function BoardInner({
           | "title"
           | "body"
           | "kind"
+          | "width"
+          | "height"
           | "textSize"
           | "bold"
           | "italic"
@@ -896,11 +940,17 @@ function BoardInner({
           return;
         }
       }
+      const nodes = current.nodes.map((node) =>
+        node.id === id ? { ...node, data: { ...node.data, ...patch } } : node,
+      );
+      const shouldReflow = "width" in patch || "height" in patch;
+      const next = shouldReflow
+        ? reflowParallelBranches(nodes, current.edges)
+        : { nodes, edges: current.edges };
       commitState({
         ...current,
-        nodes: current.nodes.map((node) =>
-          node.id === id ? { ...node, data: { ...node.data, ...patch } } : node,
-        ),
+        nodes: next.nodes,
+        edges: next.edges,
       });
     },
     [commitState],
@@ -1022,19 +1072,26 @@ function BoardInner({
       const source = current.nodes.find((node) => node.id === sourceId);
       if (!source) return;
 
-      const sourceWidth = source.data.width ?? source.measured?.width ?? 260;
-      const sourceHeight = source.measured?.height ?? 178;
-      const width = 260;
+      const width = IDEA_NODE_DEFAULT_WIDTH;
+      const existingBranchEdges = current.edges.filter(
+        (edge) => edge.source === sourceId && edge.sourceHandle === side,
+      );
+      const branchTargetIds = [
+        ...existingBranchEdges.map((edge) => edge.target),
+        "__new__",
+      ];
+      const branchIndex = branchTargetIds.length - 1;
       const desiredPosition = dropPosition
         ? { x: dropPosition.x - width / 2, y: dropPosition.y - 80 }
-        : side === "right"
-          ? { x: source.position.x + sourceWidth + 110, y: source.position.y }
-          : side === "left"
-            ? { x: source.position.x - width - 110, y: source.position.y }
-            : side === "bottom"
-              ? { x: source.position.x, y: source.position.y + sourceHeight + 100 }
-              : { x: source.position.x, y: source.position.y - 278 };
-      const position = findOpenPosition(current.nodes, desiredPosition, width);
+        : parallelChildPosition({
+            source,
+            side,
+            index: branchIndex,
+            count: branchTargetIds.length,
+            childWidth: width,
+            childHeight: IDEA_NODE_MIN_HEIGHT,
+          });
+      const position = dropPosition ? findOpenPosition(current.nodes, desiredPosition, width) : desiredPosition;
 
       const id = crypto.randomUUID();
       const node: IdeaFlowNode = {
@@ -1059,14 +1116,30 @@ function BoardInner({
         sourceHandle: side,
         targetHandle: OPPOSITE_SIDE[side],
         type: "editable",
+        data: {
+          branchLayout: makeParallelBranchLayout({
+            side,
+            index: branchIndex,
+            count: branchTargetIds.length,
+            gap: PARALLEL_BRANCH_GAP,
+          }),
+        },
       };
-      commitState({
-        ...current,
+      const next = layoutParallelBranch({
         nodes: [...current.nodes, node],
         edges: [...current.edges, edge],
+        sourceId,
+        side,
+        targetIds: [...existingBranchEdges.map((branchEdge) => branchEdge.target), id],
       });
+      commitState({
+        ...current,
+        nodes: next.nodes,
+        edges: next.edges,
+      });
+      const centeredNode = next.nodes.find((item) => item.id === id) ?? node;
       window.setTimeout(() => {
-        void rf.setCenter(node.position.x + width / 2, node.position.y + 90, {
+        void rf.setCenter(centeredNode.position.x + width / 2, centeredNode.position.y + 90, {
           zoom: Math.min(rf.getZoom(), 1.2),
           duration: 280,
         });
@@ -1091,7 +1164,7 @@ function BoardInner({
         title: "",
         body: "",
         kind: "idea",
-        width: 260,
+        width: IDEA_NODE_DEFAULT_WIDTH,
         autoFocus: true,
       },
       selected: true,
@@ -1187,36 +1260,44 @@ function BoardInner({
   );
 
   const renderNodes = useMemo(
-    () =>
-      state.nodes.map((node) => ({
-        ...node,
-        type:
-          node.type === "textNode"
-            ? "textNode"
-            : node.type === "imageNode"
-              ? "imageNode"
-              : "ideaNode",
-        dragHandle: ".note-drag-handle",
-        style: {
-          width:
-            node.data.width ??
-            (node.type === "textNode"
-              ? TEXT_NODE_DEFAULT_WIDTH
+    () => {
+      const selectedId = state.nodes.find((node) => node.selected)?.id;
+      const fallbackActiveId = state.nodes.at(-1)?.id;
+      const activeWritingId = aiWriting ? selectedId ?? fallbackActiveId : null;
+      return state.nodes.map((node) => {
+        const activeWriting = node.id === activeWritingId;
+        const savedIdeaWidth = Number(node.data.width ?? IDEA_NODE_DEFAULT_WIDTH);
+        return {
+          ...node,
+          type:
+            node.type === "textNode"
+              ? "textNode"
               : node.type === "imageNode"
-                ? 360
-                : 260),
-          height: node.type === "imageNode" ? (node.data.height ?? 240) : "auto",
-        },
-        data: {
-          ...node.data,
-          onChange: updateNodeData,
-          onQuickAdd: node.type === "textNode" ? undefined : createConnectedNode,
-          onSelect: selectNode,
-          onInlineDictationKeyDown: onInlineKeyDown,
-          onInlineDictationKeyUp: onInlineKeyUp,
-        },
-      })),
-    [createConnectedNode, onInlineKeyDown, onInlineKeyUp, selectNode, state.nodes, updateNodeData],
+                ? "imageNode"
+                : "ideaNode",
+          dragHandle: ".note-drag-handle",
+          style: {
+            width:
+              node.type === "textNode"
+                ? (node.data.width ?? TEXT_NODE_DEFAULT_WIDTH)
+                : node.type === "imageNode"
+                  ? (node.data.width ?? 360)
+                  : Math.max(savedIdeaWidth, IDEA_NODE_DEFAULT_WIDTH),
+            height: node.type === "imageNode" ? (node.data.height ?? 240) : "auto",
+          },
+          data: {
+            ...node.data,
+            onChange: updateNodeData,
+            onQuickAdd: node.type === "textNode" ? undefined : createConnectedNode,
+            onSelect: selectNode,
+            onInlineDictationKeyDown: onInlineKeyDown,
+            onInlineDictationKeyUp: onInlineKeyUp,
+            activeWriting,
+          },
+        };
+      });
+    },
+    [aiWriting, createConnectedNode, onInlineKeyDown, onInlineKeyUp, selectNode, state.nodes, updateNodeData],
   );
 
   const renderEdges = useMemo(() => {
@@ -1281,7 +1362,8 @@ function BoardInner({
           },
         };
       });
-      commitState({ ...current, nodes });
+      const next = sizes.size > 0 ? reflowParallelBranches(nodes, current.edges) : { nodes, edges: current.edges };
+      commitState({ ...current, nodes: next.nodes, edges: next.edges });
     },
     [commitState],
   );

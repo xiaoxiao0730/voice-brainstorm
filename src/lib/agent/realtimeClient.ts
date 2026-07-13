@@ -614,11 +614,13 @@ export async function connectRealtime(opts: ConnectOptions): Promise<RealtimeCli
   return {
     speak(text: string) {
       if (disposed) return;
+      const trimmed = text.trim();
+      if (!trimmed) return;
       send({
         type: "response.create",
         response: {
           output_modalities: ["audio"],
-          instructions: text,
+          instructions: `Speak this response to the user now, in the same language and meaning. Do not add extra questions or prefaces unless they are already included:\n${trimmed}`,
         },
       });
     },

@@ -40,6 +40,8 @@ export type IdeaNodeData = {
   italic?: boolean;
   textAlign?: IdeaTextAlign;
   dictationCaret?: number;
+  expanded?: boolean;
+  activeWriting?: boolean;
   onChange?: (
     id: string,
     patch: Partial<
@@ -55,6 +57,7 @@ export type IdeaNodeData = {
         | "italic"
         | "textAlign"
         | "dictationCaret"
+        | "expanded"
       >
     >,
   ) => void;
@@ -75,9 +78,26 @@ export type IdeaNodeData = {
 
 export type IdeaFlowNode = Node<IdeaNodeData>;
 
+export type IdeaEdgeData = {
+  routeOffset?: number;
+  autoRouteOffset?: number;
+  locked?: boolean;
+  branchColor?: string;
+  branchLayout?: {
+    mode: "parallel";
+    side: "top" | "right" | "bottom" | "left";
+    index: number;
+    count: number;
+    fixedLength: number;
+    gap: number;
+  };
+};
+
+export type IdeaFlowEdge = Edge<IdeaEdgeData>;
+
 export type IdeaCanvasState = {
   nodes: IdeaFlowNode[];
-  edges: Edge[];
+  edges: IdeaFlowEdge[];
 };
 
 type Props = {
@@ -589,6 +609,9 @@ export function IdeaCanvas({
           kind: node.data.kind,
           width: getNoteWidth(node),
           height: getNoteHeight(node),
+          layoutMode: node.data.layoutMode,
+          locked: node.data.locked,
+          branchColor: node.data.branchColor,
         },
       })),
       edges: state.edges,
@@ -856,7 +879,11 @@ export function IdeaCanvas({
                     onPointerUp={endDrag}
                     onPointerCancel={endDrag}
                   >
-                    <IdeaCard id={node.id} data={node.data} onChange={updateNodeData} />
+                    <IdeaCard
+                      id={node.id}
+                      data={node.data}
+                      onChange={updateNodeData}
+                    />
                     {!node.data.locked && node.data.layoutMode !== "xmind" && node.data.layoutMode !== "artifact" && (
                       <button
                         type="button"

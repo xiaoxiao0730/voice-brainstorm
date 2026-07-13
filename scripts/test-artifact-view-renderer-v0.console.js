@@ -45,13 +45,16 @@
   console.groupEnd();
 
   const nodeText = (canvas) => JSON.stringify(canvas.nodes.map((node) => node.data));
+  const focusNode = first.nodes.find((node) => node.data.kind === "focus" && node.data.title === "AI 学习助手");
   checks.push(["creates focus node", first.nodes.some((node) => node.data.kind === "focus" && node.data.title === "AI 学习助手")]);
   checks.push(["creates four section nodes", first.nodes.filter((node) => /目标用户|用户需求|核心功能|市场调研/.test(node.data.title)).length === 4]);
   checks.push(["keeps detail bullet in card body", first.nodes.some((node) => node.data.title === "目标用户" && /ChatGPT/.test(node.data.body ?? ""))]);
   checks.push(["renders children as nodes", first.nodes.some((node) => node.data.title === "理解新概念") && first.nodes.some((node) => node.data.title === "练习和应用")]);
   checks.push(["active section selected", first.nodes.some((node) => node.selected && node.data.title === "目标用户")]);
-  checks.push(["does not draw focus-section clutter", first.edges.filter((edge) => edge.source.includes("focus")).length === 0]);
-  checks.push(["keeps section-child hierarchy edges", first.edges.length === 2]);
+  checks.push(["focus connects to sections", first.edges.filter((edge) => edge.source === focusNode?.id).length === 4]);
+  checks.push(["keeps full hierarchy edges", first.edges.length === 6]);
+  checks.push(["artifact edges use handles", first.edges.every((edge) => edge.sourceHandle && edge.targetHandle)]);
+  checks.push(["artifact edges use shared branch layout", first.edges.every((edge) => edge.data?.branchLayout?.mode === "parallel")]);
   checks.push(["no dangling edges", first.edges.every((edge) => first.nodes.some((node) => node.id === edge.source) && first.nodes.some((node) => node.id === edge.target))]);
   checks.push(["artifact nodes are locked", first.nodes.every((node) => node.data.layoutMode === "artifact" && node.data.locked === true)]);
 
@@ -77,7 +80,8 @@
   checks.push(["updates without duplicating focus", updated.nodes.filter((node) => node.data.title === "AI 学习助手").length === 1]);
   checks.push(["updates user need card body", updated.nodes.some((node) => node.data.title === "用户需求" && /从答案走向理解/.test(node.data.body ?? ""))]);
   checks.push(["moves active selection", updated.nodes.some((node) => node.selected && node.data.title === "用户需求")]);
-  checks.push(["keeps hierarchy edges only", updated.edges.length === 2 && updated.edges.every((edge) => !edge.source.includes("focus"))]);
+  checks.push(["keeps full hierarchy edges", updated.edges.length === 6]);
+  checks.push(["keeps edge layout contract", updated.edges.every((edge) => edge.sourceHandle && edge.targetHandle && edge.data?.branchLayout?.mode === "parallel")]);
 
   const passed = checks.filter(([, ok]) => ok).length;
   console.table(checks.map(([check, pass]) => ({ check, pass: Boolean(pass) })));

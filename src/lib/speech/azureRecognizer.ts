@@ -15,7 +15,7 @@ export type StartOptions = {
   token: string;
   region: string;
   onEvent: (e: SpeechEvent) => void;
-  languages?: string[]; // e.g. ["en-US", "zh-CN"]
+  languages?: string[]; // e.g. ["en-US", "zh-CN"] or ["zh-CN"] for fixed-language mode.
   micStream?: MediaStream;
 };
 
@@ -29,10 +29,17 @@ export async function startAzureRecognizer(opts: StartOptions): Promise<SpeechRe
     ? sdk.AudioConfig.fromStreamInput(opts.micStream)
     : sdk.AudioConfig.fromDefaultMicrophoneInput();
 
-  const languages = opts.languages ?? ["zh-CN", "en-US"];
-  const autoDetectConfig = sdk.AutoDetectSourceLanguageConfig.fromLanguages(languages);
+  const languages = opts.languages?.length ? opts.languages : ["zh-CN", "en-US"];
+  const fixedLanguage = opts.languages?.length === 1 ? languages[0] : null;
+  if (fixedLanguage) speechConfig.speechRecognitionLanguage = fixedLanguage;
 
-  const recognizer = sdk.SpeechRecognizer.FromConfig(speechConfig, autoDetectConfig, audioConfig);
+  const recognizer = fixedLanguage
+    ? new sdk.SpeechRecognizer(speechConfig, audioConfig)
+    : sdk.SpeechRecognizer.FromConfig(
+        speechConfig,
+        sdk.AutoDetectSourceLanguageConfig.fromLanguages(languages),
+        audioConfig,
+      );
 
   recognizer.recognizing = (_s, e) => {
     if (!e.result.text) return;
@@ -46,12 +53,14 @@ export async function startAzureRecognizer(opts: StartOptions): Promise<SpeechRe
   recognizer.recognized = (_s, e) => {
     if (e.result.reason !== sdk.ResultReason.RecognizedSpeech) return;
     if (!e.result.text) return;
-    let lang: string | undefined;
-    try {
-      const detected = sdk.AutoDetectSourceLanguageResult.fromResult(e.result);
-      lang = detected.language;
-    } catch {
-      // ignore
+    let lang: string | undefined = fixedLanguage ?? undefined;
+    if (!fixedLanguage) {
+      try {
+        const detected = sdk.AutoDetectSourceLanguageResult.fromResult(e.result);
+        lang = detected.language;
+      } catch {
+        // ignore
+      }
     }
     opts.onEvent({
       kind: "final",

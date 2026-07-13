@@ -1,6 +1,9 @@
-import type { Edge } from "@xyflow/react";
-
-import type { IdeaCanvasState, IdeaFlowNode, IdeaNodeKind } from "@/components/mindmap/IdeaCanvas";
+import type { IdeaCanvasState, IdeaFlowEdge, IdeaFlowNode, IdeaNodeKind } from "@/components/mindmap/IdeaCanvas";
+import {
+  chooseConnectionHandles,
+  makeParallelBranchLayout,
+  type CanvasSide,
+} from "@/lib/canvas/canvasLayoutEngine";
 import type { CanvasArtifactViewV0 } from "@/lib/orchestrator/orchestratorV0.functions";
 
 const ARTIFACT_NODE_PREFIX = "artifact-view-v0-";
@@ -167,15 +170,33 @@ function edgeId(source: string, target: string) {
   return `${ARTIFACT_NODE_PREFIX}edge-${source}-to-${target}`;
 }
 
-function makeArtifactEdge(source: string, target: string, branchColor: string): Edge {
+function branchSideFromHandles(handles: ReturnType<typeof chooseConnectionHandles>): CanvasSide {
+  return handles.sourceHandle;
+}
+
+function makeArtifactEdge(
+  source: IdeaFlowNode,
+  target: IdeaFlowNode,
+  branchColor: string,
+  index: number,
+  count: number,
+): IdeaFlowEdge {
+  const handles = chooseConnectionHandles(source, target);
   return {
-    id: edgeId(source, target),
-    source,
-    target,
-    sourceHandle: "right",
-    targetHandle: "left",
+    id: edgeId(source.id, target.id),
+    source: source.id,
+    target: target.id,
+    ...handles,
     type: "editable",
-    data: { locked: true, branchColor },
+    data: {
+      locked: true,
+      branchColor,
+      branchLayout: makeParallelBranchLayout({
+        side: branchSideFromHandles(handles),
+        index,
+        count,
+      }),
+    },
   };
 }
 
@@ -207,7 +228,7 @@ export function renderArtifactViewToIdeaCanvasV0(
   });
   artifactNodeIds.add(focusNode.id);
 
-  const artifactEdges: Edge[] = [];
+  const artifactEdges: IdeaFlowEdge[] = [];
   for (const [index, section] of artifact.sections.entries()) {
     const isActive = section.id === artifact.activeSectionId || section.status === "active";
     const branchColor = BRANCH_COLORS[index % BRANCH_COLORS.length];
@@ -226,6 +247,7 @@ export function renderArtifactViewToIdeaCanvasV0(
       branchColor,
     });
     artifactNodeIds.add(sectionNode.id);
+    artifactEdges.push(makeArtifactEdge(focusNode, sectionNode, branchColor, index, artifact.sections.length));
 
     const children = (section.children ?? []).slice(0, 8);
     for (const [childIndex, child] of children.entries()) {
@@ -245,7 +267,7 @@ export function renderArtifactViewToIdeaCanvasV0(
         branchColor,
       });
       artifactNodeIds.add(childNode.id);
-      artifactEdges.push(makeArtifactEdge(sectionNode.id, childNode.id, branchColor));
+      artifactEdges.push(makeArtifactEdge(sectionNode, childNode, branchColor, childIndex, children.length));
     }
   }
 
