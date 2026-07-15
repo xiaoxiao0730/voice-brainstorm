@@ -1459,7 +1459,7 @@ function Workbench() {
                     }}
                     disabled={!activeSessionId}
                     aria-label={listening ? (speakingNow ? "Live transcript — click to stop" : "Stop") : "Talk with Agent"}
-                    className={`w-36 h-11 rounded-full text-sm font-medium disabled:opacity-40 hover:opacity-90 flex items-center justify-center gap-2 overflow-hidden transition-colors ${
+                    className={`w-32 h-11 rounded-full text-xs font-medium disabled:opacity-40 hover:opacity-90 flex items-center justify-center gap-1.5 overflow-hidden transition-colors ${
                       listening
                         ? "border border-auralis bg-surface text-primary hover:bg-surface-variant"
                         : "bg-primary text-on-primary"
