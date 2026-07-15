@@ -1339,129 +1339,162 @@ function Workbench() {
       <main className="flex-1 flex min-w-0">
         {/* AUDIO PANEL */}
         <section className="w-[380px] xl:w-[420px] shrink-0 border-r border-auralis flex flex-col min-h-0">
-          <header className="h-14 px-5 flex items-center justify-between border-b border-auralis shrink-0">
-            <span className="text-xs uppercase tracking-[0.18em] text-secondary">Audio Interaction</span>
-            <span className={`text-xs flex items-center gap-2 ${listening ? "text-emerald-600" : "text-secondary"}`}>
-              <span
-                className={`w-1.5 h-1.5 rounded-full ${listening ? "bg-emerald-500 animate-pulse" : "bg-secondary"}`}
-              />
-              {listening ? "Listening" : "Idle"}
-            </span>
-          </header>
+          {(() => {
+            // -------- derived UI state (single pin + chat stream) --------
+            const inputPin: "listening" | "weak" | "error" | "idle" =
+              agentStatus === "error"
+                ? "error"
+                : !listening
+                  ? "idle"
+                  : level < 0.04
+                    ? "weak"
+                    : "listening";
+            const pinLabel = { listening: "Listening", weak: "Weak signal", error: "Error", idle: "Idle" }[
+              inputPin
+            ];
+            const pinDot = {
+              listening: "bg-emerald-500 animate-pulse",
+              weak: "bg-amber-400",
+              error: "bg-rose-500",
+              idle: "bg-secondary",
+            }[inputPin];
 
-          {/* Waveform */}
-          <div className="flex-1 flex items-center justify-center p-6 min-h-0 relative">
-            <div className="relative w-[260px] h-[260px] flex items-center justify-center">
-              <div
-                className={`absolute inset-0 rounded-full border border-auralis/25 blur-[2px] ${listening ? "animate-[ring-pulse_3.2s_ease-out_infinite]" : ""}`}
-              />
-              <div
-                className={`absolute inset-8 rounded-full border border-auralis/40 ${listening ? "animate-[ring-pulse_4.1s_ease-out_infinite_0.6s]" : ""}`}
-              />
-              <div
-                className={`absolute left-[50px] top-[80px] w-[50px] h-[100px] rounded-full bg-gradient-to-tr from-rose-400 to-orange-300 opacity-80 mix-blend-multiply blur-[6px] ${listening ? "animate-[orb-a_3s_ease-in-out_infinite]" : ""}`}
-                style={{ transform: `scale(${1 + level * 0.3})` }}
-              />
-              <div
-                className={`absolute right-[50px] top-[80px] w-[50px] h-[100px] rounded-full bg-gradient-to-tr from-emerald-300 to-teal-300 opacity-80 mix-blend-multiply blur-[6px] ${listening ? "animate-[orb-c_4.2s_ease-in-out_infinite]" : ""}`}
-                style={{ transform: `scale(${1 + level * 0.28})` }}
-              />
-              <div
-                className={`relative w-[65px] h-[130px] rounded-full bg-gradient-to-tr from-indigo-400 via-violet-400 to-purple-500 opacity-90 blur-[4px] ${listening ? "animate-[orb-b_3.6s_ease-in-out_infinite]" : ""}`}
-                style={{ transform: `scale(${1 + level * 0.35})` }}
-              />
-            </div>
-          </div>
+            // Split finals into a chat stream (user vs. agent by "Agent: " prefix).
+            const chat = finals.map((f) => {
+              const isAgent = f.text.startsWith("Agent: ");
+              return {
+                id: f.id,
+                role: isAgent ? ("agent" as const) : ("user" as const),
+                text: isAgent ? f.text.slice("Agent: ".length) : f.text,
+              };
+            });
+            const showThinkingBubble = aiLoading || agentStatus === "thinking";
 
-          {/* Controls */}
-          <div className="px-5 pb-4 flex flex-col items-center justify-center gap-2 shrink-0">
-            {/* Agent status line — replaces the old Talk with Agent button. */}
-            <div className="pb-2 flex items-center justify-center shrink-0">
-              <span className="text-xs text-secondary flex items-center gap-1.5">
-                <span
-                  className={`w-1.5 h-1.5 rounded-full ${
-                    agentStatus === "connecting"
-                      ? "bg-amber-400 animate-pulse"
-                      : agentStatus === "thinking"
-                        ? "bg-amber-500 animate-pulse"
-                        : agentStatus === "speaking"
-                          ? "bg-indigo-500 animate-pulse"
-                          : agentStatus === "listening"
-                            ? "bg-emerald-500"
-                            : agentStatus === "error"
-                              ? "bg-rose-500"
-                              : "bg-secondary"
-                  }`}
-                />
-                {agentStatus === "connecting"
-                  ? "Agent connecting…"
-                  : agentStatus === "thinking"
-                    ? "Agent thinking…"
-                    : agentStatus === "speaking"
-                      ? "Agent speaking…"
-                      : agentStatus === "listening"
-                        ? "Agent listening"
-                        : agentStatus === "error"
-                          ? "Agent error"
-                          : "Agent idle"}
-              </span>
-            </div>
+            // Bottom button: transcript-preview while speaking, else Stop / Start.
+            const speakingNow = listening && partial.trim().length > 0;
+            const words = partial.trim().split(/\s+/).filter(Boolean);
+            const last10 = words.slice(-10).join(" ");
 
-            {/* Start / Stop toggle */}
-            <button
-              onClick={() => {
-                listening ? void stopListening() : void startListening();
-              }}
-              disabled={!activeSessionId}
-              className={`px-5 py-2.5 rounded-full text-sm font-medium disabled:opacity-40 hover:opacity-90 flex items-center gap-2 ${
-                listening
-                  ? "border border-auralis bg-surface text-primary hover:bg-surface-variant"
-                  : "bg-primary text-on-primary"
-              }`}
-            >
-              <span className="material-symbols-outlined text-base">{listening ? "stop" : "mic"}</span>
-              {listening ? "Stop" : "Start"}
-            </button>
-          </div>
-          <div className="px-5 pb-3 flex items-center justify-center shrink-0">
-            <span className="text-[11px] text-secondary">
-              <kbd className="px-1.5 py-0.5 rounded border border-auralis bg-surface text-[10px] font-mono">T</kbd>{" "}
-              {listening ? "stop" : "start"} ·{" "}
-              <kbd className="px-1.5 py-0.5 rounded border border-auralis bg-surface text-[10px] font-mono">S</kbd>{" "}
-              {agentStatus === "speaking" ? "silence agent" : "ask agent to speak"}
-            </span>
-          </div>
+            return (
+              <>
+                {/* Single status pin */}
+                <header className="h-14 px-5 flex items-center justify-between border-b border-auralis shrink-0">
+                  <span className="text-xs uppercase tracking-[0.18em] text-secondary">Chat</span>
+                  <span className="text-xs flex items-center gap-2 text-secondary">
+                    <span className={`w-1.5 h-1.5 rounded-full ${pinDot}`} />
+                    {pinLabel}
+                  </span>
+                </header>
 
-          {/* Transcript */}
-          <div className="border-t border-auralis bg-surface/60 shrink-0">
-            <button
-              onClick={() => setExpanded((v) => !v)}
-              className="w-full flex items-center justify-between px-5 py-3 hover:bg-surface-variant/40 transition-colors"
-            >
-              <span className="text-xs uppercase tracking-[0.18em] text-secondary">Transcript</span>
-              <span className="material-symbols-outlined text-secondary text-lg">
-                {expanded ? "expand_more" : "expand_less"}
-              </span>
-            </button>
-            <div
-              className="grid transition-all duration-300 ease-out"
-              style={{ gridTemplateRows: expanded ? "1fr" : "0fr" }}
-            >
-              <div className="overflow-hidden">
-                <div className="px-5 pb-4 max-h-48 overflow-y-auto text-sm leading-relaxed text-primary">
-                  {finals.length === 0 && !partial && (
-                    <p className="text-secondary italic">Start speaking to see live transcription here…</p>
-                  )}
-                  {finals.map((f) => (
-                    <p key={f.id} className="mb-1">
-                      {f.text}
+                {/* Chat conversation stream */}
+                <div
+                  ref={(el) => {
+                    if (el) el.scrollTop = el.scrollHeight;
+                  }}
+                  className="flex-1 min-h-0 overflow-y-auto px-5 py-5 space-y-3"
+                >
+                  {chat.length === 0 && !showThinkingBubble && !partial && (
+                    <p className="text-sm text-secondary italic">
+                      Say something to start the conversation…
                     </p>
-                  ))}
-                  {partial && <p className="text-secondary">{partial}</p>}
+                  )}
+                  {chat.map((m) =>
+                    m.role === "user" ? (
+                      <div key={m.id} className="flex justify-end">
+                        <div className="max-w-[85%] rounded-2xl rounded-br-md bg-primary text-on-primary px-3.5 py-2 text-sm leading-relaxed shadow-sm">
+                          {m.text}
+                        </div>
+                      </div>
+                    ) : (
+                      <div key={m.id} className="flex justify-start">
+                        <div className="max-w-[90%] text-sm leading-relaxed text-primary">
+                          {m.text}
+                        </div>
+                      </div>
+                    ),
+                  )}
+                  {partial && (
+                    <div className="flex justify-end">
+                      <div className="max-w-[85%] rounded-2xl rounded-br-md bg-primary/60 text-on-primary px-3.5 py-2 text-sm leading-relaxed italic">
+                        {partial}
+                      </div>
+                    </div>
+                  )}
+                  {showThinkingBubble && (
+                    <div className="flex justify-start">
+                      <div className="flex items-center gap-2 text-sm text-secondary">
+                        <span className="animate-pulse text-lg leading-none">💭</span>
+                        <span className="animate-pulse">thinking…</span>
+                      </div>
+                    </div>
+                  )}
                 </div>
-              </div>
-            </div>
-          </div>
+
+                {/* Compact ripple + Talk-with-Agent button (reuses original orbs). */}
+                <div className="border-t border-auralis shrink-0 flex flex-col items-center gap-3 px-5 pt-4 pb-5">
+                  <div className="relative w-[96px] h-[96px] flex items-center justify-center">
+                    <div
+                      className={`absolute inset-0 rounded-full border border-auralis/25 blur-[2px] ${listening ? "animate-[ring-pulse_3.2s_ease-out_infinite]" : ""}`}
+                    />
+                    <div
+                      className={`absolute inset-3 rounded-full border border-auralis/40 ${listening ? "animate-[ring-pulse_4.1s_ease-out_infinite_0.6s]" : ""}`}
+                    />
+                    <div
+                      className={`absolute left-[18px] top-[30px] w-[18px] h-[36px] rounded-full bg-gradient-to-tr from-rose-400 to-orange-300 opacity-80 mix-blend-multiply blur-[3px] ${listening ? "animate-[orb-a_3s_ease-in-out_infinite]" : ""}`}
+                      style={{ transform: `scale(${1 + level * 0.3})` }}
+                    />
+                    <div
+                      className={`absolute right-[18px] top-[30px] w-[18px] h-[36px] rounded-full bg-gradient-to-tr from-emerald-300 to-teal-300 opacity-80 mix-blend-multiply blur-[3px] ${listening ? "animate-[orb-c_4.2s_ease-in-out_infinite]" : ""}`}
+                      style={{ transform: `scale(${1 + level * 0.28})` }}
+                    />
+                    <div
+                      className={`relative w-[24px] h-[48px] rounded-full bg-gradient-to-tr from-indigo-400 via-violet-400 to-purple-500 opacity-90 blur-[2px] ${listening ? "animate-[orb-b_3.6s_ease-in-out_infinite]" : ""}`}
+                      style={{ transform: `scale(${1 + level * 0.35})` }}
+                    />
+                  </div>
+
+                  <button
+                    onClick={() => {
+                      listening ? void stopListening() : void startListening();
+                    }}
+                    disabled={!activeSessionId}
+                    aria-label={listening ? (speakingNow ? "Live transcript — click to stop" : "Stop") : "Talk with Agent"}
+                    className={`w-full h-11 rounded-full text-sm font-medium disabled:opacity-40 hover:opacity-90 flex items-center justify-center gap-2 overflow-hidden transition-colors ${
+                      listening
+                        ? "border border-auralis bg-surface text-primary hover:bg-surface-variant"
+                        : "bg-primary text-on-primary"
+                    }`}
+                  >
+                    {!listening && (
+                      <>
+                        <span className="material-symbols-outlined text-base">mic</span>
+                        <span>Talk with Agent</span>
+                      </>
+                    )}
+                    {listening && !speakingNow && (
+                      <>
+                        <span className="material-symbols-outlined text-base">stop</span>
+                        <span>Stop</span>
+                      </>
+                    )}
+                    {listening && speakingNow && (
+                      <div className="flex-1 min-w-0 overflow-x-auto whitespace-nowrap text-left px-3 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+                        <span className="text-secondary text-xs mr-2 uppercase tracking-wider">live</span>
+                        <span className="text-primary">{last10}</span>
+                      </div>
+                    )}
+                  </button>
+
+                  <span className="text-[11px] text-secondary">
+                    <kbd className="px-1.5 py-0.5 rounded border border-auralis bg-surface text-[10px] font-mono">T</kbd>{" "}
+                    {listening ? "stop" : "start"} ·{" "}
+                    <kbd className="px-1.5 py-0.5 rounded border border-auralis bg-surface text-[10px] font-mono">S</kbd>{" "}
+                    {agentStatus === "speaking" ? "silence agent" : "ask agent to speak"}
+                  </span>
+                </div>
+              </>
+            );
+          })()}
         </section>
 
         {/* CANVAS PANEL */}
