@@ -1459,7 +1459,7 @@ function Workbench() {
                     }}
                     disabled={!activeSessionId}
                     aria-label={listening ? (speakingNow ? "Live transcript — click to stop" : "Stop") : "Talk with Agent"}
-                    className={`w-full h-11 rounded-full text-sm font-medium disabled:opacity-40 hover:opacity-90 flex items-center justify-center gap-2 overflow-hidden transition-colors ${
+                    className={`w-28 h-11 rounded-full text-xs font-medium px-3 disabled:opacity-40 hover:opacity-90 flex items-center justify-center gap-1.5 overflow-hidden transition-colors ${
                       listening
                         ? "border border-auralis bg-surface text-primary hover:bg-surface-variant"
                         : "bg-primary text-on-primary"
@@ -1468,7 +1468,7 @@ function Workbench() {
                     {!listening && (
                       <>
                         <span className="material-symbols-outlined text-base">mic</span>
-                        <span>Talk with Agent</span>
+                        <span className="whitespace-nowrap">Talk with Agent</span>
                       </>
                     )}
                     {listening && !speakingNow && (
@@ -1478,7 +1478,7 @@ function Workbench() {
                       </>
                     )}
                     {listening && speakingNow && (
-                      <div className="flex-1 min-w-0 overflow-x-auto whitespace-nowrap text-left px-3 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+                      <div className="w-full min-w-0 overflow-x-auto whitespace-nowrap text-left px-3 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
                         <span className="text-secondary text-xs mr-2 uppercase tracking-wider">live</span>
                         <span className="text-primary">{last10}</span>
                       </div>
