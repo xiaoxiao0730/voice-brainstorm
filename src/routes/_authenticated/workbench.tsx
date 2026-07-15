@@ -112,7 +112,7 @@ function Workbench() {
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [menuOpenFor, setMenuOpenFor] = useState<string | null>(null);
-  const [expanded, setExpanded] = useState(true);
+  
   const [listening, setListening] = useState(false);
   const [level, setLevel] = useState(0);
   const [partial, setPartial] = useState("");
